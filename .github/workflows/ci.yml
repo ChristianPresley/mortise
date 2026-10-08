@@ -1,0 +1,57 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  # Pinned toolchain. Keep in sync with minimum_zig_version in build.zig.zon.
+  ZIG_VERSION: 0.16.0
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            zig_target: x86_64-linux
+            archive: tar.xz
+            sha256: 70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00
+          - os: macos-latest
+            zig_target: aarch64-macos
+            archive: tar.xz
+            sha256: b23d70deaa879b5c2d486ed3316f7eaa53e84acf6fc9cc747de152450d401489
+          - os: windows-latest
+            zig_target: x86_64-windows
+            archive: zip
+            sha256: 68659eb5f1e4eb1437a722f1dd889c5a322c9954607f5edcf337bc3684a75a7e
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      # Download the official release directly so CI has no third-party actions.
+      - name: Install Zig ${{ env.ZIG_VERSION }}
+        run: |
+          name="zig-${{ matrix.zig_target }}-${ZIG_VERSION}"
+          file="$name.${{ matrix.archive }}"
+          curl -sSfL -o "$file" "https://ziglang.org/download/${ZIG_VERSION}/$file"
+          echo "${{ matrix.sha256 }}  $file" | { command -v sha256sum >/dev/null && sha256sum -c - || shasum -a 256 -c -; }
+          if [ "${{ matrix.archive }}" = zip ]; then unzip -q "$file"; else tar -xf "$file"; fi
+          echo "$PWD/$name" >> "$GITHUB_PATH"
+
+      - name: Check Zig version
+        run: test "$(zig version)" = "$ZIG_VERSION"
+
+      - name: Check build.zig.zon has no dependencies
+        run: grep -Eq '^\s*\.dependencies = \.\{\},' build.zig.zon
+
+      - name: Build
+        run: zig build
+
+      - name: Test
+        run: zig build test --summary all
