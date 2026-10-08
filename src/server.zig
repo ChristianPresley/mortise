@@ -422,7 +422,9 @@ fn serveEvents(s: *Server, req: *http.Server.Request, query: []const u8) !void {
         try body.writer.writeAll(e);
         try body.flush();
     }
-    body.end() catch {};
+    // The server is stopping. The connection is about to be closed, so the
+    // stream is not ended cleanly: the client may already be gone, and
+    // EventSource reconnects either way.
 }
 
 /// The event a client that has seen `since` should get now, if any.
@@ -468,10 +470,27 @@ fn writeJsonString(w: *Io.Writer, s: []const u8) Io.Writer.Error!void {
 }
 
 /// The script added to every HTML page the dev server sends.
+/// It reloads the page after a successful rebuild and, after a failed one,
+/// covers the page with an overlay showing the file, line, and message.
+/// The overlay is built with textContent, so error text is never parsed as
+/// HTML.
 pub const reload_script_template =
     \\<script data-mortise-dev>(function(){
     \\var es=new EventSource("/__reload?since=GENERATION");
     \\es.addEventListener("reload",function(){location.reload();});
+    \\es.addEventListener("build-error",function(e){show(JSON.parse(e.data));});
+    \\function div(css,text){var d=document.createElement("div");d.style.cssText=css;d.textContent=text;return d;}
+    \\function show(err){
+    \\var el=document.getElementById("mortise-error-overlay");
+    \\if(!el){el=document.createElement("div");el.id="mortise-error-overlay";el.setAttribute("role","alert");
+    \\el.style.cssText="position:fixed;inset:0;z-index:2147483647;overflow:auto;padding:32px;background:rgba(24,24,28,.94);color:#f4f4f5;font:14px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace";
+    \\document.documentElement.appendChild(el);}
+    \\el.textContent="";
+    \\el.appendChild(div("color:#f87171;font-weight:700;font-size:16px;margin-bottom:12px","Build failed"));
+    \\el.appendChild(div("color:#7dd3fc;margin-bottom:8px",err.file+(err.line?":"+err.line:"")));
+    \\el.appendChild(div("white-space:pre-wrap",err.message));
+    \\el.appendChild(div("margin-top:16px;color:#a1a1aa","Still serving the last successful build. Fix the error and save to reload."));
+    \\}
     \\})();</script>
 ;
 
@@ -708,4 +727,87 @@ test "live reload: saving a source file sends a reload event" {
     defer page.close();
     try page.send("GET / HTTP/1.1\r\nhost: localhost\r\n\r\n");
     try testing.expect(try page.readUntil(0, "<p>changed</p>", 5000));
+}
+
+test "build errors reach the browser and the last good build keeps serving" {
+    const io = testing.io;
+    var tmp = testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+    const root = try testServerSite(io, &tmp);
+    defer testing.allocator.free(root);
+    const site = SiteDir.borrow(io, tmp.dir);
+
+    const server = try Server.init(testing.allocator, io, root, .{ .port = 0 });
+    defer server.deinit();
+    var watcher = try Watcher.init(testing.allocator, io, root);
+    defer watcher.deinit();
+    try server.start();
+    try server.watch(&watcher);
+
+    var events = try TestClient.connect(io, server.port);
+    defer events.close();
+    try events.send("GET /__reload?since=1 HTTP/1.1\r\nhost: localhost\r\n\r\n");
+    try testing.expect(try events.readUntil(0, "retry: 1000", 5000));
+
+    // Break the page: a duplicate key on line 3 of index.md.
+    var mark = events.len;
+    try site.writeFile("index.md", "---\nlayout: base\nlayout: base\n---\nbroken\n");
+    try testing.expect(try events.readUntil(mark, "event: build-error\ndata: {\"file\":\"index.md\",\"line\":3,\"message\":\"duplicate key 'layout'\"}\n\n", 5000));
+    try testing.expect(std.mem.indexOf(u8, events.received()[mark..], "event: reload") == null);
+
+    // The last good output is still served, with the overlay code in it.
+    var page = try TestClient.connect(io, server.port);
+    defer page.close();
+    try page.send("GET / HTTP/1.1\r\nhost: localhost\r\n\r\n");
+    try testing.expect(try page.readUntil(0, "</html>", 5000));
+    try testing.expect(std.mem.indexOf(u8, page.received(), "<p>hello</p>") != null);
+    try testing.expect(std.mem.indexOf(u8, page.received(), "mortise-error-overlay") != null);
+
+    // A page opened while the build is broken learns about the error as soon
+    // as its event stream connects.
+    var late = try TestClient.connect(io, server.port);
+    defer late.close();
+    try late.send("GET /__reload?since=1 HTTP/1.1\r\nhost: localhost\r\n\r\n");
+    try testing.expect(try late.readUntil(0, "event: build-error", 5000));
+
+    // Fixing the error reloads the browser with the new content.
+    mark = events.len;
+    try site.writeFile("index.md", "---\nlayout: base\n---\nfixed\n");
+    try testing.expect(try events.readUntil(mark, "event: reload", 5000));
+    var fixed = try TestClient.connect(io, server.port);
+    defer fixed.close();
+    try fixed.send("GET / HTTP/1.1\r\nhost: localhost\r\n\r\n");
+    try testing.expect(try fixed.readUntil(0, "<p>fixed</p>", 5000));
+}
+
+test "one atomic save causes exactly one rebuild" {
+    const io = testing.io;
+    var tmp = testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+    const root = try testServerSite(io, &tmp);
+    defer testing.allocator.free(root);
+
+    const server = try Server.init(testing.allocator, io, root, .{ .port = 0 });
+    defer server.deinit();
+    var watcher = try Watcher.init(testing.allocator, io, root);
+    defer watcher.deinit();
+    try server.start();
+    try server.watch(&watcher);
+
+    var events = try TestClient.connect(io, server.port);
+    defer events.close();
+    try events.send("GET /__reload?since=1 HTTP/1.1\r\nhost: localhost\r\n\r\n");
+    try testing.expect(try events.readUntil(0, "retry: 1000", 5000));
+
+    // Write a temporary file, then rename it over the original, as many
+    // editors do.
+    try tmp.dir.writeFile(io, .{ .sub_path = "index.md.tmp", .data = "---\nlayout: base\n---\nsaved\n" });
+    try tmp.dir.rename("index.md.tmp", tmp.dir, "index.md", io);
+    try testing.expect(try events.readUntil(0, "event: reload\ndata: 2\n", 5000));
+    // Give any straggling events time to cause a second rebuild.
+    try io.sleep(.fromMilliseconds(500), .awake);
+    server.mutex.lockUncancelable(io);
+    const generation = server.generation;
+    server.mutex.unlock(io);
+    try testing.expectEqual(@as(u64, 2), generation);
 }

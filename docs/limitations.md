@@ -84,5 +84,11 @@ handles differently from what a user might expect, belongs here.
 - The server keeps every build in memory and never writes `_site`.
 - An event stream whose browser tab has closed is only noticed and cleaned
   up at the next rebuild, when writing to it fails.
+- The error overlay needs JavaScript and EventSource. Error locations come
+  from the pipeline, so some errors (a missing layout, a duplicate output
+  path) name a file without a line.
+- Debouncing waits for 10 ms without new events after a change (at most
+  100 ms) before rebuilding. A tool that writes one file slowly over more
+  than 10 ms can cause more than one rebuild.
 - There is no HTTPS, compression, or caching; every response is sent with
   `cache-control: no-store`.

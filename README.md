@@ -31,7 +31,9 @@ mortise version
 
 `serve` builds the site into memory, serves it on `127.0.0.1` only, and
 watches the source tree. After each save it rebuilds and the open browser
-tabs reload. The reload script is added to HTML responses by the server
+tabs reload. If a build fails, the browser shows an overlay with the file,
+line, and message while the server keeps serving the last successful
+build; the next good save clears it. The reload script is added to HTML responses by the server
 only; it never appears in `build` output.
 
 ## Site layout
