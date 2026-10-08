@@ -31,6 +31,13 @@ pub fn openOrCreate(io: Io, root: []const u8) Io.Dir.CreateDirPathOpenError!Site
     return .{ .io = io, .dir = dir, .owned = true };
 }
 
+/// Opens `sp` inside this directory, creating it if needed.
+pub fn openSub(self: SiteDir, sp: []const u8) Io.Dir.CreateDirPathOpenError!SiteDir {
+    std.debug.assert(sitepath.isNormalized(sp));
+    const dir = try self.dir.createDirPathOpen(self.io, sp, .{ .open_options = .{ .iterate = true } });
+    return .{ .io = self.io, .dir = dir, .owned = true };
+}
+
 /// Wraps a handle the caller keeps ownership of.
 pub fn borrow(io: Io, dir: Io.Dir) SiteDir {
     return .{ .io = io, .dir = dir, .owned = false };
