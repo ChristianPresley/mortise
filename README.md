@@ -22,12 +22,17 @@ zig build -Doptimize=ReleaseFast  # optimized binary
 ## Usage
 
 ```sh
-mortise build [SITE_DIR]   # build SITE_DIR (default .) into SITE_DIR/_site
-mortise serve [SITE_DIR]   # dev server on localhost with live reload
+mortise build [SITE_DIR]               # build SITE_DIR (default .) into SITE_DIR/_site
+mortise serve [SITE_DIR] [--port N]    # dev server on http://localhost:4000/
 mortise version
 ```
 
 `build` deletes and rewrites `SITE_DIR/_site` on every run.
+
+`serve` builds the site into memory, serves it on `127.0.0.1` only, and
+watches the source tree. After each save it rebuilds and the open browser
+tabs reload. The reload script is added to HTML responses by the server
+only; it never appears in `build` output.
 
 ## Site layout
 
@@ -69,5 +74,8 @@ See the [Markdown subset](docs/markdown.md),
 | `src/frontmatter.zig` | Restricted YAML frontmatter                       |
 | `src/template.zig`    | Template engine                                   |
 | `src/pipeline.zig`    | Source tree to output files                       |
+| `src/watch.zig`       | Native file watchers                              |
+| `src/server.zig`      | Dev server and Server-Sent Events live reload     |
 | `src/main.zig`        | Command-line entry point                          |
 | `test/`               | Fixture and end-to-end tests and their inputs     |
+| `bench/`              | Save-to-reload latency benchmark and results      |
