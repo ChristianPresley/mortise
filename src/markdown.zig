@@ -11,9 +11,10 @@ const Writer = std.Io.Writer;
 pub const Error = Allocator.Error || Writer.Error;
 
 /// Renders `src` to HTML. The result is allocated with `arena`.
-pub fn toHtml(arena: Allocator, src: []const u8) Error![]u8 {
+pub fn toHtml(arena: Allocator, src: []const u8) Allocator.Error![]u8 {
     var aw: Writer.Allocating = .init(arena);
-    try render(arena, src, &aw.writer);
+    // An allocating writer only fails when it runs out of memory.
+    render(arena, src, &aw.writer) catch return error.OutOfMemory;
     return aw.toOwnedSlice();
 }
 
