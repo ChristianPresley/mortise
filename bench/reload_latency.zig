@@ -8,7 +8,10 @@
 //! delivery, which is everything between a save and the browser reloading
 //! except the browser's own page load.
 //!
-//! Usage: zig build bench -- [PAGES] [RUNS]     (defaults: 1000 pages, 30 runs)
+//! Usage: zig build bench -- [PAGES] [RUNS] [--full]
+//!
+//! Defaults: 1000 pages, 30 runs, incremental rebuilds. `--full` makes the
+//! server rebuild the whole site on every change, for comparison.
 
 const std = @import("std");
 const Io = std.Io;
@@ -22,8 +25,19 @@ pub fn main(init: std.process.Init) !void {
     const gpa = init.gpa;
     const arena = init.arena.allocator();
     const args = try init.minimal.args.toSlice(arena);
-    const pages: usize = if (args.len > 1) try std.fmt.parseInt(usize, args[1], 10) else 1000;
-    const runs: usize = if (args.len > 2) try std.fmt.parseInt(usize, args[2], 10) else 30;
+    var numbers: [2]?usize = .{ null, null };
+    var count: usize = 0;
+    var full = false;
+    for (args[1..]) |arg| {
+        if (std.mem.eql(u8, arg, "--full")) {
+            full = true;
+        } else if (count < numbers.len) {
+            numbers[count] = try std.fmt.parseInt(usize, arg, 10);
+            count += 1;
+        } else return error.TooManyArguments;
+    }
+    const pages = numbers[0] orelse 1000;
+    const runs = numbers[1] orelse 30;
 
     var stdout_buf: [4096]u8 = undefined;
     var stdout_writer: Io.File.Writer = .init(.stdout(), io, &stdout_buf);
@@ -33,7 +47,7 @@ pub fn main(init: std.process.Init) !void {
     try generateSite(io, arena, pages);
     const root = try Io.Dir.cwd().realPathFileAlloc(io, site_dir, arena);
 
-    const server = try mortise.server.Server.init(gpa, io, root, .{ .port = 0 });
+    const server = try mortise.server.Server.init(gpa, io, root, .{ .port = 0, .incremental = !full });
     defer server.deinit();
     const full_build_ms = nsToMs(server.last_build_ns);
     var watcher = try mortise.watch.Watcher.init(gpa, io, root);
@@ -71,6 +85,7 @@ pub fn main(init: std.process.Init) !void {
     try out.print(
         \\Mortise save-to-reload latency
         \\  platform:     {s}-{s}, watcher: {s}
+        \\  rebuilds:     {s}
         \\  site:         {d} posts + 1 index page
         \\  full build:   {d:.1} ms (initial)
         \\  runs:         {d}
@@ -81,6 +96,7 @@ pub fn main(init: std.process.Init) !void {
         \\
     , .{
         @tagName(@import("builtin").cpu.arch), @tagName(@import("builtin").os.tag), watcher.backendName(),
+        if (full) "full" else "incremental",
         pages,                                 full_build_ms,                       runs,
         samples[0],                            samples[runs / 2],                   samples[@min(runs - 1, (runs * 95) / 100)],
         samples[runs - 1],

@@ -33,7 +33,13 @@ mortise version
 watches the source tree. After each save it rebuilds and the open browser
 tabs reload. If a build fails, the browser shows an overlay with the file,
 line, and message while the server keeps serving the last successful
-build; the next good save clears it. The reload script is added to HTML responses by the server
+build; the next good save clears it.
+
+Rebuilds are incremental: a change re-renders only the pages that depend
+on it (the page itself, pages using a changed layout or include, and pages
+that list posts or pages), and falls back to a full rebuild when the effect
+is unclear. With 1,000 pages a save reaches the browser in about 11 ms on
+Linux and 16 ms on Windows; see [bench/](bench/README.md). The reload script is added to HTML responses by the server
 only; it never appears in `build` output.
 
 ## Site layout

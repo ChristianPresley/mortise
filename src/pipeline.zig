@@ -65,6 +65,9 @@ pub const Deps = struct {
     /// Source site paths read to produce the output, besides `_config.yml`,
     /// which every rendered page depends on.
     sources: []const []const u8,
+    /// Whether rendering read `site.posts` or `site.pages`, so that the
+    /// output changes whenever any page or post does.
+    reads_collections: bool,
 };
 
 pub const Site = struct {
@@ -75,6 +78,16 @@ pub const Site = struct {
     pages: usize,
     posts: usize,
     static_files: usize,
+    /// Pages rendered by the build that produced this site. An incremental
+    /// rebuild reuses the rest from the previous build.
+    rendered: usize,
+    /// Whether this site was built from scratch, sharing no memory with an
+    /// earlier build.
+    full: bool,
+    /// What `rebuild` needs to update this site. An incrementally rebuilt
+    /// site shares memory with the site it came from, so that site's
+    /// arena must outlive this one.
+    state: State,
 
     pub fn find(s: Site, path: []const u8) ?Output {
         var lo: usize = 0;
@@ -91,6 +104,14 @@ pub const Site = struct {
     }
 };
 
+const State = struct {
+    config_fields: frontmatter.Map,
+    /// Every page and post, in `pageOrder`.
+    pages: []const Page,
+    /// Files copied unchanged.
+    statics: []const Output,
+};
+
 const Page = struct {
     source: []const u8,
     is_post: bool,
@@ -103,6 +124,10 @@ const Page = struct {
     /// Rendered Markdown, or null for HTML templates.
     html: ?[]const u8,
     object: template.Object = .{},
+    /// Set once rendered: the output and what it depended on.
+    output: []const u8 = "",
+    sources: []const []const u8 = &.{},
+    reads_collections: bool = false,
 };
 
 const Layout = struct {
@@ -122,6 +147,8 @@ const Builder = struct {
     line_offsets: std.StringHashMapUnmanaged(usize) = .empty,
     /// Sources read while rendering the current page.
     deps: std.ArrayList([]const u8) = .empty,
+    /// Whether a template used by the current page reads site collections.
+    reads_collections: bool = false,
 
     fn fail(b: *Builder, path: []const u8, line: usize, comptime fmt: []const u8, args: anytype) Error {
         b.diag.* = .{
@@ -139,9 +166,18 @@ const Builder = struct {
         };
     }
 
+    fn exists(b: *Builder, path: []const u8) bool {
+        b.src.dir.access(b.src.io, path, .{}) catch return false;
+        return true;
+    }
+
     fn addDep(b: *Builder, path: []const u8) Allocator.Error!void {
         for (b.deps.items) |d| if (std.mem.eql(u8, d, path)) return;
         try b.deps.append(b.arena, path);
+    }
+
+    fn useTemplate(b: *Builder, tpl: *const template.Template) void {
+        b.reads_collections = b.reads_collections or tpl.reads_collections;
     }
 
     fn templateFail(b: *Builder, d: template.Diagnostic) Error {
@@ -151,7 +187,8 @@ const Builder = struct {
     }
 };
 
-/// Builds the site in `src`. On `error.BuildFailed`, `diag` says why.
+/// Builds the site in `src` from scratch. On `error.BuildFailed`, `diag`
+/// says why.
 pub fn build(arena: Allocator, src: SiteDir, diag: *Diagnostic) Error!Site {
     var b: Builder = .{ .arena = arena, .src = src, .diag = diag };
 
@@ -163,17 +200,12 @@ pub fn build(arena: Allocator, src: SiteDir, diag: *Diagnostic) Error!Site {
     };
 
     var pages: std.ArrayList(Page) = .empty;
-    var outputs: std.ArrayList(Output) = .empty;
+    var statics: std.ArrayList(Output) = .empty;
     var config_fields: frontmatter.Map = .{};
-    var static_files: usize = 0;
 
     for (listing.files) |path| {
         if (std.mem.eql(u8, path, config_path)) {
-            var fd: frontmatter.Diagnostic = .{};
-            config_fields = frontmatter.parseFile(arena, try b.read(path), &fd) catch |err| switch (err) {
-                error.OutOfMemory => return error.OutOfMemory,
-                error.InvalidFrontmatter => return b.fail(path, fd.line, "{s}", .{fd.message}),
-            };
+            config_fields = try loadConfig(&b);
             continue;
         }
         if (std.mem.startsWith(u8, path, "_posts/")) {
@@ -189,18 +221,124 @@ pub fn build(arena: Allocator, src: SiteDir, diag: *Diagnostic) Error!Site {
         } else if (std.mem.eql(u8, ext, ".html") and try startsWithFrontmatter(&b, path)) {
             if (try loadPage(&b, path, false)) |p| try pages.append(arena, p);
         } else {
-            try outputs.append(arena, .{ .path = path, .source = path, .data = .copy });
-            static_files += 1;
+            try statics.append(arena, .{ .path = path, .source = path, .data = .copy });
         }
     }
+    std.mem.sortUnstable(Page, pages.items, {}, pageOrder);
+    return finish(&b, config_fields, pages.items, statics.items, null);
+}
+
+/// Updates `prev` after the source files in `changed` were modified,
+/// re-rendering only the outputs that depend on them:
+///
+///   - a changed page or post re-renders itself and every page whose
+///     templates read `site.posts` or `site.pages`;
+///   - a changed layout or include re-renders the pages that used it;
+///   - a changed static file needs nothing, since it is copied when served
+///     or written.
+///
+/// Anything whose effect is unclear falls back to a full `build`: the site
+/// config, a file being added or removed, a page whose URL or draft status
+/// changed, a static `.html` file gaining frontmatter, or a watcher
+/// overflow. The result shares memory with `prev`.
+pub fn rebuild(arena: Allocator, src: SiteDir, prev: *const Site, changed: []const []const u8, diag: *Diagnostic) Error!Site {
+    var b: Builder = .{ .arena = arena, .src = src, .diag = diag };
+    const st = prev.state;
+
+    var dirty_templates: std.ArrayList([]const u8) = .empty;
+    var dirty_pages: std.ArrayList(usize) = .empty;
+    for (changed) |path| {
+        if (std.mem.eql(u8, path, config_path) or std.mem.eql(u8, path, "*")) return build(arena, src, diag);
+        if (std.mem.startsWith(u8, path, "_layouts/") or std.mem.startsWith(u8, path, "_includes/")) {
+            try dirty_templates.append(arena, path);
+            continue;
+        }
+        if (findPage(st.pages, path)) |i| {
+            if (!b.exists(path)) return build(arena, src, diag);
+            try dirty_pages.append(arena, i);
+            continue;
+        }
+        if (findStatic(st.statics, path)) {
+            if (!b.exists(path)) return build(arena, src, diag);
+            if (std.mem.eql(u8, sitepath.extension(path), ".html") and try startsWithFrontmatter(&b, path)) {
+                return build(arena, src, diag);
+            }
+            continue;
+        }
+        // Unpublished files such as `_drafts/` never affect the output, as
+        // long as they are not new pages in disguise.
+        if (sitepath.hasHiddenComponent(path) and !std.mem.startsWith(u8, path, "_posts/")) continue;
+        // Something unknown that no longer exists, such as an editor's
+        // temporary file that was renamed over a page, changed nothing,
+        // unless it was a directory holding known files.
+        if (!b.exists(path) and !containsKnown(st, path)) continue;
+        return build(arena, src, diag);
+    }
+
+    const pages = try arena.dupe(Page, st.pages);
+    for (dirty_pages.items) |i| {
+        const old = pages[i];
+        const fresh = (try loadPage(&b, old.source, old.is_post)) orelse return build(arena, src, diag);
+        if (!std.mem.eql(u8, fresh.out_path, old.out_path)) return build(arena, src, diag);
+        pages[i] = fresh;
+    }
+
+    const render = try arena.alloc(bool, pages.len);
+    for (pages, render, 0..) |p, *r, i| {
+        r.* = std.mem.indexOfScalar(usize, dirty_pages.items, i) != null or
+            (dirty_pages.items.len > 0 and p.reads_collections) or
+            usesAny(p.sources, dirty_templates.items);
+    }
+    return finish(&b, st.config_fields, pages, st.statics, render);
+}
+
+fn findPage(pages: []const Page, path: []const u8) ?usize {
+    for (pages, 0..) |p, i| if (std.mem.eql(u8, p.source, path)) return i;
+    return null;
+}
+
+fn findStatic(statics: []const Output, path: []const u8) bool {
+    for (statics) |o| if (std.mem.eql(u8, o.source, path)) return true;
+    return false;
+}
+
+/// Whether any known page or static file lives under directory `dir`.
+fn containsKnown(st: State, dir: []const u8) bool {
+    for (st.pages) |p| if (isUnder(p.source, dir)) return true;
+    for (st.statics) |o| if (isUnder(o.source, dir)) return true;
+    return false;
+}
+
+fn isUnder(path: []const u8, dir: []const u8) bool {
+    return path.len > dir.len and std.mem.startsWith(u8, path, dir) and path[dir.len] == '/';
+}
+
+fn usesAny(sources: []const []const u8, paths: []const []const u8) bool {
+    for (sources) |s| {
+        for (paths) |p| if (std.mem.eql(u8, s, p)) return true;
+    }
+    return false;
+}
+
+fn loadConfig(b: *Builder) Error!frontmatter.Map {
+    var fd: frontmatter.Diagnostic = .{};
+    return frontmatter.parseFile(b.arena, try b.read(config_path), &fd) catch |err| switch (err) {
+        error.OutOfMemory => error.OutOfMemory,
+        error.InvalidFrontmatter => b.fail(config_path, fd.line, "{s}", .{fd.message}),
+    };
+}
+
+/// Renders the pages selected by `render` (all when null) and assembles the
+/// site. `pages` must be in `pageOrder`.
+fn finish(b: *Builder, config_fields: frontmatter.Map, pages: []Page, statics: []const Output, render: ?[]const bool) Error!Site {
+    const arena = b.arena;
 
     // Pages and posts are visible to every template through `site`.
     var post_values: std.ArrayList(Value) = .empty;
     var page_values: std.ArrayList(Value) = .empty;
-    std.mem.sortUnstable(Page, pages.items, {}, pageOrder);
     var post_count: usize = 0;
-    for (pages.items) |*p| {
-        p.object = try pageObject(arena, p);
+    for (pages) |*p| {
+        if (p.object.entries.len == 0) p.object = try pageObject(arena, p);
         if (p.is_post) {
             try post_values.append(arena, .{ .object = p.object });
             post_count += 1;
@@ -220,13 +358,22 @@ pub fn build(arena: Allocator, src: SiteDir, diag: *Diagnostic) Error!Site {
     try site_entries.append(arena, .{ .key = "pages", .value = .{ .list = page_values.items } });
     b.site = .{ .entries = site_entries.items };
 
-    var deps: std.ArrayList(Deps) = .empty;
-    for (pages.items) |*p| {
-        b.deps = .empty;
-        try b.addDep(p.source);
-        const html = try renderPage(&b, p);
-        try outputs.append(arena, .{ .path = p.out_path, .source = p.source, .data = .{ .bytes = html } });
-        try deps.append(arena, .{ .output = p.out_path, .sources = b.deps.items });
+    var rendered: usize = 0;
+    var outputs: std.ArrayList(Output) = .empty;
+    try outputs.appendSlice(arena, statics);
+    const deps = try arena.alloc(Deps, pages.len);
+    for (pages, deps, 0..) |*p, *d, i| {
+        if (render == null or render.?[i]) {
+            b.deps = .empty;
+            b.reads_collections = false;
+            try b.addDep(p.source);
+            p.output = try renderPage(b, p);
+            p.sources = b.deps.items;
+            p.reads_collections = b.reads_collections;
+            rendered += 1;
+        }
+        try outputs.append(arena, .{ .path = p.out_path, .source = p.source, .data = .{ .bytes = p.output } });
+        d.* = .{ .output = p.out_path, .sources = p.sources, .reads_collections = p.reads_collections };
     }
 
     std.mem.sortUnstable(Output, outputs.items, {}, outputOrder);
@@ -238,10 +385,13 @@ pub fn build(arena: Allocator, src: SiteDir, diag: *Diagnostic) Error!Site {
 
     return .{
         .outputs = outputs.items,
-        .deps = deps.items,
-        .pages = pages.items.len - post_count,
+        .deps = deps,
+        .pages = pages.len - post_count,
         .posts = post_count,
-        .static_files = static_files,
+        .static_files = statics.len,
+        .rendered = rendered,
+        .full = render == null,
+        .state = .{ .config_fields = config_fields, .pages = pages, .statics = statics },
     };
 }
 
@@ -439,6 +589,7 @@ fn renderTemplate(b: *Builder, tpl: *const template.Template, p: *const Page, co
         .{ .key = "content", .value = .{ .html = content orelse "" } },
     };
     const root: template.Object = .{ .entries = entries[0..if (content != null) 3 else 2] };
+    b.useTemplate(tpl);
     var td: template.Diagnostic = .{};
     return template.renderAlloc(b.arena, tpl, root, .{ .ctx = b, .loadFn = loadInclude }, &td) catch |err| switch (err) {
         error.OutOfMemory => error.OutOfMemory,
@@ -492,7 +643,10 @@ fn loadInclude(ctx: *anyopaque, name: []const u8, diag: *template.Diagnostic) te
     // An include name with `..` must not reach outside `_includes/`.
     if (!std.mem.startsWith(u8, path, "_includes/")) return error.TemplateNotFound;
     try b.addDep(path);
-    if (b.templates.get(path)) |t| return t;
+    if (b.templates.get(path)) |t| {
+        b.useTemplate(t);
+        return t;
+    }
 
     const data = b.src.readFile(arena, path) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
@@ -501,6 +655,7 @@ fn loadInclude(ctx: *anyopaque, name: []const u8, diag: *template.Diagnostic) te
     const tpl = try arena.create(template.Template);
     tpl.* = try template.parse(arena, path, data, diag);
     try b.templates.put(arena, path, tpl);
+    b.useTemplate(tpl);
     return tpl;
 }
 
@@ -663,4 +818,127 @@ test "build errors carry path and line" {
     }, "b.md", 0, "also writes to");
     try expectBuildError(&.{.{ "a.md", "---\npermalink: /../x/\n---\n" }}, "a.md", 2, "invalid output path");
     try expectBuildError(&.{.{ "a.md", "---\ndraft: yes\n---\n" }}, "a.md", 2, "'draft' must be true or false");
+}
+
+fn expectSameOutputs(a: Site, b: Site) !void {
+    try testing.expectEqual(a.outputs.len, b.outputs.len);
+    for (a.outputs, b.outputs) |x, y| {
+        try testing.expectEqualStrings(x.path, y.path);
+        switch (x.data) {
+            .copy => try testing.expect(y.data == .copy),
+            .bytes => |bytes| try testing.expectEqualStrings(bytes, y.data.bytes),
+        }
+    }
+}
+
+test "incremental rebuild re-renders only affected outputs" {
+    var t: TestSite = try .init(&.{
+        .{ "_config.yml", "title: Inc\n" },
+        .{ "_layouts/base.html", "<title>{{ page.title }}</title>{{ content }}" },
+        .{ "_layouts/post.html", "---\nlayout: base\n---\n<article>{{ content }}</article>" },
+        .{ "_includes/list.html", "{% for p in site.posts %}[{{ p.title }}]{% endfor %}" },
+        .{ "index.html", "---\ntitle: Home\nlayout: base\n---\n{% include \"list.html\" %}" },
+        .{ "about.md", "---\ntitle: About\nlayout: base\n---\nAbout.\n" },
+        .{ "_posts/2024-01-01-a.md", "---\ntitle: A\nlayout: post\n---\nA body.\n" },
+        .{ "_posts/2024-02-01-b.md", "---\ntitle: B\nlayout: post\n---\nB body.\n" },
+        .{ "css/site.css", "body{}" },
+        .{ "_drafts/idea.md", "later" },
+    });
+    defer t.deinit();
+    const a = t.arena.allocator();
+    const src = SiteDir.borrow(testing.io, t.tmp.dir);
+    var diag: Diagnostic = .{};
+
+    var site = try t.build(&diag);
+    try testing.expectEqual(@as(usize, 4), site.rendered);
+
+    // A post's body: the post and the index, which lists posts.
+    try src.writeFile("_posts/2024-01-01-a.md", "---\ntitle: A2\nlayout: post\n---\nNew body.\n");
+    site = try rebuild(a, src, &site, &.{"_posts/2024-01-01-a.md"}, &diag);
+    try testing.expectEqual(@as(usize, 2), site.rendered);
+    try testing.expectEqualStrings("<title>A2</title><article><p>New body.</p>\n</article>", site.find("2024/01/01/a/index.html").?.data.bytes);
+    try testing.expectEqualStrings("<title>Home</title>[B][A2]", site.find("index.html").?.data.bytes);
+
+    // An include: only the page that uses it.
+    try src.writeFile("_includes/list.html", "{% for p in site.posts %}<{{ p.title }}>{% endfor %}");
+    site = try rebuild(a, src, &site, &.{"_includes/list.html"}, &diag);
+    try testing.expectEqual(@as(usize, 1), site.rendered);
+    try testing.expectEqualStrings("<title>Home</title><B><A2>", site.find("index.html").?.data.bytes);
+
+    // The post layout: only the posts.
+    try src.writeFile("_layouts/post.html", "---\nlayout: base\n---\n<main>{{ content }}</main>");
+    site = try rebuild(a, src, &site, &.{"_layouts/post.html"}, &diag);
+    try testing.expectEqual(@as(usize, 2), site.rendered);
+
+    // A shared layout: every page using it.
+    try src.writeFile("_layouts/base.html", "<h1>{{ page.title }}</h1>{{ content }}");
+    site = try rebuild(a, src, &site, &.{"_layouts/base.html"}, &diag);
+    try testing.expectEqual(@as(usize, 4), site.rendered);
+
+    // A static file or an unpublished draft: nothing to render.
+    try src.writeFile("css/site.css", "body{color:red}");
+    try src.writeFile("_drafts/idea.md", "still later");
+    site = try rebuild(a, src, &site, &.{ "css/site.css", "_drafts/idea.md" }, &diag);
+    try testing.expectEqual(@as(usize, 0), site.rendered);
+
+    // Unclear effects fall back to a full build.
+    try src.writeFile("_config.yml", "title: Changed\n");
+    site = try rebuild(a, src, &site, &.{"_config.yml"}, &diag);
+    try testing.expectEqual(@as(usize, 4), site.rendered);
+    try src.writeFile("_posts/2024-03-01-c.md", "---\ntitle: C\nlayout: post\n---\nC.\n");
+    site = try rebuild(a, src, &site, &.{"_posts/2024-03-01-c.md"}, &diag);
+    try testing.expectEqual(@as(usize, 5), site.rendered);
+    try src.writeFile("about.md", "---\ntitle: About\nlayout: base\npermalink: /me/\n---\nAbout.\n");
+    site = try rebuild(a, src, &site, &.{"about.md"}, &diag);
+    try testing.expectEqual(@as(usize, 5), site.rendered);
+    try testing.expect(site.find("me/index.html") != null);
+
+    // After all that, the result matches a build from scratch.
+    try src.writeFile("_posts/2024-02-01-b.md", "---\ntitle: B2\nlayout: post\n---\nB2 body.\n");
+    site = try rebuild(a, src, &site, &.{"_posts/2024-02-01-b.md"}, &diag);
+    try testing.expectEqual(@as(usize, 2), site.rendered);
+    try expectSameOutputs(try t.build(&diag), site);
+}
+
+test "incremental rebuild reports errors in changed files" {
+    var t: TestSite = try .init(&.{
+        .{ "_layouts/base.html", "{{ content }}" },
+        .{ "a.md", "---\nlayout: base\n---\nA\n" },
+    });
+    defer t.deinit();
+    const src = SiteDir.borrow(testing.io, t.tmp.dir);
+    var diag: Diagnostic = .{};
+    const site = try t.build(&diag);
+
+    try src.writeFile("_layouts/base.html", "{% if %}");
+    try testing.expectError(error.BuildFailed, rebuild(t.arena.allocator(), src, &site, &.{"_layouts/base.html"}, &diag));
+    try testing.expectEqualStrings("_layouts/base.html", diag.path);
+
+    try src.writeFile("a.md", "---\nlayout: base\nlayout: x\n---\n");
+    try testing.expectError(error.BuildFailed, rebuild(t.arena.allocator(), src, &site, &.{"a.md"}, &diag));
+    try testing.expectEqualStrings("a.md", diag.path);
+    try testing.expectEqual(@as(usize, 3), diag.line);
+}
+
+test "incremental rebuild ignores vanished temporary files but not vanished directories" {
+    var t: TestSite = try .init(&.{
+        .{ "a.md", "A\n" },
+        .{ "docs/b.md", "B\n" },
+    });
+    defer t.deinit();
+    const src = SiteDir.borrow(testing.io, t.tmp.dir);
+    var diag: Diagnostic = .{};
+    var site = try t.build(&diag);
+
+    // An editor wrote a.md.tmp and renamed it over a.md.
+    try src.writeFile("a.md", "A2\n");
+    site = try rebuild(t.arena.allocator(), src, &site, &.{ "a.md.tmp", "a.md" }, &diag);
+    try testing.expect(!site.full);
+    try testing.expectEqual(@as(usize, 1), site.rendered);
+
+    // A directory with pages in it disappeared in one event.
+    try src.deleteTree("docs");
+    site = try rebuild(t.arena.allocator(), src, &site, &.{"docs"}, &diag);
+    try testing.expect(site.full);
+    try testing.expect(site.find("docs/b/index.html") == null);
 }
