@@ -46,3 +46,19 @@ handles differently from what a user might expect, belongs here.
 - Missing variables render as nothing instead of failing, so a typo in a
   variable name produces empty output rather than an error.
 - `upper` and `lower` change ASCII letters only.
+
+## Site pipeline
+
+- Posts must be Markdown files in `_posts/` named `YYYY-MM-DD-slug.md`.
+  Their URL always uses the date from the file name, even when frontmatter
+  sets a different `date`.
+- Markdown content is not run through the template engine, so template tags
+  inside a `.md` file appear literally.
+- There is no `baseurl` setting: sites are assumed to be served from the
+  root of their domain.
+- `build` deletes the whole `_site` directory before writing, so files
+  placed there by hand are lost.
+- Layouts are found only as `_layouts/NAME.html`; includes only under
+  `_includes/`.
+- Nothing is written if the build fails, but a failure while writing can
+  leave `_site` partly written.

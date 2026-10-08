@@ -114,21 +114,41 @@ pub fn parse(arena: Allocator, src_in: []const u8, diag: *Diagnostic) Error!Docu
     const closed = while (it.next()) |raw| {
         number += 1;
         if (isDelimiter(raw)) break true;
-        const text = std.mem.trimEnd(u8, raw, "\r");
-        var indent: usize = 0;
-        while (indent < text.len and (text[indent] == ' ' or text[indent] == '\t')) : (indent += 1) {
-            if (text[indent] == '\t') return p.fail(number, "tabs are not allowed in frontmatter indentation; use spaces", .{});
-        }
-        const rest = text[indent..];
-        // Skip blank and comment-only lines.
-        if (rest.len == 0 or rest[0] == '#') continue;
-        try lines.append(arena, .{ .number = number, .indent = indent, .text = std.mem.trimEnd(u8, rest, " ") });
+        try collectLine(p, &lines, raw, number);
     } else false;
     if (!closed) return p.fail(1, "frontmatter is not closed; add a '---' line after it", .{});
 
     const body_start = @min(it.index orelse src.len, src.len);
     const fields = try parseMapping(p, lines.items, 0, true);
     return .{ .fields = fields, .body = src[body_start..], .body_line = number + 1 };
+}
+
+/// Parses a whole file written in the frontmatter subset, without `---`
+/// delimiters. Used for the site configuration file.
+pub fn parseFile(arena: Allocator, src_in: []const u8, diag: *Diagnostic) Error!Map {
+    const p: Parser = .{ .arena = arena, .diag = diag };
+    var src = src_in;
+    if (std.mem.startsWith(u8, src, "\xEF\xBB\xBF")) src = src[3..];
+    var lines: std.ArrayList(Line) = .empty;
+    var it = std.mem.splitScalar(u8, src, '\n');
+    var number: usize = 0;
+    while (it.next()) |raw| {
+        number += 1;
+        try collectLine(p, &lines, raw, number);
+    }
+    return parseMapping(p, lines.items, 0, true);
+}
+
+fn collectLine(p: Parser, lines: *std.ArrayList(Line), raw: []const u8, number: usize) Error!void {
+    const text = std.mem.trimEnd(u8, raw, "\r");
+    var indent: usize = 0;
+    while (indent < text.len and (text[indent] == ' ' or text[indent] == '\t')) : (indent += 1) {
+        if (text[indent] == '\t') return p.fail(number, "tabs are not allowed in frontmatter indentation; use spaces", .{});
+    }
+    const rest = text[indent..];
+    // Skip blank and comment-only lines.
+    if (rest.len == 0 or rest[0] == '#') return;
+    try lines.append(p.arena, .{ .number = number, .indent = indent, .text = std.mem.trimEnd(u8, rest, " ") });
 }
 
 fn isDelimiter(line: []const u8) bool {
@@ -493,6 +513,16 @@ test "CRLF and BOM" {
     const doc = try parseOk(arena.allocator(), "\xEF\xBB\xBF---\r\ntitle: Hi\r\n---\r\nBody\r\n");
     try testing.expectEqualStrings("Hi", doc.fields.get("title").?.string);
     try testing.expectEqualStrings("Body\r\n", doc.body);
+}
+
+test "parseFile" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    var diag: Diagnostic = .{};
+    const m = try parseFile(arena.allocator(), "# site\ntitle: My site\nnav: [a, b]\n", &diag);
+    try testing.expectEqualStrings("My site", m.get("title").?.string);
+    try testing.expectError(error.InvalidFrontmatter, parseFile(arena.allocator(), "a: 1\n\nb: {x}\n", &diag));
+    try testing.expectEqual(@as(usize, 3), diag.line);
 }
 
 test "errors carry line numbers" {
