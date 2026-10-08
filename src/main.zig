@@ -183,6 +183,9 @@ fn cmdServe(ctx: Ctx, rest: []const [:0]const u8) u8 {
         return 1;
     };
     defer watcher.deinit();
+    if (watcher.fallback_reason) |reason| {
+        ctx.out.print("warning: native file watching is unavailable ({s}); polling for changes instead\n", .{@errorName(reason)}) catch {};
+    }
 
     server.start() catch |e| {
         ctx.err.print("mortise: cannot start the server: {s}\n", .{@errorName(e)}) catch {};
@@ -193,7 +196,7 @@ fn cmdServe(ctx: Ctx, rest: []const [:0]const u8) u8 {
         return 1;
     };
     ctx.out.print("Serving {s} at http://localhost:{d}/ (watching with {s}). Press Ctrl+C to stop.\n", .{
-        args.dir, server.port, mortise.watch.Watcher.name(),
+        args.dir, server.port, watcher.backendName(),
     }) catch {};
     ctx.out.flush() catch {};
     server.wait();
