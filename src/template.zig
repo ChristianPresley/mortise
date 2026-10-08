@@ -150,6 +150,9 @@ pub const Template = struct {
     nodes: []const Node,
     /// Names passed to `{% include %}`, for dependency tracking.
     includes: []const []const u8,
+    /// Whether any expression reads `site.posts` or `site.pages`, whose
+    /// contents change whenever any page or post does.
+    reads_collections: bool,
 };
 
 pub const Diagnostic = struct {
@@ -178,6 +181,7 @@ const Parser = struct {
     tokens: []const Token,
     pos: usize = 0,
     includes: std.ArrayList([]const u8) = .empty,
+    reads_collections: bool = false,
 
     fn fail(p: *Parser, line: usize, comptime fmt: []const u8, args: anytype) ParseError {
         p.diag.* = .{
@@ -196,7 +200,7 @@ pub fn parse(arena: Allocator, name: []const u8, src: []const u8, diag: *Diagnos
     var end: ?Stmt = null;
     const nodes = try parseNodes(&p, &end);
     if (end) |e| return p.fail(e.line, "unexpected '{s}'", .{e.keyword});
-    return .{ .name = name, .nodes = nodes, .includes = p.includes.items };
+    return .{ .name = name, .nodes = nodes, .includes = p.includes.items, .reads_collections = p.reads_collections };
 }
 
 fn tokenize(p: *Parser, src: []const u8) ParseError![]const Token {
@@ -461,7 +465,13 @@ fn parseExpr(lx: *Lexer) ParseError!Expr {
                 if (s.len == 0) return lx.p.fail(lx.line, "invalid variable name '{s}'", .{id});
                 try segs.append(lx.p.arena, s);
             }
-            break :blk .{ .path = segs.items };
+            const path = segs.items;
+            if (path.len >= 2 and std.mem.eql(u8, path[0], "site") and
+                (std.mem.eql(u8, path[1], "posts") or std.mem.eql(u8, path[1], "pages")))
+            {
+                lx.p.reads_collections = true;
+            }
+            break :blk .{ .path = path };
         },
         .string => |s| .{ .string = s },
         .int => |n| .{ .int = n },
@@ -947,6 +957,18 @@ test "whitespace control and comments" {
     );
     try expectRender("a|b", "a  {{- \"|\" -}}  \n b");
     try expectRender("ab", "a{# a comment with }} inside #}b");
+}
+
+test "templates record whether they read site collections" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    var diag: Diagnostic = .{};
+    const a = try parse(arena.allocator(), "a", "{% for p in site.posts %}{{ p.title }}{% endfor %}", &diag);
+    try testing.expect(a.reads_collections);
+    const b = try parse(arena.allocator(), "b", "{% if site.pages %}x{% endif %}", &diag);
+    try testing.expect(b.reads_collections);
+    const c = try parse(arena.allocator(), "c", "{{ site.title }} {{ page.posts }}", &diag);
+    try testing.expect(!c.reads_collections);
 }
 
 test "includes are recorded for dependency tracking" {
