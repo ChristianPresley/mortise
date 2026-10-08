@@ -1,4 +1,15 @@
 const std = @import("std");
+const builtin = @import("builtin");
+
+/// The one Zig release Mortise builds with. Keep in sync with
+/// `minimum_zig_version` in build.zig.zon and ZIG_VERSION in CI.
+const required_zig = "0.16.0";
+
+comptime {
+    if (!std.mem.eql(u8, builtin.zig_version_string, required_zig)) {
+        @compileError("Mortise requires Zig " ++ required_zig ++ " exactly; found " ++ builtin.zig_version_string);
+    }
+}
 
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});

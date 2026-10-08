@@ -93,6 +93,9 @@ const reserved_names = [_][]const u8{
     "COM9", "LPT1", "LPT2", "LPT3",
     "LPT4", "LPT5", "LPT6", "LPT7",
     "LPT8", "LPT9",
+    // Windows also reserves the superscript-digit aliases.
+    "COM\u{b9}", "COM\u{b2}", "COM\u{b3}",
+    "LPT\u{b9}", "LPT\u{b2}", "LPT\u{b3}",
 };
 
 fn isReservedName(comp: []const u8) bool {
@@ -196,6 +199,8 @@ test "normalize rejects non-portable names" {
     try testing.expectError(error.InvalidCharacter, normalize(testing.allocator, "a\x00b"));
     try testing.expectError(error.ReservedName, normalize(testing.allocator, "docs/CON"));
     try testing.expectError(error.ReservedName, normalize(testing.allocator, "nul.txt"));
+    try testing.expectError(error.ReservedName, normalize(testing.allocator, "com\u{b9}.md"));
+    try testing.expectError(error.ReservedName, normalize(testing.allocator, "LPT\u{b3}"));
     try testing.expectError(error.TrailingDotOrSpace, normalize(testing.allocator, "a./b"));
     try testing.expectError(error.TrailingDotOrSpace, normalize(testing.allocator, "a /b"));
     // Prefixes and lookalikes of reserved names are fine.

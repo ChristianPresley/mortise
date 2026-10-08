@@ -48,7 +48,7 @@ jobs:
         run: test "$(zig version)" = "$ZIG_VERSION"
 
       - name: Check build.zig.zon has no dependencies
-        run: grep -Eq '^\s*\.dependencies = \.\{\},' build.zig.zon
+        run: grep -Eq '^[[:space:]]*\.dependencies = \.\{\},' build.zig.zon
 
       - name: Build
         run: zig build

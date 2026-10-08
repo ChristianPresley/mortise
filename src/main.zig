@@ -26,8 +26,12 @@ pub fn main(init: std.process.Init) !u8 {
     var stderr_writer: Io.File.Writer = .init(.stderr(), io, &stderr_buffer);
     const err = &stderr_writer.interface;
 
-    const status = run(args, out, err);
-    out.flush() catch {};
+    var status = run(args, out, err);
+    // Buffered output is only written here, so a failed flush means the
+    // command's output never arrived.
+    out.flush() catch {
+        status = 1;
+    };
     err.flush() catch {};
     return status;
 }

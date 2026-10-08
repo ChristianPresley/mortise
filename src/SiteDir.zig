@@ -7,6 +7,7 @@ const std = @import("std");
 const Io = std.Io;
 const Allocator = std.mem.Allocator;
 const sitepath = @import("path.zig");
+const native_os = @import("builtin").os.tag;
 const SiteDir = @This();
 
 /// Largest single file Mortise will read into memory.
@@ -89,7 +90,13 @@ pub fn listFiles(self: SiteDir, arena: Allocator, bad_path: *?[]const u8) !ListR
     var files: std.ArrayList([]const u8) = .empty;
     while (try walker.next(self.io)) |entry| {
         if (entry.kind != .file) continue;
-        const sp = sitepath.normalize(arena, entry.path) catch |err| switch (err) {
+        // Outside Windows the walker joins with '/', so a '\' is part of a
+        // file name; normalize would wrongly treat it as a separator.
+        const has_backslash = native_os != .windows and std.mem.indexOfScalar(u8, entry.path, '\\') != null;
+        const sp = if (has_backslash) {
+            bad_path.* = try arena.dupe(u8, entry.path);
+            return error.InvalidPath;
+        } else sitepath.normalize(arena, entry.path) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             else => {
                 bad_path.* = try arena.dupe(u8, entry.path);
@@ -161,6 +168,19 @@ test "listFiles reports a non-portable name" {
     var bad: ?[]const u8 = null;
     try testing.expectError(error.InvalidPath, borrow(testing.io, tmp.dir).listFiles(arena.allocator(), &bad));
     try testing.expectEqualStrings("bad:name.md", bad.?);
+}
+
+test "listFiles rejects a backslash inside a POSIX file name" {
+    if (native_os == .windows) return error.SkipZigTest;
+    var tmp = testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "a\\b.md", .data = "" });
+
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    var bad: ?[]const u8 = null;
+    try testing.expectError(error.InvalidPath, borrow(testing.io, tmp.dir).listFiles(arena.allocator(), &bad));
+    try testing.expectEqualStrings("a\\b.md", bad.?);
 }
 
 test "copyFileTo and deleteTree" {
