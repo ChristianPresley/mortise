@@ -68,8 +68,18 @@ handles differently from what a user might expect, belongs here.
 - `serve` listens on IPv4 loopback (`127.0.0.1`) only. Browsers that resolve
   `localhost` to `::1` first fall back to IPv4, but a client that only tries
   IPv6 cannot connect.
-- Native file watching is implemented for Linux (inotify). On other
-  platforms `serve` currently exits with an error.
+- Native file watching uses inotify on Linux, kqueue on macOS, and
+  ReadDirectoryChangesW on Windows. Other systems, or a native backend that
+  fails to start, fall back to polling modification times every 100 ms, and
+  `serve` prints a warning saying so.
+- On macOS, kqueue needs one open file descriptor per watched file and
+  directory. `serve` raises its open-file limit to at most 10,240; a larger
+  site can exhaust it, which makes the watcher fall back to polling.
+- On Linux, each watched directory uses one inotify watch, counted against
+  `fs.inotify.max_user_watches`.
+- On Windows, a burst of changes that overflows the 64 KiB notification
+  buffer is treated as "everything changed".
+- Symbolic links inside the site are not followed by any watcher.
 - Every change triggers a full rebuild.
 - The server keeps every build in memory and never writes `_site`.
 - An event stream whose browser tab has closed is only noticed and cleaned

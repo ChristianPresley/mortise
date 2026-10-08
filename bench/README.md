@@ -29,11 +29,17 @@ Target: under 100 ms for a 1,000-page site.
 | Milestone | Date       | Platform                         | Watcher  | Pages | Full build | Median  | p95     | Max     |
 | --------- | ---------- | -------------------------------- | -------- | ----- | ---------- | ------- | ------- | ------- |
 | 6         | 2026-10-08 | Linux (WSL2), Ryzen 7 9800X3D     | inotify  | 1000  | 16.7 ms    | 20.7 ms | 21.7 ms | 23.0 ms |
+| 7         | 2026-10-08 | Windows 11, Ryzen 7 9800X3D       | ReadDirectoryChangesW | 1000 | 40.8 ms | 53.3 ms | 58.6 ms | 59.5 ms |
 
 Notes:
 
-- Milestone 6 rebuilds the whole site on every change. About 10 ms of each
+- Milestones 6 and 7 rebuild the whole site on every change. About 10 ms of each
   sample is the debounce quiet window, which waits for the rest of a save's
   events before rebuilding.
 - The Linux numbers were measured under WSL2 on the development machine, on
   the Linux filesystem (not `/mnt/c`).
+- Windows full builds are slower than Linux on the same machine because
+  each file read and write costs more there; the rebuild dominates the
+  Windows numbers.
+- macOS (kqueue) is covered by CI tests but has not been benchmarked: there
+  is no Mac in the development setup.
