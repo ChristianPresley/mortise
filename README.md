@@ -37,7 +37,9 @@ mortise version
 | `src/path.zig`       | Canonical, portable site paths                   |
 | `src/SiteDir.zig`    | Filesystem access by site path through `std.Io` |
 | `src/BuildArena.zig` | Arena-per-build allocation policy                |
+| `src/markdown.zig`   | Markdown subset to HTML ([spec](docs/markdown.md)) |
 | `src/main.zig`       | Command-line entry point                         |
 | `docs/`              | Markdown subset spec and known limitations       |
+| `test/`              | Fixture tests and their inputs                   |
 
 See [docs/limitations.md](docs/limitations.md) for known limitations.

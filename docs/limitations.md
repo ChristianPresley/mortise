@@ -29,3 +29,11 @@ handles differently from what a user might expect, belongs here.
 - Each build allocates from one arena that is freed when the next build
   starts. Up to 64 MiB of that capacity is kept between dev-server rebuilds
   rather than returned to the OS.
+
+## Markdown
+
+- Only the subset in [markdown.md](markdown.md) is supported. Everything in
+  its "Not supported" list renders as literal paragraph text.
+- Content is trusted. Link and image destinations are not filtered, so a
+  `javascript:` URL in a source file is written to the output unchanged.
+- Emphasis rules treat non-ASCII whitespace and punctuation as letters.
