@@ -42,6 +42,27 @@ pub fn build(b: *std.Build) void {
     const mod_tests = b.addTest(.{ .root_module = mod });
     const exe_tests = b.addTest(.{ .root_module = exe.root_module });
 
+    // `zig build bench -- [PAGES] [RUNS]` measures save-to-reload latency.
+    // It always builds optimized, since debug timings say little.
+    const bench_exe = b.addExecutable(.{
+        .name = "reload-latency",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("bench/reload_latency.zig"),
+            .target = target,
+            .optimize = .ReleaseFast,
+            .imports = &.{
+                .{ .name = "mortise", .module = b.createModule(.{
+                    .root_source_file = b.path("src/root.zig"),
+                    .target = target,
+                    .optimize = .ReleaseFast,
+                }) },
+            },
+        }),
+    });
+    const bench_run = b.addRunArtifact(bench_exe);
+    if (b.args) |args| bench_run.addArgs(args);
+    b.step("bench", "Run the save-to-reload latency benchmark").dependOn(&bench_run.step);
+
     // Fixture tests find their inputs through absolute paths baked in here.
     const test_paths = b.addOptions();
     test_paths.addOption([]const u8, "markdown_fixtures", b.pathFromRoot("test/fixtures/markdown"));
