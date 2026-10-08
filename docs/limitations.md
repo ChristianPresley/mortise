@@ -62,3 +62,17 @@ handles differently from what a user might expect, belongs here.
   `_includes/`.
 - Nothing is written if the build fails, but a failure while writing can
   leave `_site` partly written.
+
+## Dev server
+
+- `serve` listens on IPv4 loopback (`127.0.0.1`) only. Browsers that resolve
+  `localhost` to `::1` first fall back to IPv4, but a client that only tries
+  IPv6 cannot connect.
+- Native file watching is implemented for Linux (inotify). On other
+  platforms `serve` currently exits with an error.
+- Every change triggers a full rebuild.
+- The server keeps every build in memory and never writes `_site`.
+- An event stream whose browser tab has closed is only noticed and cleaned
+  up at the next rebuild, when writing to it fails.
+- There is no HTTPS, compression, or caching; every response is sent with
+  `cache-control: no-store`.
