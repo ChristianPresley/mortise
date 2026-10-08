@@ -37,3 +37,12 @@ handles differently from what a user might expect, belongs here.
 - Content is trusted. Link and image destinations are not filtered, so a
   `javascript:` URL in a source file is written to the output unchanged.
 - Emphasis rules treat non-ASCII whitespace and punctuation as letters.
+
+## Templates
+
+- Five built-in filters and no custom filters.
+- Conditions support `==`, `!=`, `not`, `and` and `or`, without parentheses
+  or ordering comparisons (`<`, `>`).
+- Missing variables render as nothing instead of failing, so a typo in a
+  variable name produces empty output rather than an error.
+- `upper` and `lower` change ASCII letters only.

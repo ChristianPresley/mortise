@@ -39,6 +39,7 @@ mortise version
 | `src/BuildArena.zig` | Arena-per-build allocation policy                |
 | `src/markdown.zig`   | Markdown subset to HTML ([spec](docs/markdown.md)) |
 | `src/frontmatter.zig` | Restricted YAML frontmatter ([spec](docs/frontmatter.md)) |
+| `src/template.zig`   | Template engine ([spec](docs/templates.md))      |
 | `src/main.zig`       | Command-line entry point                         |
 | `docs/`              | Markdown subset spec and known limitations       |
 | `test/`              | Fixture tests and their inputs                   |
