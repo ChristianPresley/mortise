@@ -1,0 +1,2 @@
+# Fixtures and expected output are compared byte for byte, so keep LF everywhere.
+* text=auto eol=lf

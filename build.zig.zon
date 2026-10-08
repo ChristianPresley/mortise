@@ -1,0 +1,17 @@
+.{
+    .name = .mortise,
+    .version = "0.1.0",
+    .fingerprint = 0x972c84fd73456ebc, // Changing this has security and trust implications.
+    // Pinned toolchain. build.zig rejects any other version, and CI installs
+    // exactly this one.
+    .minimum_zig_version = "0.16.0",
+    // Mortise has no third-party dependencies. Keep this table empty.
+    .dependencies = .{},
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+        "LICENSE",
+        "README.md",
+    },
+}
