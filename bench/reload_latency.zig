@@ -80,7 +80,7 @@ pub fn main(init: std.process.Init) !void {
         \\  max:          {d:.1} ms
         \\
     , .{
-        @tagName(@import("builtin").cpu.arch), @tagName(@import("builtin").os.tag), mortise.watch.Watcher.name(),
+        @tagName(@import("builtin").cpu.arch), @tagName(@import("builtin").os.tag), watcher.backendName(),
         pages,                                 full_build_ms,                       runs,
         samples[0],                            samples[runs / 2],                   samples[@min(runs - 1, (runs * 95) / 100)],
         samples[runs - 1],

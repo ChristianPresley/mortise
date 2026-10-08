@@ -680,7 +680,6 @@ test "dev server serves pages with the reload script injected" {
 }
 
 test "live reload: saving a source file sends a reload event" {
-    if (Watcher.Backend == @import("watch.zig").Unsupported) return error.SkipZigTest;
     const io = testing.io;
     var tmp = testing.tmpDir(.{ .iterate = true });
     defer tmp.cleanup();
