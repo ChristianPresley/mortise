@@ -80,7 +80,16 @@ handles differently from what a user might expect, belongs here.
 - On Windows, a burst of changes that overflows the 64 KiB notification
   buffer is treated as "everything changed".
 - Symbolic links inside the site are not followed by any watcher.
-- Every change triggers a full rebuild.
+- Incremental rebuilds track dependencies per output: the page's own
+  source, the layouts and includes it used, and whether any of its
+  templates read `site.posts` or `site.pages`. Editing any page or post
+  therefore re-renders every page that lists posts or pages, even if the
+  edit did not change what that list shows.
+- Changes to `_config.yml`, added or removed files, a changed permalink or
+  draft flag, and watcher overflows trigger a full rebuild.
+- Each incremental build shares memory with the one before it. After 64
+  incremental builds in a row the server does one full build to release
+  that memory.
 - The server keeps every build in memory and never writes `_site`.
 - An event stream whose browser tab has closed is only noticed and cleaned
   up at the next rebuild, when writing to it fails.
