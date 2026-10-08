@@ -42,7 +42,23 @@ pub fn build(b: *std.Build) void {
     const mod_tests = b.addTest(.{ .root_module = mod });
     const exe_tests = b.addTest(.{ .root_module = exe.root_module });
 
-    const test_step = b.step("test", "Run all unit tests");
+    // Fixture tests find their inputs through absolute paths baked in here.
+    const test_paths = b.addOptions();
+    test_paths.addOption([]const u8, "markdown_fixtures", b.pathFromRoot("test/fixtures/markdown"));
+    const fixture_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("test/fixtures.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "mortise", .module = mod },
+                .{ .name = "test_paths", .module = test_paths.createModule() },
+            },
+        }),
+    });
+
+    const test_step = b.step("test", "Run all unit and fixture tests");
     test_step.dependOn(&b.addRunArtifact(mod_tests).step);
     test_step.dependOn(&b.addRunArtifact(exe_tests).step);
+    test_step.dependOn(&b.addRunArtifact(fixture_tests).step);
 }
