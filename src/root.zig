@@ -12,6 +12,7 @@ pub const SiteDir = @import("SiteDir.zig");
 pub const BuildArena = @import("BuildArena.zig");
 pub const markdown = @import("markdown.zig");
 pub const frontmatter = @import("frontmatter.zig");
+pub const template = @import("template.zig");
 
 pub const version = "0.1.0";
 
