@@ -33,6 +33,9 @@ pub const Options = struct {
     port: u16 = 4000,
     /// Where build results are logged. Null disables logging.
     log: ?*Io.Writer = null,
+    /// Re-render only what a change affects. False rebuilds everything on
+    /// every change, which the benchmark uses for comparison.
+    incremental: bool = true,
 };
 
 /// One successful build, shared by every request that started while it was
@@ -42,7 +45,16 @@ const Snapshot = struct {
     site: pipeline.Site,
     generation: u64,
     refs: usize,
+    /// The build this one was incrementally derived from. Its memory is
+    /// shared, so this snapshot holds a reference to it.
+    parent: ?*Snapshot = null,
+    /// Length of the parent chain.
+    depth: usize = 0,
 };
+
+/// After this many incremental builds in a row, the next build starts from
+/// scratch so the chain of shared arenas cannot grow without bound.
+const max_chain = 64;
 
 /// A copy of a failed build's diagnostic, owned by the server.
 pub const Failure = struct {
@@ -58,6 +70,7 @@ pub const Server = struct {
     listener: Io.net.Server,
     port: u16,
     log: ?*Io.Writer,
+    incremental: bool,
 
     mutex: Io.Mutex = .init,
     /// Signaled whenever `generation` changes or the server stops.
@@ -68,6 +81,10 @@ pub const Server = struct {
     /// The last build's error, or null if it succeeded.
     failure: ?Failure = null,
     stopping: bool = false,
+
+    /// Changes not yet in a successful build, owned by `gpa`. A failed
+    /// build keeps them so the next incremental build still covers them.
+    pending: std.ArrayList([]const u8) = .empty,
 
     tasks: Io.Group = .init,
     /// Duration of the most recent build, successful or not.
@@ -92,6 +109,7 @@ pub const Server = struct {
             .listener = listener,
             .port = listener.socket.address.getPort(),
             .log = options.log,
+            .incremental = options.incremental,
         };
         s.rebuild();
         return s;
@@ -124,6 +142,8 @@ pub const Server = struct {
         s.listener.deinit(io);
         if (s.snapshot) |snap| s.release(snap);
         s.clearFailure();
+        s.clearPending();
+        s.pending.deinit(s.gpa);
         s.src.close();
         s.gpa.destroy(s);
     }
@@ -132,17 +152,64 @@ pub const Server = struct {
     /// browsers reload; on failure the previous build keeps being served and
     /// browsers are told about the error.
     pub fn rebuild(s: *Server) void {
+        s.runBuild(false);
+    }
+
+    /// Rebuilds after the given source paths changed, re-rendering only
+    /// what depends on them when the previous build allows it.
+    pub fn rebuildChanged(s: *Server, changes: []const []const u8) void {
+        for (changes) |c| {
+            const known = for (s.pending.items) |p| {
+                if (std.mem.eql(u8, p, c)) break true;
+            } else false;
+            if (known) continue;
+            const owned = s.gpa.dupe(u8, c) catch return s.fullAfterOom();
+            s.pending.append(s.gpa, owned) catch {
+                s.gpa.free(owned);
+                return s.fullAfterOom();
+            };
+        }
+        s.runBuild(true);
+    }
+
+    fn fullAfterOom(s: *Server) void {
+        s.clearPending();
+        s.runBuild(false);
+    }
+
+    fn clearPending(s: *Server) void {
+        for (s.pending.items) |p| s.gpa.free(p);
+        s.pending.clearRetainingCapacity();
+    }
+
+    fn runBuild(s: *Server, incremental: bool) void {
         const io = s.io;
         const start_time = Io.Clock.Timestamp.now(io, .awake);
 
+        // An incremental build reads the current snapshot, so hold it.
+        const prev: ?*Snapshot = if (incremental) s.acquire() else null;
+        var prev_kept = false;
+        defer if (prev) |p| if (!prev_kept) s.release(p);
+
         const snap = s.gpa.create(Snapshot) catch return s.logLine("error: out of memory", .{});
         snap.* = .{ .arena = .init(s.gpa), .site = undefined, .generation = 0, .refs = 1 };
+        const arena = snap.arena.begin();
         var diag: pipeline.Diagnostic = .{};
-        const result = pipeline.build(snap.arena.begin(), s.src, &diag);
+        const result = if (prev != null and prev.?.depth < max_chain)
+            pipeline.rebuild(arena, s.src, &prev.?.site, s.pending.items, &diag)
+        else
+            pipeline.build(arena, s.src, &diag);
         s.last_build_ns = start_time.durationTo(Io.Clock.Timestamp.now(io, .awake)).raw.nanoseconds;
 
         if (result) |site| {
             snap.site = site;
+            if (!site.full) {
+                // The new site shares memory with the previous one.
+                snap.parent = prev;
+                snap.depth = prev.?.depth + 1;
+                prev_kept = true;
+            }
+            s.clearPending();
             s.mutex.lockUncancelable(io);
             const old = s.snapshot;
             s.generation += 1;
@@ -152,9 +219,12 @@ pub const Server = struct {
             s.changed.broadcast(io);
             s.mutex.unlock(io);
             if (old) |o| s.release(o);
-            s.logLine("Built {d} pages, {d} posts, {d} static files in {d} ms", .{
-                site.pages, site.posts, site.static_files, @divTrunc(s.last_build_ns, std.time.ns_per_ms),
-            });
+            const ms = @as(f64, @floatFromInt(s.last_build_ns)) / std.time.ns_per_ms;
+            if (site.full) {
+                s.logLine("Built {d} pages, {d} posts, {d} static files in {d:.1} ms", .{ site.pages, site.posts, site.static_files, ms });
+            } else {
+                s.logLine("Rebuilt {d} of {d} pages in {d:.1} ms", .{ site.rendered, site.pages + site.posts, ms });
+            }
         } else |err| {
             const failure: ?Failure = switch (err) {
                 error.BuildFailed => s.copyFailure(diag) catch null,
@@ -204,14 +274,20 @@ pub const Server = struct {
         return snap;
     }
 
-    fn release(s: *Server, snap: *Snapshot) void {
-        s.mutex.lockUncancelable(s.io);
-        snap.refs -= 1;
-        const last = snap.refs == 0;
-        s.mutex.unlock(s.io);
-        if (last) {
+    fn release(s: *Server, snapshot: *Snapshot) void {
+        var snap = snapshot;
+        while (true) {
+            s.mutex.lockUncancelable(s.io);
+            snap.refs -= 1;
+            const last = snap.refs == 0;
+            s.mutex.unlock(s.io);
+            if (!last) return;
+            // Freeing a snapshot drops its reference to the build it shared
+            // memory with.
+            const parent = snap.parent;
             snap.arena.deinit();
             s.gpa.destroy(snap);
+            snap = parent orelse return;
         }
     }
 
@@ -241,7 +317,7 @@ fn watchLoop(s: *Server, watcher: *Watcher) Io.Cancelable!void {
             return;
         };
         if (changes.len == 0) continue;
-        s.rebuild();
+        if (s.incremental) s.rebuildChanged(changes) else s.rebuild();
     }
 }
 
@@ -808,6 +884,10 @@ test "one atomic save causes exactly one rebuild" {
     try io.sleep(.fromMilliseconds(500), .awake);
     server.mutex.lockUncancelable(io);
     const generation = server.generation;
+    const site = server.snapshot.?.site;
     server.mutex.unlock(io);
     try testing.expectEqual(@as(u64, 2), generation);
+    // The rebuild was incremental: only the edited page was rendered.
+    try testing.expect(!site.full);
+    try testing.expectEqual(@as(usize, 1), site.rendered);
 }
