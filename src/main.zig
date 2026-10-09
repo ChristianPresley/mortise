@@ -112,17 +112,8 @@ fn cmdBuild(ctx: Ctx, rest: []const [:0]const u8) u8 {
         return 1;
     };
 
-    src.deleteTree(pipeline.output_dir) catch |e| {
-        ctx.err.print("error: cannot clear {s}/{s}: {s}\n", .{ dir, pipeline.output_dir, @errorName(e) }) catch {};
-        return 1;
-    };
-    var out = src.openSub(pipeline.output_dir) catch |e| {
-        ctx.err.print("error: cannot create {s}/{s}: {s}\n", .{ dir, pipeline.output_dir, @errorName(e) }) catch {};
-        return 1;
-    };
-    defer out.close();
-    pipeline.writeSite(site, src, out, &diag) catch {
-        ctx.err.print("error: cannot write {s}/{s}/{f}\n", .{ dir, pipeline.output_dir, diag }) catch {};
+    pipeline.writeOutputDir(site, src, &diag) catch {
+        ctx.err.print("error: cannot write {s}/{s}: {f}\n", .{ dir, pipeline.output_dir, diag }) catch {};
         return 1;
     };
 

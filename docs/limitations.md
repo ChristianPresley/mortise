@@ -30,8 +30,9 @@ job:
   site portable, at the cost of rejecting names that are legal on Linux and
   macOS.
 - **Case is not normalized.** `About.md` and `about.md` are different site
-  paths, but they collide on the default case-insensitive filesystems of
-  Windows and macOS. Mortise does not detect the collision yet.
+  paths. Two outputs that differ only in case are rejected, because they
+  would overwrite each other on the default case-insensitive file systems
+  of Windows and macOS.
 - **Symlinks are skipped** when listing a source tree, as are sockets, pipes
   and other special files.
 - **Files larger than 64 MiB are not read.** The build fails with
@@ -97,8 +98,11 @@ job:
   placed there by hand are lost.
 - Layouts are found only as `_layouts/NAME.html`; includes only under
   `_includes/`.
-- Nothing is written if the build fails, but a failure while writing can
-  leave `_site` partly written.
+- `build` writes into a hidden `.mortise-staging` directory and swaps it in
+  for `_site` only after every file is written, so a failed write leaves
+  the previous `_site` intact. The swap itself (delete `_site`, then rename)
+  is two steps, so a crash between them leaves no `_site` until the next
+  build.
 
 ## Dev server
 

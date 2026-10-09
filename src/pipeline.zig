@@ -507,6 +507,7 @@ fn finish(b: *Builder, config_fields: frontmatter.Map, pages: []Page, statics: [
             return b.fail(c.source, 0, "writes to '{s}', which '{s}' also writes to", .{ c.path, a.source });
         }
     }
+    try checkCaseCollisions(b, outputs.items);
 
     return .{
         .outputs = outputs.items,
@@ -853,6 +854,50 @@ pub fn writeSite(site: Site, src: SiteDir, out: SiteDir, diag: *Diagnostic) erro
     }
 }
 
+/// Fails when two outputs differ only in letter case. They would overwrite
+/// each other on the case-insensitive file systems Windows and macOS use by
+/// default, so a site that builds on Linux would break there.
+fn checkCaseCollisions(b: *Builder, outputs: []const Output) Error!void {
+    const Item = struct { folded: []const u8, out: Output };
+    const items = try b.arena.alloc(Item, outputs.len);
+    for (outputs, items) |o, *it| it.* = .{ .folded = try std.ascii.allocLowerString(b.arena, o.path), .out = o };
+    std.mem.sortUnstable(Item, items, {}, struct {
+        fn lt(_: void, x: Item, y: Item) bool {
+            return std.mem.lessThan(u8, x.folded, y.folded);
+        }
+    }.lt);
+    for (items[0..items.len -| 1], items[@min(1, items.len)..]) |x, y| {
+        if (std.mem.eql(u8, x.folded, y.folded)) {
+            return b.fail(y.out.source, 0, "output '{s}' differs from '{s}' (from '{s}') only in letter case; they would overwrite each other on Windows and macOS", .{ y.out.path, x.out.path, x.out.source });
+        }
+    }
+}
+
+/// Hidden directory inside the site where `writeOutputDir` stages output.
+pub const staging_dir = ".mortise-staging";
+
+/// Writes the site to `_site` inside `src` so that a failure never leaves
+/// a half-written `_site`: everything is written to a hidden staging
+/// directory first, which replaces `_site` only once every file is in it.
+pub fn writeOutputDir(site: Site, src: SiteDir, diag: *Diagnostic) error{BuildFailed}!void {
+    src.deleteTree(staging_dir) catch |err| return ioFail(diag, staging_dir, err);
+    {
+        var stage = src.openSub(staging_dir) catch |err| return ioFail(diag, staging_dir, err);
+        defer stage.close();
+        writeSite(site, src, stage, diag) catch |err| {
+            src.deleteTree(staging_dir) catch {};
+            return err;
+        };
+    }
+    src.deleteTree(output_dir) catch |err| return ioFail(diag, output_dir, err);
+    src.dir.rename(staging_dir, src.dir, output_dir, src.io) catch |err| return ioFail(diag, output_dir, err);
+}
+
+fn ioFail(diag: *Diagnostic, path: []const u8, err: anyerror) error{BuildFailed} {
+    diag.* = .{ .path = path, .message = @errorName(err) };
+    return error.BuildFailed;
+}
+
 // ---------------------------------------------------------------------------
 
 const testing = std.testing;
@@ -1188,6 +1233,33 @@ test "data files are available as site.data" {
     try expectBuildError(&.{.{ "_data/a.json", "{\n\"a\": 1,\n}" }}, "_data/a.json", 3, "invalid JSON");
     try expectBuildError(&.{ .{ "_data/a.json", "1" }, .{ "_data/a.yml", "b: 1\n" } }, "_data/a.yml", 0, "clashes");
     try expectBuildError(&.{.{ "_config.yml", "data: 1\n" }}, "_config.yml", 0, "set by Mortise");
+}
+
+test "outputs that differ only in case are rejected" {
+    var t: TestSite = try .init(&.{
+        .{ "about.md", "---\npermalink: /About/\n---\n" },
+        .{ "docs.md", "---\npermalink: /about/\n---\n" },
+    });
+    defer t.deinit();
+    var diag: Diagnostic = .{};
+    try testing.expectError(error.BuildFailed, t.build(&diag));
+    try testing.expect(std.mem.indexOf(u8, diag.message, "only in letter case") != null);
+}
+
+test "writeOutputDir replaces _site only after a complete write" {
+    var t: TestSite = try .init(&.{
+        .{ "index.md", "new\n" },
+        .{ "_site/stale.html", "old" },
+    });
+    defer t.deinit();
+    const src = SiteDir.borrow(testing.io, t.tmp.dir);
+    var diag: Diagnostic = .{};
+    const site = try t.build(&diag);
+    try writeOutputDir(site, src, &diag);
+    const a = t.arena.allocator();
+    try testing.expectEqualStrings("<p>new</p>\n", try src.readFile(a, "_site/index.html"));
+    try testing.expectError(error.FileNotFound, src.readFile(a, "_site/stale.html"));
+    try testing.expectError(error.FileNotFound, src.readFile(a, staging_dir ++ "/index.html"));
 }
 
 test "feed and sitemap are generated when the site has a url" {
