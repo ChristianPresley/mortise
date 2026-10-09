@@ -95,6 +95,22 @@ pub fn build(b: *std.Build) void {
         }),
     });
 
+    // `zig build update-fixtures` regenerates expected fixture outputs from
+    // the current implementation, for review before committing.
+    const update_fixtures = b.addExecutable(.{
+        .name = "update-fixtures",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("test/update_fixtures.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "mortise", .module = mod },
+                .{ .name = "test_paths", .module = test_paths.createModule() },
+            },
+        }),
+    });
+    b.step("update-fixtures", "Regenerate expected fixture outputs").dependOn(&b.addRunArtifact(update_fixtures).step);
+
     const test_step = b.step("test", "Run all unit and fixture tests");
     test_step.dependOn(&b.addRunArtifact(mod_tests).step);
     test_step.dependOn(&b.addRunArtifact(exe_tests).step);
