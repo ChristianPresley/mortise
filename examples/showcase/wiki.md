@@ -1,6 +1,7 @@
 ---
 title: Wiki
 layout: doc
+weight: 4
 ---
 # Wiki elements
 

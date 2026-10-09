@@ -1,6 +1,7 @@
 ---
 title: About
 layout: base
+weight: 9
 ---
 About this site
 ===============

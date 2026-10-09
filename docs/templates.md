@@ -101,6 +101,37 @@ layout: base
 {% if paginator.next_url %}<a href="{{ paginator.next_url }}">Older</a>{% endif %}
 ```
 
+## Navigation
+
+Every page and post gets navigation variables, so layouts can build
+wiki-style sidebars, breadcrumbs, and pagers:
+
+| Variable           | Value                                                          |
+| ------------------ | -------------------------------------------------------------- |
+| `page.breadcrumbs` | Ancestor pages by URL, root first, each `{title, url}`         |
+| `page.previous`    | Previous page in the same URL directory, or the older post     |
+| `page.next`        | Next page in the same URL directory, or the newer post         |
+| `site.nav`         | Every non-post page as a tree: `{title, url, children}`        |
+
+Pages are ordered by a `weight` number in their frontmatter (lower first),
+then by title. `nav: false` leaves a page out of `site.nav` and out of
+previous/next; the home page is never in `site.nav`. A page's navigation
+title is its `title`, else the last part of its URL.
+
+```html
+{% for item in site.nav %}
+<a href="{{ item.url }}">{{ item.title }}</a>
+{% for child in item.children %}<a href="{{ child.url }}">{{ child.title }}</a>{% endfor %}
+{% endfor %}
+
+{% for crumb in page.breadcrumbs %}<a href="{{ crumb.url }}">{{ crumb.title }}</a> › {% endfor %}{{ page.title }}
+
+{% if page.next %}<a href="{{ page.next.url }}">Next: {{ page.next.title }}</a>{% endif %}
+```
+
+Templates cannot recurse, so a sidebar shows as many levels as its layout
+loops over.
+
 ## Includes
 
 ```html

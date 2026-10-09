@@ -1,6 +1,7 @@
 ---
 title: Docs
 layout: doc
+weight: 1
 ---
 # Markdown reference
 
