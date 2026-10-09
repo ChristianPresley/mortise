@@ -166,3 +166,76 @@
   background: var(--mt-subtle);
   font: .85em ui-monospace, SFMono-Regular, Consolas, monospace;
 }
+
+/* Code blocks with options: ```zig title="x" {2-3} lineNumbers, and diff */
+.mt-code {
+  margin: 1.25rem 0;
+  border: 1px solid var(--mt-border);
+  border-radius: var(--mt-radius);
+  overflow: hidden;
+}
+.mt-code pre { margin: 0; border-radius: 0; padding: .75rem 0; overflow-x: auto; }
+.mt-code-title {
+  padding: .45rem 1rem;
+  border-bottom: 1px solid var(--mt-border);
+  background: var(--mt-subtle);
+  font: 600 .82rem ui-monospace, SFMono-Regular, Consolas, monospace;
+  color: var(--mt-muted);
+}
+.mt-code-title::before { content: "▤"; margin-right: .5rem; opacity: .7; }
+.mt-line { display: inline-block; min-width: 100%; box-sizing: border-box; padding: 0 1rem; }
+/* An empty line still takes a line's height. */
+.mt-line:empty::after { content: "\200b"; }
+.mt-line-marked { background: color-mix(in srgb, var(--mt-accent) 13%, transparent); box-shadow: inset 3px 0 0 var(--mt-accent); }
+.mt-line-add { background: color-mix(in srgb, var(--mt-tip) 14%, transparent); box-shadow: inset 3px 0 0 var(--mt-tip); }
+.mt-line-del { background: color-mix(in srgb, var(--mt-caution) 12%, transparent); box-shadow: inset 3px 0 0 var(--mt-caution); }
+.mt-line-hunk { color: var(--mt-note); }
+.mt-code-numbered code { counter-reset: mt-line; }
+.mt-code-numbered .mt-line { padding-left: 3.5rem; position: relative; }
+.mt-code-numbered .mt-line::before {
+  counter-increment: mt-line;
+  content: counter(mt-line);
+  position: absolute;
+  left: 0;
+  width: 2.5rem;
+  text-align: right;
+  color: var(--mt-muted);
+  opacity: .6;
+  user-select: none;
+}
+
+/* Tabs and code groups: radio inputs and labels, then panels.
+   Works without JavaScript; up to 8 tabs per group. */
+.mt-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  margin: 1.25rem 0;
+  border: 1px solid var(--mt-border);
+  border-radius: var(--mt-radius);
+  overflow: hidden;
+}
+.mt-tab-input { position: absolute; opacity: 0; pointer-events: none; }
+.mt-tab-label {
+  order: 0;
+  padding: .55rem 1rem;
+  border-bottom: 2px solid transparent;
+  background: var(--mt-subtle);
+  color: var(--mt-muted);
+  font-weight: 600;
+  font-size: .9rem;
+  cursor: pointer;
+}
+.mt-tab-input:checked + .mt-tab-label { color: var(--mt-accent); border-bottom-color: var(--mt-accent); background: transparent; }
+.mt-tab-input:focus-visible + .mt-tab-label { outline: 2px solid var(--mt-accent); outline-offset: -2px; }
+.mt-tab-panel { order: 1; width: 100%; display: none; padding: 0 1rem; border-top: 1px solid var(--mt-border); }
+.mt-code-group .mt-tab-panel { padding: 0; }
+.mt-code-group .mt-tab-panel .mt-code, .mt-code-group .mt-tab-panel pre { margin: 0; border: 0; border-radius: 0; }
+.mt-code-group .mt-code-title { display: none; }
+.mt-tab-input:nth-of-type(1):checked ~ .mt-tab-panel:nth-of-type(1),
+.mt-tab-input:nth-of-type(2):checked ~ .mt-tab-panel:nth-of-type(2),
+.mt-tab-input:nth-of-type(3):checked ~ .mt-tab-panel:nth-of-type(3),
+.mt-tab-input:nth-of-type(4):checked ~ .mt-tab-panel:nth-of-type(4),
+.mt-tab-input:nth-of-type(5):checked ~ .mt-tab-panel:nth-of-type(5),
+.mt-tab-input:nth-of-type(6):checked ~ .mt-tab-panel:nth-of-type(6),
+.mt-tab-input:nth-of-type(7):checked ~ .mt-tab-panel:nth-of-type(7),
+.mt-tab-input:nth-of-type(8):checked ~ .mt-tab-panel:nth-of-type(8) { display: block; }
