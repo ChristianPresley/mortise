@@ -19,6 +19,10 @@ a { color: var(--accent); }
 .toc-box { float: right; margin: 0 0 1rem 1.5rem; padding: .75rem 1rem; background: var(--code); border-radius: 6px; font-size: .9rem; }
 .toc-box ul { margin: .25rem 0 0; padding-left: 1rem; }
 body:has(.wiki) :is(header, main, footer) { max-width: 66rem; }
+body:has(.api-page) :is(header, main, footer) { max-width: 84rem; }
+.api-page { grid-template-columns: 15rem minmax(0, 1fr); }
+.api-page .wiki-nav { max-height: calc(100vh - 2rem); overflow-y: auto; }
+.wiki-nav-title a { color: inherit; text-decoration: none; }
 .wiki { display: grid; grid-template-columns: 13rem minmax(0, 1fr); gap: 2.5rem; align-items: start; }
 .wiki-nav { position: sticky; top: 1rem; font-size: .92rem; }
 .wiki-nav-title { margin: 0 0 .5rem; font-size: .75rem; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }

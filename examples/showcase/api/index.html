@@ -1,0 +1,17 @@
+---
+title: APIs
+layout: api
+weight: 6
+---
+<p>Every OpenAPI document in <code>_api/</code> becomes a reference page. This overview lists them from <code>site.apis</code>.</p>
+<div class="mt-api-cards">
+{%- for api in site.apis %}
+<section class="mt-api-card">
+<h3><a href="{{ api.url }}">{{ api.title }}</a>{% if api.version %}<span class="mt-badge">v{{ api.version }}</span>{% endif %}</h3>
+<div class="mt-api-card-text">{{ api.description }}</div>
+{%- for op in api.operations %}
+<a class="mt-api-nav-op{% if op.deprecated %} mt-api-nav-deprecated{% endif %}" href="{{ op.url }}"><span class="mt-method mt-method-{{ op.method }}">{{ op.method }}</span><code>{{ op.path }}</code></a>
+{%- endfor %}
+</section>
+{%- endfor %}
+</div>
