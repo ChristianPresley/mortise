@@ -386,8 +386,18 @@ fn handleRequest(s: *Server, req: *http.Server.Request) !bool {
     };
     defer s.release(snap);
 
-    const url_path = percentDecode(arena, raw_path) catch return respondText(req, .bad_request, "bad request\n");
-    if (url_path.len == 0 or url_path[0] != '/') return respondText(req, .bad_request, "bad request\n");
+    const full_path = percentDecode(arena, raw_path) catch return respondText(req, .bad_request, "bad request\n");
+    if (full_path.len == 0 or full_path[0] != '/') return respondText(req, .bad_request, "bad request\n");
+
+    // With a baseurl such as `/blog`, the site lives under `/blog/`.
+    const base = snap.site.baseurl;
+    if (base.len > 0 and !std.mem.startsWith(u8, full_path, base)) {
+        if (std.mem.eql(u8, full_path, "/")) return redirect(req, arena, base, "/");
+        return respondText(req, .not_found, "not found\n");
+    }
+    const url_path = full_path[base.len..];
+    if (url_path.len == 0) return redirect(req, arena, base, "/");
+    if (url_path[0] != '/') return respondText(req, .not_found, "not found\n");
 
     const lookup = try std.fmt.allocPrint(arena, "{s}{s}", .{
         url_path[1..],
@@ -401,19 +411,22 @@ fn handleRequest(s: *Server, req: *http.Server.Request) !bool {
     }
     // `/about` -> `/about/` when `about/index.html` exists.
     const dir_index = try std.fmt.allocPrint(arena, "{s}/index.html", .{sp});
-    if (snap.site.find(dir_index) != null) {
-        const location = try std.fmt.allocPrint(arena, "{s}/", .{url_path});
-        try req.respond("", .{ .status = .moved_permanently, .extra_headers = &.{
-            .{ .name = "location", .value = location },
-            .{ .name = "cache-control", .value = "no-store" },
-        } });
-        return true;
-    }
+    if (snap.site.find(dir_index) != null) return redirect(req, arena, full_path, "/");
     if (snap.site.find("404.html")) |page| {
         try serveOutput(s, req, arena, snap, page, .not_found);
         return true;
     }
     return respondText(req, .not_found, "not found\n");
+}
+
+/// Permanently redirects to `prefix` followed by `suffix`.
+fn redirect(req: *http.Server.Request, arena: Allocator, prefix: []const u8, suffix: []const u8) !bool {
+    const location = try std.mem.concat(arena, u8, &.{ prefix, suffix });
+    try req.respond("", .{ .status = .moved_permanently, .extra_headers = &.{
+        .{ .name = "location", .value = location },
+        .{ .name = "cache-control", .value = "no-store" },
+    } });
+    return true;
 }
 
 fn respondText(req: *http.Server.Request, status: http.Status, body: []const u8) !bool {
@@ -890,4 +903,35 @@ test "one atomic save causes exactly one rebuild" {
     // The rebuild was incremental: only the edited page was rendered.
     try testing.expect(!site.full);
     try testing.expectEqual(@as(usize, 1), site.rendered);
+}
+
+test "dev server serves a site with a baseurl under its prefix" {
+    const io = testing.io;
+    var tmp = testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+    const root = try testServerSite(io, &tmp);
+    defer testing.allocator.free(root);
+    try SiteDir.borrow(io, tmp.dir).writeFile("_config.yml", "baseurl: /blog\n");
+
+    const server = try Server.init(testing.allocator, io, root, .{ .port = 0 });
+    defer server.deinit();
+    try server.start();
+
+    var c = try TestClient.connect(io, server.port);
+    defer c.close();
+    try c.send("GET / HTTP/1.1\r\nhost: localhost\r\n\r\n");
+    try testing.expect(try c.readUntil(0, "\r\n\r\n", 5000));
+    try testing.expect(std.mem.indexOf(u8, c.received(), "location: /blog/") != null);
+
+    var mark = c.len;
+    try c.send("GET /blog/ HTTP/1.1\r\nhost: localhost\r\n\r\n");
+    try testing.expect(try c.readUntil(mark, "<p>hello</p>", 5000));
+
+    mark = c.len;
+    try c.send("GET /blog/about HTTP/1.1\r\nhost: localhost\r\n\r\n");
+    try testing.expect(try c.readUntil(mark, "location: /blog/about/", 5000));
+
+    mark = c.len;
+    try c.send("GET /css/site.css HTTP/1.1\r\nhost: localhost\r\n\r\n");
+    try testing.expect(try c.readUntil(mark, "not found", 5000));
 }
