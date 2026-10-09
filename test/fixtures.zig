@@ -74,6 +74,24 @@ test "site-basic builds to the expected output" {
     try testing.expectEqual(@as(usize, 0), failures);
 }
 
+test "the showcase example builds" {
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena_state.deinit();
+    var src = try mortise.SiteDir.open(testing.io, paths.showcase);
+    defer src.close();
+    var diag: mortise.pipeline.Diagnostic = .{};
+    const site = mortise.pipeline.build(arena_state.allocator(), src, &diag) catch |err| {
+        std.debug.print("showcase failed to build: {f}\n", .{diag});
+        return err;
+    };
+    for ([_][]const u8{ "index.html", "page/2/index.html", "tags/index.html", "docs/index.html", "404.html", "feed.xml", "sitemap.xml" }) |p| {
+        if (site.find(p) == null) {
+            std.debug.print("showcase is missing {s}\n", .{p});
+            return error.TestExpectedOutput;
+        }
+    }
+}
+
 test "markdown fixtures" {
     const io = testing.io;
     var dir = try Io.Dir.cwd().openDir(io, paths.markdown_fixtures, .{ .iterate = true });

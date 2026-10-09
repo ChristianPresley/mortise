@@ -1,0 +1,8 @@
+<header>
+<a class="brand" href="{{ site.baseurl }}/">{{ site.title }}</a>
+<nav>
+{%- for item in site.data.nav %}
+<a href="{{ site.baseurl }}{{ item.url }}"{% if page.url == item.url %} class="current"{% endif %}>{{ item.title }}</a>
+{%- endfor %}
+</nav>
+</header>

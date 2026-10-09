@@ -83,6 +83,7 @@ pub fn build(b: *std.Build) void {
     test_paths.addOption([]const u8, "markdown_fixtures", b.pathFromRoot("test/fixtures/markdown"));
     test_paths.addOption([]const u8, "site_basic", b.pathFromRoot("test/fixtures/site-basic"));
     test_paths.addOption([]const u8, "site_basic_expected", b.pathFromRoot("test/expected/site-basic"));
+    test_paths.addOption([]const u8, "showcase", b.pathFromRoot("examples/showcase"));
     const fixture_tests = b.addTest(.{
         .root_module = b.createModule(.{
             .root_source_file = b.path("test/fixtures.zig"),
