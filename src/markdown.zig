@@ -36,6 +36,16 @@ const Block = union(enum) {
     list: List,
     quote: []const Block,
     thematic_break,
+    table: Table,
+};
+
+const Align = enum { none, left, center, right };
+
+const Table = struct {
+    aligns: []const Align,
+    header: []const []const u8,
+    /// Each row has exactly `aligns.len` cells.
+    rows: []const []const []const u8,
 };
 
 const List = struct {
@@ -121,6 +131,8 @@ fn parseBlocks(arena: Allocator, lines: []const []const u8) Allocator.Error!Pars
             i += 1;
         } else if (quoteContent(line) != null) {
             i = try parseQuote(arena, lines, i, &blocks);
+        } else if (try tableStart(arena, lines, i)) |t| {
+            i = try parseTable(arena, lines, i, t, &blocks);
         } else if (atxHeading(line)) |h| {
             try blocks.append(arena, h);
             i += 1;
@@ -348,6 +360,72 @@ fn setextLevel(line: []const u8) ?u8 {
     return if (c == '=') 1 else 2;
 }
 
+/// Splits a table row into trimmed cells. Leading and trailing pipes are
+/// optional; `\|` is a literal pipe inside a cell.
+fn splitRow(arena: Allocator, line: []const u8) Allocator.Error![]const []const u8 {
+    var row = std.mem.trim(u8, line, " \t");
+    if (row.len > 0 and row[0] == '|') row = row[1..];
+    if (row.len > 0 and row[row.len - 1] == '|' and (row.len < 2 or row[row.len - 2] != '\\')) row = row[0 .. row.len - 1];
+    var cells: std.ArrayList([]const u8) = .empty;
+    var cell: std.ArrayList(u8) = .empty;
+    var i: usize = 0;
+    while (i < row.len) : (i += 1) {
+        if (row[i] == '\\' and i + 1 < row.len and row[i + 1] == '|') {
+            try cell.append(arena, '|');
+            i += 1;
+        } else if (row[i] == '|') {
+            try cells.append(arena, std.mem.trim(u8, cell.items, " \t"));
+            cell = .empty;
+        } else try cell.append(arena, row[i]);
+    }
+    try cells.append(arena, std.mem.trim(u8, cell.items, " \t"));
+    return cells.items;
+}
+
+/// Parses a delimiter row such as `| :-- | :-: | --: |`.
+fn delimiterRow(arena: Allocator, line: []const u8) Allocator.Error!?[]const Align {
+    if (std.mem.indexOfScalar(u8, line, '-') == null) return null;
+    const cells = try splitRow(arena, line);
+    const aligns = try arena.alloc(Align, cells.len);
+    for (cells, aligns) |c, *a| {
+        if (c.len == 0) return null;
+        const left = c[0] == ':';
+        const right = c[c.len - 1] == ':';
+        const dashes = c[@intFromBool(left) .. c.len - @intFromBool(right and c.len > 1)];
+        if (dashes.len == 0) return null;
+        for (dashes) |x| if (x != '-') return null;
+        a.* = if (left and right) .center else if (left) .left else if (right) .right else .none;
+    }
+    return aligns;
+}
+
+/// A table starts with a header row containing `|`, followed by a
+/// delimiter row with the same number of cells.
+fn tableStart(arena: Allocator, lines: []const []const u8, i: usize) Allocator.Error!?[]const Align {
+    if (i + 1 >= lines.len or indentOf(lines[i]) > 3) return null;
+    if (std.mem.indexOfScalar(u8, lines[i], '|') == null) return null;
+    const aligns = (try delimiterRow(arena, lines[i + 1])) orelse return null;
+    if ((try splitRow(arena, lines[i])).len != aligns.len) return null;
+    return aligns;
+}
+
+fn parseTable(arena: Allocator, lines: []const []const u8, start: usize, aligns: []const Align, out: *std.ArrayList(Block)) Allocator.Error!usize {
+    const header = try splitRow(arena, lines[start]);
+    var rows: std.ArrayList([]const []const u8) = .empty;
+    var j = start + 2;
+    while (j < lines.len) : (j += 1) {
+        const l = lines[j];
+        if (isBlank(l) or (interruptsParagraph(l) and std.mem.indexOfScalar(u8, l, '|') == null)) break;
+        const cells = try splitRow(arena, l);
+        // Pad short rows and drop extra cells so every row fits the header.
+        const row = try arena.alloc([]const u8, aligns.len);
+        for (row, 0..) |*cell, k| cell.* = if (k < cells.len) cells[k] else "";
+        try rows.append(arena, row);
+    }
+    try out.append(arena, .{ .table = .{ .aligns = aligns, .header = header, .rows = rows.items } });
+    return j;
+}
+
 /// Three or more `-`, `*`, or `_`, optionally separated by spaces.
 fn isThematicBreak(line: []const u8) bool {
     const ind = indentOf(line);
@@ -424,6 +502,14 @@ const Renderer = struct {
     }
 };
 
+fn writeCell(arena: Allocator, w: *Writer, tag: []const u8, text: []const u8, a: Align) Error!void {
+    try w.print("<{s}", .{tag});
+    if (a != .none) try w.print(" align=\"{s}\"", .{@tagName(a)});
+    try w.writeAll(">");
+    try renderInline(arena, text, w);
+    try w.print("</{s}>\n", .{tag});
+}
+
 fn renderBlocks(r: *Renderer, blocks: []const Block, tight: bool, w: *Writer) Error!void {
     for (blocks) |b| try renderBlock(r, b, tight, w);
 }
@@ -432,6 +518,21 @@ fn renderBlock(r: *Renderer, b: Block, tight: bool, w: *Writer) Error!void {
     const arena = r.arena;
     switch (b) {
         .thematic_break => try w.writeAll("<hr />\n"),
+        .table => |t| {
+            try w.writeAll("<table>\n<thead>\n<tr>\n");
+            for (t.header, t.aligns) |cell, a| try writeCell(arena, w, "th", cell, a);
+            try w.writeAll("</tr>\n</thead>\n");
+            if (t.rows.len > 0) {
+                try w.writeAll("<tbody>\n");
+                for (t.rows) |row| {
+                    try w.writeAll("<tr>\n");
+                    for (row, t.aligns) |cell, a| try writeCell(arena, w, "td", cell, a);
+                    try w.writeAll("</tr>\n");
+                }
+                try w.writeAll("</tbody>\n");
+            }
+            try w.writeAll("</table>\n");
+        },
         .quote => |children| {
             try w.writeAll("<blockquote>\n");
             try renderBlocks(r, children, false, w);
@@ -568,10 +669,15 @@ fn parseInlines(arena: Allocator, s: []const u8) Allocator.Error![]const Inline 
                     text_start = i;
                 } else i += n;
             },
-            '*', '_' => {
-                try p.addText(s[text_start..i]);
+            '*', '_', '~' => {
                 const c = s[i];
                 const n = runLength(s, i, c);
+                // Strikethrough uses one or two tildes; longer runs are text.
+                if (c == '~' and n > 2) {
+                    i += n;
+                    continue;
+                }
+                try p.addText(s[text_start..i]);
                 const before: u8 = if (i == 0) ' ' else s[i - 1];
                 const after: u8 = if (i + n >= s.len) ' ' else s[i + n];
                 const left = !isSpace(after) and (!isAsciiPunct(after) or isSpace(before) or isAsciiPunct(before));
@@ -581,8 +687,8 @@ fn parseInlines(arena: Allocator, s: []const u8) Allocator.Error![]const Inline 
                     .char = c,
                     .count = n,
                     .orig = n,
-                    .can_open = if (c == '*') left else left and (!right or isAsciiPunct(before)),
-                    .can_close = if (c == '*') right else right and (!left or isAsciiPunct(after)),
+                    .can_open = if (c != '_') left else left and (!right or isAsciiPunct(before)),
+                    .can_close = if (c != '_') right else right and (!left or isAsciiPunct(after)),
                 };
                 try p.add(.{ .delim = d });
                 i += n;
@@ -858,12 +964,19 @@ fn processEmphasis(arena: Allocator, nodes: []const Inline, bottom: usize) Alloc
                 if (nodes[oi] != .delim) continue;
                 const o = nodes[oi].delim;
                 if (!o.active or !o.can_open or o.char != closer.char or o.count == 0) continue;
+                // Strikethrough runs only match runs of the same length.
+                if (closer.char == '~') {
+                    if (o.count != closer.count) continue;
+                    break o;
+                }
                 const both = o.can_close or closer.can_open;
                 if (both and (o.orig + closer.orig) % 3 == 0 and !(o.orig % 3 == 0 and closer.orig % 3 == 0)) continue;
                 break o;
             } else break;
 
-            const n: u8 = if (opener.count >= 2 and closer.count >= 2) 2 else 1;
+            const n: u8 = if (closer.char == '~')
+                @intCast(closer.count)
+            else if (opener.count >= 2 and closer.count >= 2) 2 else 1;
             opener.count -= n;
             closer.count -= n;
             try opener.opens.append(arena, n);
@@ -891,12 +1004,13 @@ fn renderNode(n: Inline, w: *Writer) Writer.Error!void {
         .raw => |r| try w.writeAll(r.html),
         .bracket => |b| try w.writeAll(if (b.image) "![" else "["),
         .delim => |d| {
-            for (d.closes.items) |size| try w.writeAll(if (size == 2) "</strong>" else "</em>");
+            const strike = d.char == '~';
+            for (d.closes.items) |size| try w.writeAll(if (strike) "</del>" else if (size == 2) "</strong>" else "</em>");
             try w.splatByteAll(d.char, d.count);
             var k = d.opens.items.len;
             while (k > 0) {
                 k -= 1;
-                try w.writeAll(if (d.opens.items[k] == 2) "<strong>" else "<em>");
+                try w.writeAll(if (strike) "<del>" else if (d.opens.items[k] == 2) "<strong>" else "<em>");
             }
         },
     }
