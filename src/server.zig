@@ -36,6 +36,8 @@ pub const Options = struct {
     /// Re-render only what a change affects. False rebuilds everything on
     /// every change, which the benchmark uses for comparison.
     incremental: bool = true,
+    /// Build options, such as publishing drafts.
+    build: pipeline.Options = .{},
 };
 
 /// One successful build, shared by every request that started while it was
@@ -71,6 +73,7 @@ pub const Server = struct {
     port: u16,
     log: ?*Io.Writer,
     incremental: bool,
+    build_options: pipeline.Options,
 
     mutex: Io.Mutex = .init,
     /// Signaled whenever `generation` changes or the server stops.
@@ -110,6 +113,7 @@ pub const Server = struct {
             .port = listener.socket.address.getPort(),
             .log = options.log,
             .incremental = options.incremental,
+            .build_options = options.build,
         };
         s.rebuild();
         return s;
@@ -198,7 +202,7 @@ pub const Server = struct {
         const result = if (prev != null and prev.?.depth < max_chain)
             pipeline.rebuild(arena, s.src, &prev.?.site, s.pending.items, &diag)
         else
-            pipeline.build(arena, s.src, &diag);
+            pipeline.buildWith(arena, s.src, s.build_options, &diag);
         s.last_build_ns = start_time.durationTo(Io.Clock.Timestamp.now(io, .awake)).raw.nanoseconds;
 
         if (result) |site| {

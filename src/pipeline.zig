@@ -114,6 +114,7 @@ const State = struct {
     config_fields: frontmatter.Map,
     baseurl: []const u8,
     site_url: ?[]const u8,
+    options: Options,
     data: Value,
     /// Every page and post, in `pageOrder`.
     pages: []const Page,
@@ -168,6 +169,7 @@ const Builder = struct {
     /// Absolute site URL from `url` in the config, needed for the feed and
     /// sitemap; null when unset.
     site_url: ?[]const u8 = null,
+    options: Options = .{},
     /// `site.data`, from the files in `_data/`.
     data: Value = .{ .object = .{} },
     /// The `paginator` variable while rendering one page of a paginated
@@ -214,7 +216,17 @@ const Builder = struct {
 /// Builds the site in `src` from scratch. On `error.BuildFailed`, `diag`
 /// says why.
 pub fn build(arena: Allocator, src: SiteDir, diag: *Diagnostic) Error!Site {
-    var b: Builder = .{ .arena = arena, .src = src, .diag = diag };
+    return buildWith(arena, src, .{}, diag);
+}
+
+pub const Options = struct {
+    /// Publish pages and posts marked `draft: true`.
+    drafts: bool = false,
+};
+
+/// `build` with options.
+pub fn buildWith(arena: Allocator, src: SiteDir, options: Options, diag: *Diagnostic) Error!Site {
+    var b: Builder = .{ .arena = arena, .src = src, .diag = diag, .options = options };
 
     var bad: ?[]const u8 = null;
     const listing = src.listFiles(arena, &bad) catch |err| switch (err) {
@@ -271,27 +283,27 @@ pub fn build(arena: Allocator, src: SiteDir, diag: *Diagnostic) Error!Site {
 /// overflow. The result shares memory with `prev`.
 pub fn rebuild(arena: Allocator, src: SiteDir, prev: *const Site, changed: []const []const u8, diag: *Diagnostic) Error!Site {
     const st = prev.state;
-    var b: Builder = .{ .arena = arena, .src = src, .diag = diag, .baseurl = st.baseurl, .site_url = st.site_url, .data = st.data };
+    var b: Builder = .{ .arena = arena, .src = src, .diag = diag, .baseurl = st.baseurl, .site_url = st.site_url, .data = st.data, .options = st.options };
 
     var dirty_templates: std.ArrayList([]const u8) = .empty;
     var dirty_pages: std.ArrayList(usize) = .empty;
     for (changed) |path| {
         // The config and data files feed `site`, which any page may read.
         if (std.mem.eql(u8, path, config_path) or std.mem.eql(u8, path, "*") or
-            std.mem.startsWith(u8, path, data_files.dir_prefix)) return build(arena, src, diag);
+            std.mem.startsWith(u8, path, data_files.dir_prefix)) return buildWith(arena, src, st.options, diag);
         if (std.mem.startsWith(u8, path, "_layouts/") or std.mem.startsWith(u8, path, "_includes/")) {
             try dirty_templates.append(arena, path);
             continue;
         }
         if (findPage(st.pages, path)) |i| {
-            if (!b.exists(path)) return build(arena, src, diag);
+            if (!b.exists(path)) return buildWith(arena, src, st.options, diag);
             try dirty_pages.append(arena, i);
             continue;
         }
         if (findStatic(st.statics, path)) {
-            if (!b.exists(path)) return build(arena, src, diag);
+            if (!b.exists(path)) return buildWith(arena, src, st.options, diag);
             if (std.mem.eql(u8, sitepath.extension(path), ".html") and try startsWithFrontmatter(&b, path)) {
-                return build(arena, src, diag);
+                return buildWith(arena, src, st.options, diag);
             }
             continue;
         }
@@ -302,14 +314,14 @@ pub fn rebuild(arena: Allocator, src: SiteDir, prev: *const Site, changed: []con
         // temporary file that was renamed over a page, changed nothing,
         // unless it was a directory holding known files.
         if (!b.exists(path) and !containsKnown(st, path)) continue;
-        return build(arena, src, diag);
+        return buildWith(arena, src, st.options, diag);
     }
 
     const pages = try arena.dupe(Page, st.pages);
     for (dirty_pages.items) |i| {
         const old = pages[i];
-        const fresh = (try loadPage(&b, old.source, old.is_post)) orelse return build(arena, src, diag);
-        if (!std.mem.eql(u8, fresh.out_path, old.out_path)) return build(arena, src, diag);
+        const fresh = (try loadPage(&b, old.source, old.is_post)) orelse return buildWith(arena, src, st.options, diag);
+        if (!std.mem.eql(u8, fresh.out_path, old.out_path)) return buildWith(arena, src, st.options, diag);
         pages[i] = fresh;
     }
 
@@ -521,7 +533,7 @@ fn finish(b: *Builder, config_fields: frontmatter.Map, pages: []Page, statics: [
         .rendered = rendered,
         .full = render == null,
         .baseurl = b.baseurl,
-        .state = .{ .config_fields = config_fields, .baseurl = b.baseurl, .site_url = b.site_url, .data = b.data, .pages = pages, .statics = statics },
+        .state = .{ .config_fields = config_fields, .baseurl = b.baseurl, .site_url = b.site_url, .options = b.options, .data = b.data, .pages = pages, .statics = statics },
     };
 }
 
@@ -542,7 +554,7 @@ fn loadPage(b: *Builder, path: []const u8, is_post: bool) Error!?Page {
     };
     if (doc.fields.get("draft")) |d| {
         if (d != .boolean) return b.fail(path, fieldLine(data, "draft"), "'draft' must be true or false", .{});
-        if (d.boolean) return null;
+        if (d.boolean and !b.options.drafts) return null;
     }
 
     const is_markdown = std.mem.eql(u8, sitepath.extension(path), ".md");
@@ -1251,6 +1263,17 @@ test "baseurl prefixes page URLs but not output paths" {
 
     try expectBuildError(&.{.{ "_config.yml", "baseurl: blog\n" }}, "_config.yml", 0, "'baseurl' must be a path");
     try expectBuildError(&.{.{ "_config.yml", "baseurl: /../x\n" }}, "_config.yml", 0, "'baseurl' must be a path");
+}
+
+test "drafts are published only when asked" {
+    var t: TestSite = try .init(&.{
+        .{ "_posts/2024-01-01-a.md", "---\ndraft: true\n---\nA\n" },
+    });
+    defer t.deinit();
+    var diag: Diagnostic = .{};
+    try testing.expectEqual(@as(usize, 0), (try t.build(&diag)).posts);
+    const with = try buildWith(t.arena.allocator(), SiteDir.borrow(testing.io, t.tmp.dir), .{ .drafts = true }, &diag);
+    try testing.expectEqual(@as(usize, 1), with.posts);
 }
 
 test "excerpts and tags" {
