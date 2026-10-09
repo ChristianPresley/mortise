@@ -150,8 +150,8 @@ pub const Template = struct {
     nodes: []const Node,
     /// Names passed to `{% include %}`, for dependency tracking.
     includes: []const []const u8,
-    /// Whether any expression reads `site.posts` or `site.pages`, whose
-    /// contents change whenever any page or post does.
+    /// Whether any expression reads `site.posts`, `site.pages`, or
+    /// `site.tags`, whose contents change whenever any page or post does.
     reads_collections: bool,
 };
 
@@ -467,7 +467,8 @@ fn parseExpr(lx: *Lexer) ParseError!Expr {
             }
             const path = segs.items;
             if (path.len >= 2 and std.mem.eql(u8, path[0], "site") and
-                (std.mem.eql(u8, path[1], "posts") or std.mem.eql(u8, path[1], "pages")))
+                (std.mem.eql(u8, path[1], "posts") or std.mem.eql(u8, path[1], "pages") or
+                    std.mem.eql(u8, path[1], "tags")))
             {
                 lx.p.reads_collections = true;
             }
