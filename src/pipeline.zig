@@ -466,7 +466,9 @@ fn finish(b: *Builder, config_fields: frontmatter.Map, pages: []Page, statics: [
 
     var site_entries: std.ArrayList(Entry) = .empty;
     for (config_fields.entries) |e| {
-        if (std.mem.eql(u8, e.key, "posts") or std.mem.eql(u8, e.key, "pages") or std.mem.eql(u8, e.key, "data")) {
+        if (std.mem.eql(u8, e.key, "posts") or std.mem.eql(u8, e.key, "pages") or
+            std.mem.eql(u8, e.key, "data") or std.mem.eql(u8, e.key, "tags"))
+        {
             return b.fail(config_path, 0, "'{s}' is set by Mortise; use another key", .{e.key});
         }
         if (std.mem.eql(u8, e.key, "baseurl")) {
@@ -478,6 +480,7 @@ fn finish(b: *Builder, config_fields: frontmatter.Map, pages: []Page, statics: [
     try site_entries.append(arena, .{ .key = "posts", .value = .{ .list = post_values.items } });
     try site_entries.append(arena, .{ .key = "pages", .value = .{ .list = page_values.items } });
     try site_entries.append(arena, .{ .key = "data", .value = b.data });
+    try site_entries.append(arena, .{ .key = "tags", .value = try tagIndex(arena, pages) });
     b.site = .{ .entries = site_entries.items };
 
     var rendered: usize = 0;
@@ -655,8 +658,73 @@ fn pageObject(arena: Allocator, p: *const Page) Allocator.Error!template.Object 
         }
         try entries.append(arena, .{ .key = "slug", .value = .{ .string = sitepath.stem(base)[11..] } });
     }
-    if (p.html) |h| try entries.append(arena, .{ .key = "content", .value = .{ .html = h } });
+    if (p.html) |h| {
+        try entries.append(arena, .{ .key = "content", .value = .{ .html = h } });
+        // The excerpt is frontmatter `excerpt` if set, else the first
+        // paragraph of the rendered Markdown.
+        if (p.fields.get("excerpt") == null) {
+            if (firstParagraph(h)) |para| try entries.append(arena, .{ .key = "excerpt", .value = .{ .html = para } });
+        }
+    }
     return .{ .entries = entries.items };
+}
+
+/// The first `<p>...</p>` element of rendered Markdown, or null.
+fn firstParagraph(html: []const u8) ?[]const u8 {
+    const start = std.mem.indexOf(u8, html, "<p>") orelse return null;
+    const end = std.mem.indexOfPos(u8, html, start, "</p>") orelse return null;
+    return html[start .. end + "</p>".len];
+}
+
+/// The tags in a page's `tags` field, which is a list of strings or one
+/// string. Non-string items are skipped.
+fn pageTags(arena: Allocator, p: *const Page) Allocator.Error![]const []const u8 {
+    const v = p.fields.get("tags") orelse return &.{};
+    switch (v) {
+        .string => |s| return arena.dupe([]const u8, &.{s}),
+        .list => |l| {
+            var out: std.ArrayList([]const u8) = .empty;
+            for (l) |item| if (item == .string) try out.append(arena, item.string);
+            return out.items;
+        },
+        else => return &.{},
+    }
+}
+
+/// `site.tags`: one object per tag, sorted by name, with the tag's posts
+/// newest first.
+fn tagIndex(arena: Allocator, pages: []const Page) Allocator.Error!Value {
+    var names: std.ArrayList([]const u8) = .empty;
+    var lists: std.ArrayList(std.ArrayList(Value)) = .empty;
+    for (pages) |*p| {
+        if (!p.is_post) continue;
+        for (try pageTags(arena, p)) |tag| {
+            const i = for (names.items, 0..) |n, i| {
+                if (std.mem.eql(u8, n, tag)) break i;
+            } else blk: {
+                try names.append(arena, tag);
+                try lists.append(arena, .empty);
+                break :blk names.items.len - 1;
+            };
+            try lists.items[i].append(arena, .{ .object = p.object });
+        }
+    }
+    const Tag = struct { name: []const u8, posts: []const Value };
+    const tags = try arena.alloc(Tag, names.items.len);
+    for (tags, names.items, lists.items) |*t, n, l| t.* = .{ .name = n, .posts = l.items };
+    std.mem.sortUnstable(Tag, tags, {}, struct {
+        fn lt(_: void, a: Tag, b: Tag) bool {
+            return std.mem.lessThan(u8, a.name, b.name);
+        }
+    }.lt);
+    const out = try arena.alloc(Value, tags.len);
+    for (tags, out) |t, *o| {
+        const entries = try arena.alloc(Entry, 2);
+        entries[0] = .{ .key = "name", .value = .{ .string = t.name } };
+        entries[1] = .{ .key = "posts", .value = .{ .list = t.posts } };
+        o.* = .{ .object = .{ .entries = entries } };
+    }
+    return .{ .list = out };
 }
 
 fn isComputedKey(key: []const u8) bool {
@@ -996,7 +1064,7 @@ test "pages, posts, layouts, and static files" {
         "<title>Hello | Test Site</title><article><p>First post.</p>\n</article>",
         site.find("2024/01/05/hello/index.html").?.data.bytes,
     );
-    try testing.expectEqualStrings("<h1>About <em>me</em></h1>\n", site.find("about/index.html").?.data.bytes);
+    try testing.expectEqualStrings("<h1 id=\"about-me\">About <em>me</em></h1>\n", site.find("about/index.html").?.data.bytes);
     try testing.expect(site.find("plain.html").?.data == .copy);
 
     // The home page depends on itself, its layout, and the include it used.
@@ -1183,6 +1251,22 @@ test "baseurl prefixes page URLs but not output paths" {
 
     try expectBuildError(&.{.{ "_config.yml", "baseurl: blog\n" }}, "_config.yml", 0, "'baseurl' must be a path");
     try expectBuildError(&.{.{ "_config.yml", "baseurl: /../x\n" }}, "_config.yml", 0, "'baseurl' must be a path");
+}
+
+test "excerpts and tags" {
+    var t: TestSite = try .init(&.{
+        .{ "index.html", "---\nx: 1\n---\n{% for t in site.tags %}[{{ t.name }}:{% for p in t.posts %}{{ p.slug }}{% endfor %}]{% endfor %}{% for p in site.posts %}({{ p.excerpt }}){% endfor %}" },
+        .{ "_posts/2024-01-01-a.md", "---\ntags: [zig, web]\n---\n# Title\n\nFirst *para*.\n\nSecond.\n" },
+        .{ "_posts/2024-01-02-b.md", "---\ntags: zig\nexcerpt: Custom.\n---\nBody.\n" },
+        .{ "_posts/2024-01-03-c.md", "No tags.\n" },
+    });
+    defer t.deinit();
+    var diag: Diagnostic = .{};
+    const site = try t.build(&diag);
+    try testing.expectEqualStrings(
+        "[web:a][zig:ba](<p>No tags.</p>)(Custom.)(<p>First <em>para</em>.</p>)",
+        site.find("index.html").?.data.bytes,
+    );
 }
 
 test "a page with paginate is split across pages of posts" {
