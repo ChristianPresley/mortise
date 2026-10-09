@@ -28,7 +28,13 @@ pub const Document = struct {
     html: []u8,
     /// Every heading, in document order.
     headings: []const Heading,
+    /// Whether the document uses a component (callout, container, badge,
+    /// or key) that needs `components_css`.
+    uses_components: bool,
 };
+
+/// The stylesheet for components, written to the site as `mortise.css`.
+pub const components_css = @embedFile("components.css");
 
 /// Renders `src` and also returns its headings, for tables of contents.
 pub fn toDocument(arena: Allocator, src: []const u8) Allocator.Error!Document {
@@ -36,7 +42,10 @@ pub fn toDocument(arena: Allocator, src: []const u8) Allocator.Error!Document {
     var r: Renderer = .{ .arena = arena };
     // An allocating writer only fails when it runs out of memory.
     renderWith(&r, src, &aw.writer) catch return error.OutOfMemory;
-    return .{ .html = try aw.toOwnedSlice(), .headings = r.headings.items };
+    const html = try aw.toOwnedSlice();
+    // Every component's markup carries an mt- class.
+    const uses = std.mem.indexOf(u8, html, "class=\"mt-") != null;
+    return .{ .html = html, .headings = r.headings.items, .uses_components = uses };
 }
 
 /// Renders `src` to HTML on `w`. Scratch memory comes from `arena`.
@@ -76,7 +85,31 @@ const Block = union(enum) {
     quote: []const Block,
     thematic_break,
     table: Table,
+    callout: struct { kind: CalloutKind, children: []const Block },
+    container: struct { kind: ContainerKind, title: []const u8, children: []const Block },
 };
+
+/// GitHub-style alerts: a block quote whose first line is `[!NOTE]` etc.
+pub const CalloutKind = enum {
+    note,
+    tip,
+    important,
+    warning,
+    caution,
+
+    fn label(k: CalloutKind) []const u8 {
+        return switch (k) {
+            .note => "Note",
+            .tip => "Tip",
+            .important => "Important",
+            .warning => "Warning",
+            .caution => "Caution",
+        };
+    }
+};
+
+/// Fenced containers: `:::card Title` ... `:::`.
+pub const ContainerKind = enum { card, grid, details, figure, actions, steps };
 
 const Align = enum { none, left, center, right };
 
@@ -170,6 +203,8 @@ fn parseBlocks(arena: Allocator, lines: []const []const u8) Allocator.Error!Pars
             i += 1;
         } else if (quoteContent(line) != null) {
             i = try parseQuote(arena, lines, i, &blocks);
+        } else if (containerStart(line)) |c| {
+            i = try parseContainer(arena, lines, i, c, &blocks);
         } else if (try tableStart(arena, lines, i)) |t| {
             i = try parseTable(arena, lines, i, t, &blocks);
         } else if (atxHeading(line)) |h| {
@@ -297,7 +332,7 @@ fn listMarker(line: []const u8) ?Marker {
 /// Whether `line` starts a block that may interrupt a paragraph.
 fn interruptsParagraph(line: []const u8) bool {
     if (fenceStart(line) != null or atxHeading(line) != null) return true;
-    if (isThematicBreak(line) or quoteContent(line) != null) return true;
+    if (isThematicBreak(line) or quoteContent(line) != null or containerStart(line) != null) return true;
     if (listMarker(line)) |m| return !m.empty and (!m.ordered or m.start == 1);
     return false;
 }
@@ -507,9 +542,59 @@ fn parseQuote(arena: Allocator, lines: []const []const u8, start: usize, out: *s
         }
         break;
     }
+    // `> [!NOTE]` on the first line makes the quote a callout.
+    if (inner.items.len > 0) {
+        if (calloutMarker(inner.items[0])) |kind| {
+            const parsed = try parseBlocks(arena, inner.items[1..]);
+            try out.append(arena, .{ .callout = .{ .kind = kind, .children = parsed.blocks } });
+            return j;
+        }
+    }
     const parsed = try parseBlocks(arena, inner.items);
     try out.append(arena, .{ .quote = parsed.blocks });
     return j;
+}
+
+fn calloutMarker(line: []const u8) ?CalloutKind {
+    const t = std.mem.trim(u8, line, " \t");
+    if (t.len < 4 or !std.mem.startsWith(u8, t, "[!") or t[t.len - 1] != ']') return null;
+    const name = t[2 .. t.len - 1];
+    inline for (std.meta.fields(CalloutKind)) |f| {
+        if (std.ascii.eqlIgnoreCase(name, f.name)) return @enumFromInt(f.value);
+    }
+    return null;
+}
+
+const ContainerStart = struct { colons: usize, kind: ContainerKind, title: []const u8 };
+
+/// `:::name optional title`, indented at most three spaces. Only the known
+/// container names start a container; anything else is paragraph text.
+fn containerStart(line: []const u8) ?ContainerStart {
+    const ind = indentOf(line);
+    if (ind > 3) return null;
+    const rest = line[ind..];
+    const colons = runLength(rest, 0, ':');
+    if (colons < 3) return null;
+    const after = std.mem.trim(u8, rest[colons..], " \t");
+    const name_end = std.mem.indexOfAny(u8, after, " \t") orelse after.len;
+    const kind = std.meta.stringToEnum(ContainerKind, after[0..name_end]) orelse return null;
+    return .{ .colons = colons, .kind = kind, .title = std.mem.trim(u8, after[name_end..], " \t") };
+}
+
+/// A closing fence: only colons, at least as many as the opening fence.
+/// Nest containers by giving the outer one more colons.
+fn isContainerClose(line: []const u8, colons: usize) bool {
+    const t = std.mem.trim(u8, line, " \t");
+    return t.len >= colons and runLength(t, 0, ':') == t.len;
+}
+
+fn parseContainer(arena: Allocator, lines: []const []const u8, start: usize, c: ContainerStart, out: *std.ArrayList(Block)) Allocator.Error!usize {
+    var j = start + 1;
+    while (j < lines.len and !isContainerClose(lines[j], c.colons)) j += 1;
+    const parsed = try parseBlocks(arena, lines[start + 1 .. j]);
+    try out.append(arena, .{ .container = .{ .kind = c.kind, .title = c.title, .children = parsed.blocks } });
+    // Skip the closing fence; an unclosed container runs to the end.
+    return @min(j + 1, lines.len);
 }
 
 /// State for rendering one document.
@@ -549,6 +634,40 @@ fn renderBlock(r: *Renderer, b: Block, tight: bool, w: *Writer) Error!void {
     const arena = r.arena;
     switch (b) {
         .thematic_break => try w.writeAll("<hr />\n"),
+        .callout => |c| {
+            try w.print("<div class=\"mt-callout mt-callout-{s}\" role=\"note\">\n<p class=\"mt-callout-title\">{s}</p>\n", .{ @tagName(c.kind), c.kind.label() });
+            try renderBlocks(r, c.children, false, w);
+            try w.writeAll("</div>\n");
+        },
+        .container => |c| switch (c.kind) {
+            .details => {
+                try w.writeAll("<details class=\"mt-details\">\n<summary>");
+                try renderInline(arena, if (c.title.len > 0) c.title else "Details", w);
+                try w.writeAll("</summary>\n");
+                try renderBlocks(r, c.children, false, w);
+                try w.writeAll("</details>\n");
+            },
+            .figure => {
+                try w.writeAll("<figure class=\"mt-figure\">\n");
+                try renderBlocks(r, c.children, false, w);
+                if (c.title.len > 0) {
+                    try w.writeAll("<figcaption>");
+                    try renderInline(arena, c.title, w);
+                    try w.writeAll("</figcaption>\n");
+                }
+                try w.writeAll("</figure>\n");
+            },
+            else => {
+                try w.print("<div class=\"mt-{s}\">\n", .{@tagName(c.kind)});
+                if (c.title.len > 0) {
+                    try w.print("<p class=\"mt-{s}-title\">", .{@tagName(c.kind)});
+                    try renderInline(arena, c.title, w);
+                    try w.writeAll("</p>\n");
+                }
+                try renderBlocks(r, c.children, false, w);
+                try w.writeAll("</div>\n");
+            },
+        },
         .table => |t| {
             try w.writeAll("<table>\n<thead>\n<tr>\n");
             for (t.header, t.aligns) |cell, a| try writeCell(arena, w, "th", cell, a);
@@ -748,6 +867,14 @@ fn parseInlines(arena: Allocator, s: []const u8) Allocator.Error![]const Inline 
                 i = try closeBracket(&p, i);
                 text_start = i;
             },
+            ':' => {
+                if (inlineComponent(s[i..])) |comp| {
+                    try p.addText(s[text_start..i]);
+                    try p.add(.{ .raw = try inlineComponentHtml(arena, comp) });
+                    i += comp.len;
+                    text_start = i;
+                } else i += 1;
+            },
             '<' => {
                 if (autolink(s[i..])) |len| {
                     try p.addText(s[text_start..i]);
@@ -781,6 +908,38 @@ fn parseInlines(arena: Allocator, s: []const u8) Allocator.Error![]const Inline 
     try p.addText(s[text_start..]);
     try processEmphasis(arena, p.nodes.items, 0);
     return p.nodes.items;
+}
+
+const InlineComponent = struct { name: []const u8, text: []const u8, len: usize };
+
+/// `:badge[text]` or `:kbd[text]` at the start of `s`. The text may not
+/// contain `]` or a newline.
+fn inlineComponent(s: []const u8) ?InlineComponent {
+    for ([_][]const u8{ "badge", "kbd" }) |name| {
+        if (s.len < name.len + 3 or !std.mem.eql(u8, s[1 .. 1 + name.len], name) or s[1 + name.len] != '[') continue;
+        const start = name.len + 2;
+        const close = std.mem.indexOfAnyPos(u8, s, start, "]\n") orelse return null;
+        if (s[close] != ']' or close == start) return null;
+        return .{ .name = name, .text = s[start..close], .len = close + 1 };
+    }
+    return null;
+}
+
+fn inlineComponentHtml(arena: Allocator, c: InlineComponent) Allocator.Error!@FieldType(Inline, "raw") {
+    var aw: Writer.Allocating = .init(arena);
+    writeInlineComponent(&aw.writer, c) catch return error.OutOfMemory;
+    return .{ .html = try aw.toOwnedSlice(), .plain = c.text };
+}
+
+fn writeInlineComponent(w: *Writer, c: InlineComponent) Writer.Error!void {
+    if (std.mem.eql(u8, c.name, "kbd")) {
+        try w.writeAll("<kbd class=\"mt-kbd\">");
+        try escapeHtml(w, c.text);
+        return w.writeAll("</kbd>");
+    }
+    try w.writeAll("<span class=\"mt-badge\">");
+    try escapeHtml(w, c.text);
+    try w.writeAll("</span>");
 }
 
 /// Length of an autolink (`<https://...>` or `<name@example.com>`) at the
