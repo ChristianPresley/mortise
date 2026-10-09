@@ -1210,11 +1210,12 @@ fn parseInlines(arena: Allocator, s: []const u8) Allocator.Error![]const Inline 
                     text_start = i;
                 } else i += n;
             },
-            '*', '_', '~' => {
+            '*', '_', '~', '=' => {
                 const c = s[i];
                 const n = runLength(s, i, c);
-                // Strikethrough uses one or two tildes; longer runs are text.
-                if (c == '~' and n > 2) {
+                // Strikethrough uses one or two tildes and highlighting
+                // exactly two equals signs; other runs are text.
+                if ((c == '~' and n > 2) or (c == '=' and n != 2)) {
                     i += n;
                     continue;
                 }
@@ -1553,8 +1554,9 @@ fn processEmphasis(arena: Allocator, nodes: []const Inline, bottom: usize) Alloc
                 if (nodes[oi] != .delim) continue;
                 const o = nodes[oi].delim;
                 if (!o.active or !o.can_open or o.char != closer.char or o.count == 0) continue;
-                // Strikethrough runs only match runs of the same length.
-                if (closer.char == '~') {
+                // Strikethrough and highlight runs only match runs of the
+                // same length.
+                if (closer.char == '~' or closer.char == '=') {
                     if (o.count != closer.count) continue;
                     break o;
                 }
@@ -1563,7 +1565,7 @@ fn processEmphasis(arena: Allocator, nodes: []const Inline, bottom: usize) Alloc
                 break o;
             } else break;
 
-            const n: u8 = if (closer.char == '~')
+            const n: u8 = if (closer.char == '~' or closer.char == '=')
                 @intCast(closer.count)
             else if (opener.count >= 2 and closer.count >= 2) 2 else 1;
             opener.count -= n;
@@ -1593,13 +1595,20 @@ fn renderNode(n: Inline, w: *Writer) Writer.Error!void {
         .raw => |r| try w.writeAll(r.html),
         .bracket => |b| try w.writeAll(if (b.image) "![" else "["),
         .delim => |d| {
-            const strike = d.char == '~';
-            for (d.closes.items) |size| try w.writeAll(if (strike) "</del>" else if (size == 2) "</strong>" else "</em>");
+            for (d.closes.items) |size| try w.writeAll(switch (d.char) {
+                '~' => "</del>",
+                '=' => "</mark>",
+                else => if (size == 2) "</strong>" else "</em>",
+            });
             try w.splatByteAll(d.char, d.count);
             var k = d.opens.items.len;
             while (k > 0) {
                 k -= 1;
-                try w.writeAll(if (strike) "<del>" else if (d.opens.items[k] == 2) "<strong>" else "<em>");
+                try w.writeAll(switch (d.char) {
+                    '~' => "<del>",
+                    '=' => "<mark>",
+                    else => if (d.opens.items[k] == 2) "<strong>" else "<em>",
+                });
             }
         },
     }
@@ -1764,6 +1773,14 @@ test "emphasis" {
     try expectHtml("<p>a * b * c</p>\n", "a * b * c");
     try expectHtml("<p><em>a</em>*</p>\n", "*a**");
     try expectHtml("<p><em>a <strong>b</strong></em></p>\n", "*a **b***");
+}
+
+test "highlighted text" {
+    try expectHtml("<p>a <mark>b c</mark> d</p>\n", "a ==b c== d");
+    try expectHtml("<p><mark><strong>b</strong></mark></p>\n", "==**b**==");
+    // Only pairs of equals signs, and not around spaces.
+    try expectHtml("<p>a = b, a == b, ===c===, =d=</p>\n", "a = b, a == b, ===c===, =d=");
+    try expectHtml("<p>==a=</p>\n", "==a=");
 }
 
 test "inline code" {
