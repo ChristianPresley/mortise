@@ -1,0 +1,120 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Accounts API",
+    "version": "2.1.0",
+    "description": "Users and sign-in sessions. A second spec, so the sidebar has more than one API to list."
+  },
+  "servers": [{ "url": "https://accounts.example.com" }],
+  "tags": [
+    { "name": "Users", "description": "People who can sign in." },
+    { "name": "Sessions", "description": "Sign in and out." }
+  ],
+  "paths": {
+    "/users": {
+      "get": {
+        "tags": ["Users"],
+        "operationId": "listUsers",
+        "summary": "List users",
+        "parameters": [
+          { "name": "q", "in": "query", "description": "Match names and emails.", "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": { "description": "Matching users.", "content": { "application/json": { "schema": { "type": "array", "items": { "$ref": "#/components/schemas/User" } } } } }
+        }
+      },
+      "post": {
+        "tags": ["Users"],
+        "operationId": "createUser",
+        "summary": "Invite a user",
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/NewUser" } } }
+        },
+        "responses": {
+          "201": { "description": "Invited.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/User" } } } },
+          "409": { "description": "The email is taken." }
+        }
+      }
+    },
+    "/users/{userId}": {
+      "parameters": [
+        { "name": "userId", "in": "path", "required": true, "schema": { "type": "string", "format": "uuid" } }
+      ],
+      "get": {
+        "tags": ["Users"],
+        "operationId": "getUser",
+        "summary": "Get a user",
+        "responses": {
+          "200": { "description": "The user.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/User" } } } },
+          "404": { "description": "No such user." }
+        }
+      },
+      "put": {
+        "tags": ["Users"],
+        "operationId": "replaceUser",
+        "summary": "Replace a user",
+        "requestBody": {
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/NewUser" } } }
+        },
+        "responses": {
+          "200": { "description": "Replaced.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/User" } } } }
+        }
+      }
+    },
+    "/sessions": {
+      "post": {
+        "tags": ["Sessions"],
+        "operationId": "signIn",
+        "summary": "Sign in",
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Credentials" } } }
+        },
+        "responses": {
+          "201": { "description": "Signed in.", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Session" } } } },
+          "401": { "description": "Wrong email or password." }
+        }
+      },
+      "delete": {
+        "tags": ["Sessions"],
+        "operationId": "signOut",
+        "summary": "Sign out",
+        "responses": { "204": { "description": "Signed out." } }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "NewUser": {
+        "type": "object",
+        "required": ["email"],
+        "properties": {
+          "email": { "type": "string", "format": "email", "example": "ada@example.com" },
+          "name": { "type": "string", "example": "Ada" }
+        }
+      },
+      "User": {
+        "allOf": [
+          { "$ref": "#/components/schemas/NewUser" },
+          { "type": "object", "properties": { "id": { "type": "string", "format": "uuid" }, "joined": { "type": "string", "format": "date-time" } } }
+        ]
+      },
+      "Credentials": {
+        "type": "object",
+        "required": ["email", "password"],
+        "properties": {
+          "email": { "type": "string", "format": "email", "example": "ada@example.com" },
+          "password": { "type": "string", "format": "password" }
+        }
+      },
+      "Session": {
+        "type": "object",
+        "properties": {
+          "token": { "type": "string", "example": "s3cr3t" },
+          "expires": { "type": "string", "format": "date-time" }
+        }
+      }
+    }
+  }
+}

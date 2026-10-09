@@ -1,0 +1,24 @@
+---
+layout: base
+---
+<div class="wiki api-page">
+<aside class="wiki-nav">
+<p class="wiki-nav-title"><a href="{{ site.baseurl }}/api/">APIs</a></p>
+<nav class="mt-api-nav">
+{%- for api in site.apis %}
+<p class="mt-api-nav-api{% if api.url == page.url %} current{% endif %}"><a href="{{ api.url }}">{{ api.title }}</a>{% if api.version %}<small>v{{ api.version }}</small>{% endif %}</p>
+{%- for tag in api.tags %}
+<p class="mt-api-nav-tag">{{ tag.name }}</p>
+{%- for op in tag.operations %}
+<a class="mt-api-nav-op{% if op.deprecated %} mt-api-nav-deprecated{% endif %}" href="{{ op.url }}"><span class="mt-method mt-method-{{ op.method }}">{{ op.method }}</span>{{ op.summary }}</a>
+{%- endfor %}
+{%- endfor %}
+{%- endfor %}
+</nav>
+</aside>
+<div class="wiki-main">
+{% if page.breadcrumbs %}<nav class="breadcrumbs" aria-label="Breadcrumbs">{% for crumb in page.breadcrumbs %}<a href="{{ crumb.url }}">{{ crumb.title }}</a><span>›</span>{% endfor %}<span class="here">{{ page.title }}</span></nav>{% endif %}
+<h1>{{ page.title }}</h1>
+{{ content }}
+</div>
+</div>

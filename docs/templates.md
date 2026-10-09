@@ -112,6 +112,7 @@ wiki-style sidebars, breadcrumbs, and pagers:
 | `page.previous`    | Previous page in the same URL directory, or the older post     |
 | `page.next`        | Next page in the same URL directory, or the newer post         |
 | `site.nav`         | Every non-post page as a tree: `{title, url, children}`        |
+| `site.apis`        | Every [OpenAPI page](openapi.md#site-wide-api-navigation)      |
 
 Pages are ordered by a `weight` number in their frontmatter (lower first),
 then by title. `nav: false` leaves a page out of `site.nav` and out of
