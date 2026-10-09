@@ -17,6 +17,7 @@ pub const template = @import("template.zig");
 pub const pipeline = @import("pipeline.zig");
 pub const feeds = @import("feeds.zig");
 pub const data = @import("data.zig");
+pub const scaffold = @import("scaffold.zig");
 pub const watch = @import("watch.zig");
 pub const server = @import("server.zig");
 

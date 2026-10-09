@@ -22,10 +22,16 @@ zig build -Doptimize=ReleaseFast  # optimized binary
 ## Usage
 
 ```sh
-mortise build [SITE_DIR]               # build SITE_DIR (default .) into SITE_DIR/_site
-mortise serve [SITE_DIR] [--port N]    # dev server on http://localhost:4000/
+mortise new my-site                              # create a starter site
+mortise build [SITE_DIR] [--drafts]              # build SITE_DIR (default .) into SITE_DIR/_site
+mortise serve [SITE_DIR] [--port N] [--drafts]   # dev server on http://localhost:4000/
 mortise version
 ```
+
+`new` writes a small working site: a layout, a post layout, a header
+include, a paginated home page, an about page, a welcome post, and a
+stylesheet with colors for highlighted code. `--drafts` publishes pages and
+posts marked `draft: true`.
 
 `build` deletes and rewrites `SITE_DIR/_site` on every run.
 

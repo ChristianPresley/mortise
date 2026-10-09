@@ -9,17 +9,21 @@ const usage =
     \\Usage: mortise <command> [SITE_DIR] [options]
     \\
     \\Commands:
+    \\  new       Create a new site in SITE_DIR (required; must be empty or missing)
     \\  build     Build SITE_DIR (default: the current directory) into SITE_DIR/_site
     \\  serve     Serve SITE_DIR on localhost and reload the browser on every change
     \\  version   Print the version
     \\  help      Print this message
+    \\
+    \\Options for build and serve:
+    \\  --drafts  Include pages and posts marked draft: true
     \\
     \\Options for serve:
     \\  --port N  Port to listen on (default: 4000)
     \\
 ;
 
-const Command = enum { build, serve, version, help };
+const Command = enum { new, build, serve, version, help };
 
 const Ctx = struct {
     io: Io,
@@ -61,9 +65,28 @@ fn run(ctx: Ctx, args: []const [:0]const u8) u8 {
     return switch (cmd) {
         .help => if (ctx.out.writeAll(usage)) 0 else |_| 1,
         .version => if (ctx.out.print("mortise {s}\n", .{mortise.version})) 0 else |_| 1,
+        .new => cmdNew(ctx, args[2..]),
         .build => cmdBuild(ctx, args[2..]),
         .serve => cmdServe(ctx, args[2..]),
     };
+}
+
+fn cmdNew(ctx: Ctx, rest: []const [:0]const u8) u8 {
+    if (rest.len != 1 or rest[0].len == 0 or rest[0][0] == '-') {
+        ctx.err.writeAll("mortise: 'new' needs exactly one directory, as in: mortise new my-site\n") catch {};
+        return 2;
+    }
+    const dir = rest[0];
+    var buf: [10]u8 = undefined;
+    mortise.scaffold.create(ctx.io, dir, mortise.scaffold.today(ctx.io, &buf)) catch |e| {
+        switch (e) {
+            error.DirectoryNotEmpty => ctx.err.print("mortise: '{s}' is not empty\n", .{dir}) catch {},
+            else => ctx.err.print("mortise: cannot create a site in '{s}': {s}\n", .{ dir, @errorName(e) }) catch {},
+        }
+        return 1;
+    };
+    ctx.out.print("Created a new site in {s}. Run: mortise serve {s}\n", .{ dir, dir }) catch return 1;
+    return 0;
 }
 
 fn parseCommand(arg: []const u8) ?Command {
@@ -90,7 +113,8 @@ fn siteDirArg(ctx: Ctx, rest: []const [:0]const u8) ?[]const u8 {
 }
 
 fn cmdBuild(ctx: Ctx, rest: []const [:0]const u8) u8 {
-    const dir = siteDirArg(ctx, rest) orelse return 2;
+    const args = parseArgs(ctx, rest, false) orelse return 2;
+    const dir = args.dir;
     const io = ctx.io;
     var src = SiteDir.open(io, dir) catch |e| {
         ctx.err.print("mortise: cannot open site directory '{s}': {s}\n", .{ dir, @errorName(e) }) catch {};
@@ -104,7 +128,7 @@ fn cmdBuild(ctx: Ctx, rest: []const [:0]const u8) u8 {
 
     const start = Io.Clock.Timestamp.now(io, .awake);
     var diag: pipeline.Diagnostic = .{};
-    const site = pipeline.build(arena, src, &diag) catch |e| {
+    const site = pipeline.buildWith(arena, src, .{ .drafts = args.drafts }, &diag) catch |e| {
         switch (e) {
             error.BuildFailed => ctx.err.print("error: {f}\n", .{diag}) catch {},
             error.OutOfMemory => ctx.err.writeAll("error: out of memory\n") catch {},
@@ -124,15 +148,26 @@ fn cmdBuild(ctx: Ctx, rest: []const [:0]const u8) u8 {
     return 0;
 }
 
-const ServeArgs = struct { dir: []const u8 = ".", port: u16 = 4000 };
+const Args = struct { dir: []const u8 = ".", port: u16 = 4000, drafts: bool = false };
 
-fn parseServeArgs(ctx: Ctx, rest: []const [:0]const u8) ?ServeArgs {
-    var result: ServeArgs = .{};
+/// Parses `[SITE_DIR] [--drafts]`, plus `--port N` when `allow_port`.
+/// Returns null after printing a usage error.
+fn parseArgs(ctx: Ctx, rest: []const [:0]const u8, allow_port: bool) ?Args {
+    var result: Args = .{};
     var buf: [4][:0]const u8 = undefined;
     var positional: std.ArrayList([:0]const u8) = .initBuffer(&buf);
     var i: usize = 0;
     while (i < rest.len) : (i += 1) {
         const arg = rest[i];
+        if (std.mem.eql(u8, arg, "--drafts")) {
+            result.drafts = true;
+            continue;
+        }
+        const is_port = std.mem.eql(u8, arg, "--port") or std.mem.startsWith(u8, arg, "--port=");
+        if (is_port and !allow_port) {
+            ctx.err.print("mortise: unknown option '{s}'\n\n{s}", .{ arg, usage }) catch {};
+            return null;
+        }
         const port_text: ?[]const u8 = if (std.mem.eql(u8, arg, "--port")) blk: {
             i += 1;
             if (i == rest.len) {
@@ -158,9 +193,13 @@ fn parseServeArgs(ctx: Ctx, rest: []const [:0]const u8) ?ServeArgs {
 }
 
 fn cmdServe(ctx: Ctx, rest: []const [:0]const u8) u8 {
-    const args = parseServeArgs(ctx, rest) orelse return 2;
+    const args = parseArgs(ctx, rest, true) orelse return 2;
     const io = ctx.io;
-    const server = mortise.server.Server.init(ctx.gpa, io, args.dir, .{ .port = args.port, .log = ctx.out }) catch |e| {
+    const server = mortise.server.Server.init(ctx.gpa, io, args.dir, .{
+        .port = args.port,
+        .log = ctx.out,
+        .build = .{ .drafts = args.drafts },
+    }) catch |e| {
         switch (e) {
             error.AddressInUse => ctx.err.print("mortise: port {d} is in use; try --port\n", .{args.port}) catch {},
             else => ctx.err.print("mortise: cannot serve '{s}': {s}\n", .{ args.dir, @errorName(e) }) catch {},
@@ -220,21 +259,35 @@ test "run reports unknown commands and options with usage" {
     try testing.expectStringStartsWith(err.buffered(), "mortise: unknown option '--fast'");
 }
 
-test "parseServeArgs" {
+test "parseArgs" {
     var out_buf: [256]u8 = undefined;
     var err_buf: [256]u8 = undefined;
     var out: Io.Writer = .fixed(&out_buf);
     var err: Io.Writer = .fixed(&err_buf);
     const ctx = testCtx(&out, &err);
-    const a = parseServeArgs(ctx, &.{ "site", "--port", "8080" }).?;
+    const a = parseArgs(ctx, &.{ "site", "--port", "8080", "--drafts" }, true).?;
     try testing.expectEqualStrings("site", a.dir);
     try testing.expectEqual(@as(u16, 8080), a.port);
-    const b = parseServeArgs(ctx, &.{"--port=0"}).?;
+    try testing.expect(a.drafts);
+    const b = parseArgs(ctx, &.{"--port=0"}, true).?;
     try testing.expectEqualStrings(".", b.dir);
     try testing.expectEqual(@as(u16, 0), b.port);
-    try testing.expect(parseServeArgs(ctx, &.{"--port"}) == null);
-    try testing.expect(parseServeArgs(ctx, &.{ "--port", "99999" }) == null);
-    try testing.expect(parseServeArgs(ctx, &.{ "a", "b" }) == null);
+    try testing.expect(!b.drafts);
+    try testing.expect(parseArgs(ctx, &.{"--port"}, true) == null);
+    try testing.expect(parseArgs(ctx, &.{ "--port", "99999" }, true) == null);
+    try testing.expect(parseArgs(ctx, &.{ "a", "b" }, true) == null);
+    // build takes --drafts but not --port.
+    try testing.expect(parseArgs(ctx, &.{"--drafts"}, false).?.drafts);
+    try testing.expect(parseArgs(ctx, &.{ "--port", "1" }, false) == null);
+}
+
+test "new needs exactly one directory" {
+    var out_buf: [256]u8 = undefined;
+    var err_buf: [256]u8 = undefined;
+    var out: Io.Writer = .fixed(&out_buf);
+    var err: Io.Writer = .fixed(&err_buf);
+    try testing.expectEqual(@as(u8, 2), run(testCtx(&out, &err), &.{ "mortise", "new" }));
+    try testing.expectStringStartsWith(err.buffered(), "mortise: 'new' needs exactly one directory");
 }
 
 test "build reports a missing site directory" {
