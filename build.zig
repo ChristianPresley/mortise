@@ -48,6 +48,31 @@ pub fn build(b: *std.Build) void {
     });
     b.installArtifact(exe);
 
+    // `zig build dev --watch -fincremental` rebuilds mortise in about 0.1 s
+    // after each save, for use with `mortise serve --restart-on-rebuild`.
+    // On x86_64 it uses Zig's own backend, which compiles far faster than
+    // LLVM and is what incremental compilation needs.
+    const dev_exe = b.addExecutable(.{
+        .name = "mortise",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/main.zig"),
+            .target = target,
+            .optimize = .Debug,
+            .imports = &.{
+                .{ .name = "mortise", .module = mod },
+            },
+        }),
+    });
+    if (target.result.cpu.arch == .x86_64) dev_exe.use_llvm = false;
+    const dev_step = b.step("dev", "Build a Debug mortise quickly, for zig build dev --watch -fincremental");
+    const dev_install = b.addInstallArtifact(dev_exe, .{});
+    // Incremental linking patches the cached binary in place, which on
+    // Windows can leave its modified time unchanged, so the install above
+    // may skip it as up to date. Copy it every time it is rebuilt.
+    const dev_copy = CopyAlways.create(b, dev_exe.getEmittedBin(), b.getInstallPath(.bin, dev_exe.out_filename));
+    dev_copy.step.dependOn(&dev_install.step);
+    dev_step.dependOn(&dev_copy.step);
+
     const run_step = b.step("run", "Run mortise");
     const run_cmd = b.addRunArtifact(exe);
     run_step.dependOn(&run_cmd.step);
@@ -117,3 +142,31 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&b.addRunArtifact(exe_tests).step);
     test_step.dependOn(&b.addRunArtifact(fixture_tests).step);
 }
+
+/// Copies a generated file to an absolute path whenever the step runs,
+/// without the up-to-date check that installing does.
+const CopyAlways = struct {
+    step: std.Build.Step,
+    source: std.Build.LazyPath,
+    dest: []const u8,
+
+    fn create(b: *std.Build, source: std.Build.LazyPath, dest: []const u8) *CopyAlways {
+        const self = b.allocator.create(CopyAlways) catch @panic("OOM");
+        self.* = .{
+            .step = .init(.{ .id = .custom, .name = "copy dev binary", .owner = b, .makeFn = make }),
+            .source = source,
+            .dest = dest,
+        };
+        source.addStepDependencies(&self.step);
+        return self;
+    }
+
+    fn make(step: *std.Build.Step, options: std.Build.Step.MakeOptions) !void {
+        _ = options;
+        const self: *CopyAlways = @fieldParentPtr("step", step);
+        const b = step.owner;
+        const io = b.graph.io;
+        const src = self.source.getPath3(b, step);
+        try src.root_dir.handle.copyFile(src.sub_path, std.Io.Dir.cwd(), self.dest, io, .{});
+    }
+};

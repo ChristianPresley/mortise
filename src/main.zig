@@ -4,6 +4,7 @@ const Allocator = std.mem.Allocator;
 const mortise = @import("mortise");
 const SiteDir = mortise.SiteDir;
 const pipeline = mortise.pipeline;
+const restart = @import("restart.zig");
 
 const usage =
     \\Usage: mortise <command> [SITE_DIR] [options]
@@ -20,6 +21,9 @@ const usage =
     \\
     \\Options for serve:
     \\  --port N  Port to listen on (default: 4000)
+    \\  --restart-on-rebuild
+    \\            Restart the server when the mortise binary is rebuilt, for
+    \\            working on Mortise itself with: zig build dev --watch -fincremental
     \\
 ;
 
@@ -67,7 +71,7 @@ fn run(ctx: Ctx, args: []const [:0]const u8) u8 {
         .version => if (ctx.out.print("mortise {s}\n", .{mortise.version})) 0 else |_| 1,
         .new => cmdNew(ctx, args[2..]),
         .build => cmdBuild(ctx, args[2..]),
-        .serve => cmdServe(ctx, args[2..]),
+        .serve => cmdServe(ctx, args),
     };
 }
 
@@ -148,11 +152,18 @@ fn cmdBuild(ctx: Ctx, rest: []const [:0]const u8) u8 {
     return 0;
 }
 
-const Args = struct { dir: []const u8 = ".", port: u16 = 4000, drafts: bool = false };
+const Args = struct {
+    dir: []const u8 = ".",
+    port: u16 = 4000,
+    drafts: bool = false,
+    restart_on_rebuild: bool = false,
+    /// Set in a server started by the restart supervisor.
+    restarted_from: ?[]const u8 = null,
+};
 
-/// Parses `[SITE_DIR] [--drafts]`, plus `--port N` when `allow_port`.
+/// Parses `[SITE_DIR] [--drafts]`, plus the serve options when `serve`.
 /// Returns null after printing a usage error.
-fn parseArgs(ctx: Ctx, rest: []const [:0]const u8, allow_port: bool) ?Args {
+fn parseArgs(ctx: Ctx, rest: []const [:0]const u8, serve: bool) ?Args {
     var result: Args = .{};
     var buf: [4][:0]const u8 = undefined;
     var positional: std.ArrayList([:0]const u8) = .initBuffer(&buf);
@@ -163,8 +174,16 @@ fn parseArgs(ctx: Ctx, rest: []const [:0]const u8, allow_port: bool) ?Args {
             result.drafts = true;
             continue;
         }
+        if (serve and std.mem.eql(u8, arg, "--restart-on-rebuild")) {
+            result.restart_on_rebuild = true;
+            continue;
+        }
+        if (serve and std.mem.startsWith(u8, arg, restart.child_flag)) {
+            result.restarted_from = arg[restart.child_flag.len..];
+            continue;
+        }
         const is_port = std.mem.eql(u8, arg, "--port") or std.mem.startsWith(u8, arg, "--port=");
-        if (is_port and !allow_port) {
+        if (is_port and !serve) {
             ctx.err.print("mortise: unknown option '{s}'\n\n{s}", .{ arg, usage }) catch {};
             return null;
         }
@@ -192,13 +211,30 @@ fn parseArgs(ctx: Ctx, rest: []const [:0]const u8, allow_port: bool) ?Args {
     return result;
 }
 
-fn cmdServe(ctx: Ctx, rest: []const [:0]const u8) u8 {
-    const args = parseArgs(ctx, rest, true) orelse return 2;
+fn cmdServe(ctx: Ctx, argv: []const [:0]const u8) u8 {
+    const args = parseArgs(ctx, argv[2..], true) orelse return 2;
     const io = ctx.io;
+    if (args.restart_on_rebuild and args.restarted_from == null) {
+        var buf: [32][]const u8 = undefined;
+        var child_args: std.ArrayList([]const u8) = .initBuffer(&buf);
+        for (argv) |a| {
+            if (std.mem.eql(u8, a, "--restart-on-rebuild")) continue;
+            child_args.appendBounded(a) catch {
+                ctx.err.writeAll("mortise: too many arguments\n") catch {};
+                return 2;
+            };
+        }
+        ctx.out.flush() catch {};
+        return restart.supervise(io, ctx.gpa, ctx.out, ctx.err, child_args.items);
+    }
+    // Each process starts its build count from the clock, so pages built by
+    // an earlier process (before a restart) reload when they reconnect.
+    const first_generation: u64 = @intCast(@max(0, Io.Clock.real.now(io).toMilliseconds()));
     const server = mortise.server.Server.init(ctx.gpa, io, args.dir, .{
         .port = args.port,
         .log = ctx.out,
         .build = .{ .drafts = args.drafts },
+        .first_generation = first_generation,
     }) catch |e| {
         switch (e) {
             error.AddressInUse => ctx.err.print("mortise: port {d} is in use; try --port\n", .{args.port}) catch {},
@@ -229,6 +265,15 @@ fn cmdServe(ctx: Ctx, rest: []const [:0]const u8) u8 {
     server.writeUrl(ctx.out) catch {};
     ctx.out.print(" (watching with {s}). Press Ctrl+C to stop.\n", .{watcher.backendName()}) catch {};
     ctx.out.flush() catch {};
+    if (args.restarted_from) |exe| {
+        var poll = io.concurrent(restart.exitWhenChanged, .{ io, exe }) catch |e| {
+            ctx.err.print("mortise: cannot watch the mortise binary: {s}\n", .{@errorName(e)}) catch {};
+            return 1;
+        };
+        defer poll.cancel(io) catch {};
+        server.wait();
+        return 0;
+    }
     server.wait();
     return 0;
 }
@@ -279,6 +324,12 @@ test "parseArgs" {
     // build takes --drafts but not --port.
     try testing.expect(parseArgs(ctx, &.{"--drafts"}, false).?.drafts);
     try testing.expect(parseArgs(ctx, &.{ "--port", "1" }, false) == null);
+    // Restarting on rebuild is for serve only.
+    const r = parseArgs(ctx, &.{ "site", "--restart-on-rebuild", "--restarted-from=bin/mortise" }, true).?;
+    try testing.expect(r.restart_on_rebuild);
+    try testing.expectEqualStrings("bin/mortise", r.restarted_from.?);
+    try testing.expectEqualStrings("site", r.dir);
+    try testing.expect(parseArgs(ctx, &.{"--restart-on-rebuild"}, false) == null);
 }
 
 test "new needs exactly one directory" {

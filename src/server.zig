@@ -38,6 +38,11 @@ pub const Options = struct {
     incremental: bool = true,
     /// Build options, such as publishing drafts.
     build: pipeline.Options = .{},
+    /// The build generation before the first build. Pages carry the
+    /// generation they were built from, so starting each server process
+    /// above the last one (the CLI uses the wall clock in milliseconds)
+    /// makes pages from an earlier process reload when they reconnect.
+    first_generation: u64 = 0,
 };
 
 /// One successful build, shared by every request that started while it was
@@ -117,6 +122,7 @@ pub const Server = struct {
             .log = options.log,
             .incremental = options.incremental,
             .build_options = options.build,
+            .generation = options.first_generation,
         };
         s.rebuild();
         return s;
@@ -505,7 +511,7 @@ fn serveEvents(s: *Server, req: *http.Server.Request, query: []const u8) !void {
         .{ .name = "content-type", .value = "text/event-stream" },
         .{ .name = "cache-control", .value = "no-store" },
     } } });
-    try body.writer.writeAll("retry: 1000\n\n");
+    try body.writer.writeAll("retry: 100\n\n");
     if (initial) |e| try body.writer.writeAll(e);
     try body.flush();
 
@@ -847,7 +853,7 @@ test "live reload: saving a source file sends a reload event" {
     var c = try TestClient.connect(io, server.port);
     defer c.close();
     try c.send("GET /__reload?since=1 HTTP/1.1\r\nhost: localhost\r\n\r\n");
-    try testing.expect(try c.readUntil(0, "retry: 1000", 5000));
+    try testing.expect(try c.readUntil(0, "retry: 100", 5000));
     try testing.expect(std.mem.indexOf(u8, c.received(), "text/event-stream") != null);
 
     const mark = c.len;
@@ -859,6 +865,24 @@ test "live reload: saving a source file sends a reload event" {
     defer page.close();
     try page.send("GET / HTTP/1.1\r\nhost: localhost\r\n\r\n");
     try testing.expect(try page.readUntil(0, "<p>changed</p>", 5000));
+}
+
+test "pages from an earlier server process reload when they reconnect" {
+    const io = testing.io;
+    var tmp = testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+    const root = try testServerSite(io, &tmp);
+    defer testing.allocator.free(root);
+
+    const server = try Server.init(testing.allocator, io, root, .{ .port = 0, .first_generation = 1000 });
+    defer server.deinit();
+    try server.start();
+
+    // A page built by the previous process, at generation 1.
+    var c = try TestClient.connect(io, server.port);
+    defer c.close();
+    try c.send("GET /__reload?since=1 HTTP/1.1\r\nhost: localhost\r\n\r\n");
+    try testing.expect(try c.readUntil(0, "event: reload\ndata: 1001\n\n", 5000));
 }
 
 test "build errors reach the browser and the last good build keeps serving" {
@@ -882,7 +906,7 @@ test "build errors reach the browser and the last good build keeps serving" {
     var events = try TestClient.connect(io, server.port);
     defer events.close();
     try events.send("GET /__reload?since=1 HTTP/1.1\r\nhost: localhost\r\n\r\n");
-    try testing.expect(try events.readUntil(0, "retry: 1000", 5000));
+    try testing.expect(try events.readUntil(0, "retry: 100", 5000));
 
     // Break the page: a duplicate key on line 3 of index.md.
     var mark = events.len;
@@ -933,7 +957,7 @@ test "one atomic save causes exactly one rebuild" {
     var events = try TestClient.connect(io, server.port);
     defer events.close();
     try events.send("GET /__reload?since=1 HTTP/1.1\r\nhost: localhost\r\n\r\n");
-    try testing.expect(try events.readUntil(0, "retry: 1000", 5000));
+    try testing.expect(try events.readUntil(0, "retry: 100", 5000));
 
     // Write a temporary file, then rename it over the original, as many
     // editors do.
@@ -1001,7 +1025,7 @@ test "a stylesheet-only change sends a css event instead of a reload" {
     var events = try TestClient.connect(io, server.port);
     defer events.close();
     try events.send("GET /__reload?since=1 HTTP/1.1\r\nhost: localhost\r\n\r\n");
-    try testing.expect(try events.readUntil(0, "retry: 1000", 5000));
+    try testing.expect(try events.readUntil(0, "retry: 100", 5000));
 
     var mark = events.len;
     try site.writeFile("css/site.css", "body{color:red}");

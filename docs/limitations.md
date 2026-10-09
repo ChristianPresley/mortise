@@ -151,3 +151,25 @@ job:
   than 10 ms can cause more than one rebuild.
 - There is no HTTPS, compression, or caching; every response is sent with
   `cache-control: no-store`.
+- Open pages reconnect to the event stream 100 ms after losing it, so a
+  page notices a restarted server within about that long.
+
+## Restart on rebuild
+
+- `serve --restart-on-rebuild` runs the server from a copy of the binary in
+  `.mortise-restart/` beside it, and copies it again on every restart. The
+  server notices a new binary by polling its size and modified time every
+  25 ms.
+- On Windows a running program cannot be replaced, so the supervisor moves
+  its own executable and DLLs into `.mortise-restart/` when it starts and
+  puts copies back. Those moved files are deleted the next time it starts.
+- Incremental linking on Windows can leave the rebuilt binary's modified
+  time unchanged, which makes `zig build` skip installing it. `zig build
+  dev` therefore copies the binary on every rebuild.
+- Zig's own backend is used only on x86_64. Elsewhere `zig build dev` uses
+  LLVM, so `-fincremental` is not available there.
+- When stdout is redirected to a file, the supervisor and its servers can
+  overwrite each other's output in that file. A terminal or a pipe shows
+  every line.
+- Only the Windows and Linux supervisors have been run; macOS is only
+  compiled.
