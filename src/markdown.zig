@@ -80,13 +80,67 @@ pub fn slugify(arena: Allocator, text: []const u8) Allocator.Error![]const u8 {
 const Block = union(enum) {
     heading: struct { level: u8, text: []const u8 },
     paragraph: []const u8,
-    code: struct { info: []const u8, text: []const u8 },
+    code: Code,
     list: List,
     quote: []const Block,
     thematic_break,
     table: Table,
     callout: struct { kind: CalloutKind, children: []const Block },
     container: struct { kind: ContainerKind, title: []const u8, children: []const Block },
+};
+
+const Code = struct { info: []const u8, meta: []const u8 = "", text: []const u8 };
+
+/// Options from a code fence's info string after the language:
+///
+///   ```zig title="build.zig" {2,4-6} lineNumbers
+const CodeMeta = struct {
+    title: []const u8 = "",
+    /// Highlighted line ranges, 1-based and inclusive.
+    marked: []const [2]usize = &.{},
+    line_numbers: bool = false,
+
+    fn parse(arena: Allocator, meta: []const u8) Allocator.Error!CodeMeta {
+        var m: CodeMeta = .{};
+        var ranges: std.ArrayList([2]usize) = .empty;
+        var i: usize = 0;
+        while (i < meta.len) {
+            while (i < meta.len and (meta[i] == ' ' or meta[i] == '\t')) i += 1;
+            if (i >= meta.len) break;
+            const rest = meta[i..];
+            if (std.mem.startsWith(u8, rest, "title=") and rest.len > 6 and (rest[6] == '"' or rest[6] == '\'')) {
+                const q = rest[6];
+                const close = std.mem.indexOfScalarPos(u8, rest, 7, q) orelse rest.len;
+                m.title = rest[7..close];
+                i += @min(close + 1, rest.len);
+                continue;
+            }
+            if (rest[0] == '{') {
+                const close = std.mem.indexOfScalar(u8, rest, '}') orelse rest.len;
+                var parts = std.mem.splitScalar(u8, rest[1..close], ',');
+                while (parts.next()) |part| {
+                    const p = std.mem.trim(u8, part, " ");
+                    const dash = std.mem.indexOfScalar(u8, p, '-');
+                    const a = std.fmt.parseInt(usize, p[0 .. dash orelse p.len], 10) catch continue;
+                    const b = if (dash) |d| std.fmt.parseInt(usize, p[d + 1 ..], 10) catch a else a;
+                    try ranges.append(arena, .{ @min(a, b), @max(a, b) });
+                }
+                i += @min(close + 1, rest.len);
+                continue;
+            }
+            const end = std.mem.indexOfAny(u8, rest, " \t") orelse rest.len;
+            const word = rest[0..end];
+            if (std.mem.eql(u8, word, "lineNumbers") or std.mem.eql(u8, word, "showLineNumbers")) m.line_numbers = true;
+            i += end;
+        }
+        m.marked = ranges.items;
+        return m;
+    }
+
+    fn isMarked(m: CodeMeta, line: usize) bool {
+        for (m.marked) |r| if (line >= r[0] and line <= r[1]) return true;
+        return false;
+    }
 };
 
 /// GitHub-style alerts: a block quote whose first line is `[!NOTE]` etc.
@@ -109,7 +163,25 @@ pub const CalloutKind = enum {
 };
 
 /// Fenced containers: `:::card Title` ... `:::`.
-pub const ContainerKind = enum { card, grid, details, figure, actions, steps };
+pub const ContainerKind = enum {
+    card,
+    grid,
+    details,
+    figure,
+    actions,
+    steps,
+    /// Tabs: holds `:::tab Label` containers.
+    tabs,
+    tab,
+    /// Tabs whose panels are the code blocks inside, labeled by title.
+    code_group,
+
+    fn fromName(name: []const u8) ?ContainerKind {
+        if (std.mem.eql(u8, name, "code-group")) return .code_group;
+        if (std.mem.eql(u8, name, "code_group")) return null;
+        return std.meta.stringToEnum(ContainerKind, name);
+    }
+};
 
 const Align = enum { none, left, center, right };
 
@@ -219,7 +291,15 @@ fn parseBlocks(arena: Allocator, lines: []const []const u8) Allocator.Error!Pars
     return .{ .blocks = blocks.items, .blank_between = blank_between };
 }
 
-const Fence = struct { indent: usize, char: u8, len: usize, info: []const u8 };
+const Fence = struct {
+    indent: usize,
+    char: u8,
+    len: usize,
+    /// The info string's first word: the language.
+    info: []const u8,
+    /// The rest of the info string: `title="..."`, `{1,3-5}`, `lineNumbers`.
+    meta: []const u8,
+};
 
 fn fenceStart(line: []const u8) ?Fence {
     const ind = indentOf(line);
@@ -232,7 +312,7 @@ fn fenceStart(line: []const u8) ?Fence {
     const rest = std.mem.trim(u8, line[ind + n ..], " \t");
     if (c == '`' and std.mem.indexOfScalar(u8, rest, '`') != null) return null;
     const word_end = std.mem.indexOfAny(u8, rest, " \t") orelse rest.len;
-    return .{ .indent = ind, .char = c, .len = n, .info = rest[0..word_end] };
+    return .{ .indent = ind, .char = c, .len = n, .info = rest[0..word_end], .meta = std.mem.trim(u8, rest[word_end..], " \t") };
 }
 
 fn isFenceClose(line: []const u8, f: Fence) bool {
@@ -257,7 +337,7 @@ fn parseFence(arena: Allocator, lines: []const []const u8, start: usize, f: Fenc
         try text.appendSlice(arena, line[strip..]);
         try text.append(arena, '\n');
     }
-    try out.append(arena, .{ .code = .{ .info = f.info, .text = text.items } });
+    try out.append(arena, .{ .code = .{ .info = f.info, .meta = f.meta, .text = text.items } });
     return j;
 }
 
@@ -577,7 +657,7 @@ fn containerStart(line: []const u8) ?ContainerStart {
     if (colons < 3) return null;
     const after = std.mem.trim(u8, rest[colons..], " \t");
     const name_end = std.mem.indexOfAny(u8, after, " \t") orelse after.len;
-    const kind = std.meta.stringToEnum(ContainerKind, after[0..name_end]) orelse return null;
+    const kind = ContainerKind.fromName(after[0..name_end]) orelse return null;
     return .{ .colons = colons, .kind = kind, .title = std.mem.trim(u8, after[name_end..], " \t") };
 }
 
@@ -603,6 +683,8 @@ const Renderer = struct {
     /// Heading ids already used, so each id in the document is unique.
     ids: std.StringHashMapUnmanaged(void) = .empty,
     headings: std.ArrayList(Heading) = .empty,
+    /// Tab groups rendered so far, for unique radio names and ids.
+    tab_groups: usize = 0,
 
     /// A unique id for a heading whose plain text is `text` (see
     /// `slugify`). Repeats get `-1`, `-2`, and so on.
@@ -617,6 +699,125 @@ const Renderer = struct {
         return id;
     }
 };
+
+/// Renders tabs without JavaScript: one radio input and label per tab,
+/// then one panel per tab; CSS shows the panel whose input is checked.
+/// `:::tabs` takes its tabs from `:::tab Label` children; `:::code-group`
+/// takes them from its code blocks, labeled by `title="..."` or language.
+fn renderTabs(r: *Renderer, kind: ContainerKind, children: []const Block, w: *Writer) Error!void {
+    const arena = r.arena;
+    const Tab = struct { label: []const u8, body: []const Block };
+    var tabs: std.ArrayList(Tab) = .empty;
+    for (children, 0..) |child, i| {
+        switch (kind) {
+            .tabs => if (child == .container and child.container.kind == .tab) {
+                const t = child.container;
+                try tabs.append(arena, .{ .label = if (t.title.len > 0) t.title else "Tab", .body = t.children });
+            },
+            else => if (child == .code) {
+                const meta = try CodeMeta.parse(arena, child.code.meta);
+                const label = if (meta.title.len > 0) meta.title else if (child.code.info.len > 0) child.code.info else "Code";
+                try tabs.append(arena, .{ .label = label, .body = children[i .. i + 1] });
+            },
+        }
+    }
+    r.tab_groups += 1;
+    const group = r.tab_groups;
+    try w.print("<div class=\"mt-tabs{s}\">\n", .{if (kind == .code_group) " mt-code-group" else ""});
+    for (tabs.items, 0..) |t, k| {
+        try w.print("<input type=\"radio\" class=\"mt-tab-input\" name=\"mt-tabs-{d}\" id=\"mt-tabs-{d}-{d}\"{s}>", .{ group, group, k, if (k == 0) " checked" else "" });
+        try w.print("<label class=\"mt-tab-label\" for=\"mt-tabs-{d}-{d}\">", .{ group, k });
+        try renderInline(arena, t.label, w);
+        try w.writeAll("</label>\n");
+    }
+    for (tabs.items) |t| {
+        try w.writeAll("<div class=\"mt-tab-panel\">\n");
+        try renderBlocks(r, t.body, false, w);
+        try w.writeAll("</div>\n");
+    }
+    try w.writeAll("</div>\n");
+}
+
+/// Renders a fenced code block. Without options it is a plain
+/// `<pre><code>`. With a title, marked lines, line numbers, or the `diff`
+/// language, it is wrapped in `<div class="mt-code">` and every line is a
+/// `<span class="mt-line">` so lines can be numbered and styled by CSS.
+fn renderCode(arena: Allocator, c: Code, w: *Writer) Error!void {
+    const info = try unescapeBackslashes(arena, c.info);
+    const meta = try CodeMeta.parse(arena, c.meta);
+    const is_diff = std.mem.eql(u8, info, "diff");
+    const enhanced = is_diff or meta.title.len > 0 or meta.marked.len > 0 or meta.line_numbers;
+
+    if (enhanced) {
+        try w.writeAll(if (meta.line_numbers) "<div class=\"mt-code mt-code-numbered\">\n" else "<div class=\"mt-code\">\n");
+        if (meta.title.len > 0) {
+            try w.writeAll("<div class=\"mt-code-title\">");
+            try escapeHtml(w, meta.title);
+            try w.writeAll("</div>\n");
+        }
+    }
+    try w.writeAll("<pre><code");
+    if (info.len > 0) {
+        try w.writeAll(" class=\"language-");
+        try escapeHtml(w, info);
+        try w.writeAll("\"");
+    }
+    try w.writeAll(">");
+    if (!enhanced) {
+        try highlight.write(w, info, c.text);
+        return w.writeAll("</code></pre>\n");
+    }
+
+    // Highlight the whole block, then split it into lines. Highlight spans
+    // can cross lines (block comments), so open spans are closed at each
+    // line end and reopened on the next line.
+    var aw: Writer.Allocating = .init(arena);
+    highlight.write(&aw.writer, info, c.text) catch return error.OutOfMemory;
+    const html = aw.written();
+    var open: std.ArrayList([]const u8) = .empty;
+    var raw_lines = std.mem.splitScalar(u8, c.text, '\n');
+    var html_lines = std.mem.splitScalar(u8, html, '\n');
+    var number: usize = 0;
+    while (html_lines.next()) |line_html| {
+        const raw = raw_lines.next() orelse "";
+        // The text ends with a newline; nothing follows the last one.
+        if (html_lines.peek() == null and line_html.len == 0) break;
+        number += 1;
+        var class: []const u8 = "mt-line";
+        if (meta.isMarked(number)) {
+            class = "mt-line mt-line-marked";
+        } else if (is_diff and raw.len > 0) {
+            class = switch (raw[0]) {
+                '+' => "mt-line mt-line-add",
+                '-' => "mt-line mt-line-del",
+                '@' => "mt-line mt-line-hunk",
+                else => "mt-line",
+            };
+        }
+        try w.print("<span class=\"{s}\">", .{class});
+        for (open.items) |tag| try w.writeAll(tag);
+        try w.writeAll(line_html);
+        try trackSpans(arena, &open, line_html);
+        for (open.items) |_| try w.writeAll("</span>");
+        try w.writeAll("</span>\n");
+    }
+    try w.writeAll("</code></pre>\n</div>\n");
+}
+
+/// Updates the stack of open `<span ...>` tags after `html`.
+fn trackSpans(arena: Allocator, open: *std.ArrayList([]const u8), html: []const u8) Allocator.Error!void {
+    var i: usize = 0;
+    while (std.mem.indexOfScalarPos(u8, html, i, '<')) |lt| {
+        const gt = std.mem.indexOfScalarPos(u8, html, lt, '>') orelse return;
+        const tag = html[lt .. gt + 1];
+        if (std.mem.startsWith(u8, tag, "</span")) {
+            _ = open.pop();
+        } else if (std.mem.startsWith(u8, tag, "<span")) {
+            try open.append(arena, tag);
+        }
+        i = gt + 1;
+    }
+}
 
 fn writeCell(arena: Allocator, w: *Writer, tag: []const u8, text: []const u8, a: Align) Error!void {
     try w.print("<{s}", .{tag});
@@ -640,6 +841,7 @@ fn renderBlock(r: *Renderer, b: Block, tight: bool, w: *Writer) Error!void {
             try w.writeAll("</div>\n");
         },
         .container => |c| switch (c.kind) {
+            .tabs, .code_group => try renderTabs(r, c.kind, c.children, w),
             .details => {
                 try w.writeAll("<details class=\"mt-details\">\n<summary>");
                 try renderInline(arena, if (c.title.len > 0) c.title else "Details", w);
@@ -708,18 +910,7 @@ fn renderBlock(r: *Renderer, b: Block, tight: bool, w: *Writer) Error!void {
                 try w.writeAll("</p>\n");
             }
         },
-        .code => |c| {
-            const info = try unescapeBackslashes(arena, c.info);
-            try w.writeAll("<pre><code");
-            if (info.len > 0) {
-                try w.writeAll(" class=\"language-");
-                try escapeHtml(w, info);
-                try w.writeAll("\"");
-            }
-            try w.writeAll(">");
-            try highlight.write(w, info, c.text);
-            try w.writeAll("</code></pre>\n");
-        },
+        .code => |c| try renderCode(arena, c, w),
         .list => |l| {
             if (!l.ordered) {
                 try w.writeAll("<ul>\n");
