@@ -281,31 +281,21 @@ li.mt-task > input[type="checkbox"]:checked {
 .mt-dl dd { margin: .2rem 0 0 1.25rem; padding-left: .75rem; border-left: 2px solid var(--mt-border); }
 
 /* OpenAPI reference pages from _api/NAME.json */
-.mt-api-meta { color: var(--mt-muted); }
-.mt-api-servers { margin: 1rem 0; font-size: .9rem; }
-.mt-api-servers > span { font-weight: 700; margin-right: .35rem; }
-.mt-api-op {
-  margin: 1.5rem 0;
-  padding: .25rem 1.25rem 1rem;
-  border: 1px solid var(--mt-border);
-  border-radius: var(--mt-radius);
-  background: var(--mt-surface);
-  scroll-margin-top: 1rem;
-}
-.mt-api-deprecated { opacity: .7; }
-.mt-api-deprecated .mt-api-path { text-decoration: line-through; }
-.mt-api-endpoint { display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; font-size: 1.05rem; }
-.mt-api-path { font-size: .95rem; background: none; }
-.mt-api-param { color: var(--mt-accent); }
-.mt-api-summary { margin-top: -.25rem; font-weight: 600; }
-.mt-api-op h4 { margin: 1.1rem 0 .4rem; font-size: .8rem; letter-spacing: .06em; text-transform: uppercase; color: var(--mt-muted); }
+.mt-api-meta { display: flex; align-items: center; gap: .5rem; color: var(--mt-muted); font-size: .9rem; }
+.mt-api-servers { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem; margin: 1rem 0 1.5rem; font-size: .88rem; }
+.mt-api-servers > span { font-weight: 700; margin-right: .2rem; }
+.mt-api > h2 { margin-top: 2.5rem; padding-bottom: .35rem; border-bottom: 1px solid var(--mt-border); scroll-margin-top: 1rem; }
+
+/* Method pills: GET, POST, PUT, PATCH, DELETE */
 .mt-method {
   display: inline-block;
+  flex: none;
   min-width: 3.6rem;
-  padding: .15rem .45rem;
-  border-radius: 6px;
+  padding: .2rem .45rem;
+  border-radius: 999px;
   color: #fff;
-  font: 700 .72rem ui-monospace, SFMono-Regular, Consolas, monospace;
+  font: 700 .7rem/1.2 ui-monospace, SFMono-Regular, Consolas, monospace;
+  letter-spacing: .03em;
   text-align: center;
   text-transform: uppercase;
   background: var(--mt-muted);
@@ -315,22 +305,96 @@ li.mt-task > input[type="checkbox"]:checked {
 .mt-method-put { background: #d97706; }
 .mt-method-patch { background: #7c3aed; }
 .mt-method-delete { background: #dc2626; }
-.toc .mt-method { min-width: 2.9rem; font-size: .62rem; padding: .05rem .3rem; margin-right: .2rem; }
-.mt-api-table { width: 100%; border-collapse: collapse; font-size: .9rem; }
-.mt-api-table th, .mt-api-table td { padding: .4rem .6rem; border-bottom: 1px solid var(--mt-border); text-align: left; vertical-align: top; }
-.mt-api-table th { font-size: .75rem; letter-spacing: .05em; text-transform: uppercase; color: var(--mt-muted); }
+.toc .mt-method { min-width: 3rem; font-size: .6rem; padding: .1rem .3rem; margin-right: .3rem; }
+
+/* One operation: a header bar, then details beside examples. */
+.mt-api-op {
+  margin: 1.25rem 0 2rem;
+  border: 1px solid var(--mt-border);
+  border-radius: var(--mt-radius);
+  background: var(--mt-surface);
+  overflow: hidden;
+  scroll-margin-top: 1rem;
+}
+.mt-api-op-head {
+  justify-content: flex-start;
+  display: flex;
+  align-items: center;
+  gap: .75rem;
+  padding: .65rem 1rem;
+  border-bottom: 1px solid var(--mt-border);
+  background: var(--mt-subtle);
+}
+.mt-api-path { font-size: .95rem; font-weight: 600; background: none; padding: 0; overflow-wrap: anywhere; }
+.mt-api-op-head .mt-badge { margin-left: auto; }
+.mt-api-param { color: var(--mt-accent); }
+.mt-api-deprecated .mt-api-path { text-decoration: line-through; opacity: .7; }
+.mt-api-op-body { display: grid; grid-template-columns: minmax(0, 1fr); }
+.mt-api-op-main { padding: .25rem 1.25rem 1rem; min-width: 0; }
+.mt-api-op-title { margin: .9rem 0 .4rem; font-size: 1.15rem; }
+.mt-api-op h4 { margin: 1.25rem 0 .45rem; font-size: .72rem; letter-spacing: .08em; text-transform: uppercase; color: var(--mt-muted); }
+.mt-api-op-examples { padding: 1rem; background: #0f172a; color: #e2e8f0; min-width: 0; }
+.mt-api-op-examples .mt-code { margin: 0 0 1rem; border-color: #334155; }
+.mt-api-op-examples .mt-code:last-child { margin-bottom: 0; }
+.mt-api-op-examples .mt-code-title { background: #1e293b; border-color: #334155; color: #94a3b8; }
+.mt-api-op-examples .mt-code-title::before { content: none; }
+.mt-api-op-examples pre { background: #0b1220; color: #e2e8f0; font-size: .8rem; }
+.mt-api-op-examples .hl-string { color: #86efac; }
+.mt-api-op-examples :is(.hl-number, .hl-literal) { color: #fbbf24; }
+.mt-api-op-examples .hl-keyword { color: #c4b5fd; }
+@media (min-width: 900px) {
+  .mt-api-op-body:has(.mt-api-op-examples) { grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); }
+}
+
+.mt-api-table { width: 100%; border-collapse: collapse; font-size: .88rem; }
+.mt-api-table th, .mt-api-table td { padding: .45rem .6rem; border-bottom: 1px solid var(--mt-border); text-align: left; vertical-align: top; }
+.mt-api-table th { font-size: .7rem; letter-spacing: .06em; text-transform: uppercase; color: var(--mt-muted); }
+.mt-api-table td:first-child { white-space: nowrap; }
 .mt-api-type { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: .85em; color: var(--mt-important); }
-.mt-api-required { color: var(--mt-caution); font-size: .72rem; font-weight: 700; text-transform: uppercase; }
+.mt-api-required { color: var(--mt-caution); font-size: .66rem; font-weight: 700; text-transform: uppercase; }
 .mt-api-ref { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: .85em; }
-.mt-api-media { font-size: .85rem; color: var(--mt-muted); }
-.mt-api-response { margin: .6rem 0; padding: .1rem .9rem .3rem; border-left: 3px solid var(--mt-muted); border-radius: 0 6px 6px 0; background: var(--mt-subtle); }
-.mt-api-status { display: inline-block; margin-right: .4rem; font: 700 .85rem ui-monospace, SFMono-Regular, Consolas, monospace; }
-.mt-status-2xx { border-left-color: var(--mt-tip); }
+.mt-api-media { font-size: .82rem; color: var(--mt-muted); }
+
+/* Responses: one row per status code. */
+.mt-api-responses { list-style: none; margin: 0; padding: 0; border: 1px solid var(--mt-border); border-radius: 8px; overflow: hidden; }
+.mt-api-responses li { display: flex; flex-wrap: wrap; align-items: baseline; gap: .3rem .7rem; padding: .5rem .75rem; border-left: 3px solid var(--mt-muted); font-size: .9rem; }
+.mt-api-responses li + li { border-top: 1px solid var(--mt-border); }
+.mt-api-responses .mt-api-media { margin-left: auto; }
+.mt-api-status { font: 700 .85rem ui-monospace, SFMono-Regular, Consolas, monospace; }
+.mt-status-2xx { border-left-color: var(--mt-tip) !important; }
 .mt-status-2xx .mt-api-status { color: var(--mt-tip); }
-.mt-status-3xx { border-left-color: var(--mt-note); }
-.mt-status-4xx { border-left-color: var(--mt-warning); }
+.mt-status-3xx { border-left-color: var(--mt-note) !important; }
+.mt-status-4xx { border-left-color: var(--mt-warning) !important; }
 .mt-status-4xx .mt-api-status { color: var(--mt-warning); }
-.mt-status-5xx { border-left-color: var(--mt-caution); }
+.mt-status-5xx { border-left-color: var(--mt-caution) !important; }
 .mt-status-5xx .mt-api-status { color: var(--mt-caution); }
-.mt-api-schema { margin: 1rem 0 1.5rem; scroll-margin-top: 1rem; }
-.mt-api-schema h3 { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
+
+.mt-api-schema { margin: 1rem 0; padding: .25rem 1.25rem .75rem; border: 1px solid var(--mt-border); border-radius: var(--mt-radius); scroll-margin-top: 1rem; }
+.mt-api-schema h3 { margin: .75rem 0 .4rem; font: 700 1rem ui-monospace, SFMono-Regular, Consolas, monospace; }
+
+/* A sidebar of every API and its operations, from site.apis:
+   <nav class="mt-api-nav"><p class="mt-api-nav-api">..</p>
+   <a class="mt-api-nav-op"><span class="mt-method ..">get</span> Summary</a> */
+.mt-api-nav { font-size: .88rem; }
+.mt-api-nav-api { display: flex; align-items: baseline; justify-content: space-between; gap: .5rem; margin: 1rem 0 .3rem; font-weight: 700; }
+.mt-api-nav-api:first-child { margin-top: 0; }
+.mt-api-nav-api a { color: inherit; text-decoration: none; }
+.mt-api-nav-api.current a { color: var(--mt-accent); }
+.mt-api-nav-api small { color: var(--mt-muted); font-weight: 400; font-size: .75rem; }
+.mt-api-nav-tag { margin: .6rem 0 .15rem .5rem; font-size: .68rem; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--mt-muted); }
+.mt-api-nav a.mt-api-nav-op, a.mt-api-nav-op { display: flex; align-items: center; gap: .5rem; padding: .25rem .5rem; border-radius: 6px; color: inherit; text-decoration: none; line-height: 1.3; }
+.mt-api-nav a.mt-api-nav-op:hover, a.mt-api-nav-op:hover { background: var(--mt-subtle); }
+.mt-api-nav-op .mt-method { min-width: 3.1rem; font-size: .6rem; padding: .12rem .3rem; }
+.mt-api-nav-op.mt-api-nav-deprecated { opacity: .55; }
+.mt-api-nav a.mt-api-nav-op.current { background: var(--mt-subtle); font-weight: 600; }
+
+/* An overview of every API: cards listing their operations. */
+.mt-api-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(18rem, 1fr)); gap: 1rem; margin: 1.5rem 0; }
+.mt-api-card { padding: 1rem 1.15rem; border: 1px solid var(--mt-border); border-radius: var(--mt-radius); background: var(--mt-surface); }
+.mt-api-card h3 { display: flex; justify-content: space-between; align-items: baseline; gap: .5rem; margin: 0 0 .35rem; font-size: 1.05rem; }
+.mt-api-card h3 a { color: inherit; text-decoration: none; }
+.mt-api-card-text { margin: 0 0 .75rem; color: var(--mt-muted); font-size: .9rem; }
+.mt-api-card .mt-api-nav-op { padding: .2rem .25rem; }
+.mt-api-card-text p { margin: 0; }
+.mt-api-card code { font-size: .8rem; background: none; padding: 0; }
+

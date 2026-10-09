@@ -468,7 +468,8 @@ fn parseExpr(lx: *Lexer) ParseError!Expr {
             const path = segs.items;
             if (path.len >= 2 and std.mem.eql(u8, path[0], "site") and
                 (std.mem.eql(u8, path[1], "posts") or std.mem.eql(u8, path[1], "pages") or
-                    std.mem.eql(u8, path[1], "tags") or std.mem.eql(u8, path[1], "nav")))
+                    std.mem.eql(u8, path[1], "tags") or std.mem.eql(u8, path[1], "nav") or
+                    std.mem.eql(u8, path[1], "apis")))
             {
                 lx.p.reads_collections = true;
             }

@@ -143,6 +143,8 @@ const Page = struct {
     toc: ?[]const u8 = null,
     /// Whether the Markdown uses a component that needs `mortise.css`.
     uses_components: bool = false,
+    /// For an OpenAPI page, the rendered reference (for `site.apis`).
+    api: ?openapi.Rendered = null,
     /// The page's own fields, without navigation; computed once per load.
     base: template.Object = .{},
     /// `base` plus `breadcrumbs`, `previous`, and `next`, recomputed by
@@ -512,7 +514,8 @@ fn finish(b: *Builder, config_fields: frontmatter.Map, pages: []Page, statics: [
     var site_entries: std.ArrayList(Entry) = .empty;
     for (config_fields.entries) |e| {
         if (std.mem.eql(u8, e.key, "posts") or std.mem.eql(u8, e.key, "pages") or
-            std.mem.eql(u8, e.key, "data") or std.mem.eql(u8, e.key, "tags") or std.mem.eql(u8, e.key, "nav"))
+            std.mem.eql(u8, e.key, "data") or std.mem.eql(u8, e.key, "tags") or std.mem.eql(u8, e.key, "nav") or
+            std.mem.eql(u8, e.key, "apis"))
         {
             return b.fail(config_path, 0, "'{s}' is set by Mortise; use another key", .{e.key});
         }
@@ -526,6 +529,7 @@ fn finish(b: *Builder, config_fields: frontmatter.Map, pages: []Page, statics: [
     try site_entries.append(arena, .{ .key = "pages", .value = .{ .list = page_values.items } });
     try site_entries.append(arena, .{ .key = "data", .value = b.data });
     try site_entries.append(arena, .{ .key = "nav", .value = try navTree(arena, pages, b.baseurl) });
+    try site_entries.append(arena, .{ .key = "apis", .value = try apiIndex(arena, pages) });
     const tag_pages = b.exists(tag_layout);
     const tags = try tagIndex(arena, pages, if (tag_pages) b.baseurl else null);
     try site_entries.append(arena, .{ .key = "tags", .value = tags });
@@ -701,7 +705,54 @@ fn loadApiPage(b: *Builder, path: []const u8) Error!Page {
         .html = r.html,
         .toc = if (r.toc.len > 0) r.toc else null,
         .uses_components = true,
+        .api = r,
     };
+}
+
+/// `site.apis`: every OpenAPI page in URL order with its operations, so a
+/// layout can list them all with their methods.
+fn apiIndex(arena: Allocator, pages: []const Page) Allocator.Error!Value {
+    var apis: std.ArrayList(Value) = .empty;
+    for (pages) |*p| {
+        const r = p.api orelse continue;
+        const ops = try arena.alloc(Value, r.operations.len);
+        for (r.operations, ops) |op, *o| {
+            const e = try arena.alloc(Entry, 6);
+            e[0] = .{ .key = "method", .value = .{ .string = op.method } };
+            e[1] = .{ .key = "path", .value = .{ .string = op.path } };
+            e[2] = .{ .key = "summary", .value = .{ .string = op.summary } };
+            e[3] = .{ .key = "tag", .value = .{ .string = op.tag } };
+            e[4] = .{ .key = "url", .value = .{ .string = try std.fmt.allocPrint(arena, "{s}#{s}", .{ p.url, op.id }) } };
+            e[5] = .{ .key = "deprecated", .value = .{ .boolean = op.deprecated } };
+            o.* = .{ .object = .{ .entries = e } };
+        }
+        // The same operations grouped by tag; operations come tag by tag.
+        var groups: std.ArrayList(Value) = .empty;
+        var start: usize = 0;
+        while (start < ops.len) {
+            var end = start + 1;
+            while (end < ops.len and std.mem.eql(u8, r.operations[end].tag, r.operations[start].tag)) end += 1;
+            const g = try arena.alloc(Entry, 2);
+            g[0] = .{ .key = "name", .value = .{ .string = r.operations[start].tag } };
+            g[1] = .{ .key = "operations", .value = .{ .list = ops[start..end] } };
+            try groups.append(arena, .{ .object = .{ .entries = g } });
+            start = end;
+        }
+        const e = try arena.alloc(Entry, 6);
+        e[0] = .{ .key = "title", .value = .{ .string = r.title } };
+        e[1] = .{ .key = "url", .value = .{ .string = p.url } };
+        e[2] = .{ .key = "version", .value = .{ .string = r.version } };
+        e[3] = .{ .key = "description", .value = .{ .html = try markdown.toHtml(arena, r.description) } };
+        e[4] = .{ .key = "operations", .value = .{ .list = ops } };
+        e[5] = .{ .key = "tags", .value = .{ .list = groups.items } };
+        try apis.append(arena, .{ .object = .{ .entries = e } });
+    }
+    std.mem.sortUnstable(Value, apis.items, {}, apiLess);
+    return .{ .list = apis.items };
+}
+
+fn apiLess(_: void, a: Value, b: Value) bool {
+    return std.mem.lessThan(u8, a.object.entries[1].value.string, b.object.entries[1].value.string);
 }
 
 /// Best-effort line number of `key:` in a file's frontmatter, or 0.

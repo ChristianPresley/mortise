@@ -32,6 +32,21 @@ pub const Rendered = struct {
     html: []const u8,
     /// A table of contents: tags and their operations.
     toc: []const u8,
+    /// `info.version`, or "".
+    version: []const u8,
+    /// Every operation, in page order, for site-wide API navigation.
+    operations: []const Operation,
+};
+
+pub const Operation = struct {
+    method: []const u8,
+    path: []const u8,
+    /// The summary, or the path when there is none.
+    summary: []const u8,
+    tag: []const u8,
+    /// The fragment id of the operation on its page.
+    id: []const u8,
+    deprecated: bool,
 };
 
 const methods = [_][]const u8{ "get", "put", "post", "delete", "options", "head", "patch", "trace" };
@@ -161,11 +176,24 @@ pub fn render(arena: Allocator, json: []const u8, diag: *Diagnostic) Error!Rende
     var aw: Writer.Allocating = .init(arena);
     var toc: Writer.Allocating = .init(arena);
     writeDoc(&c, &aw.writer, &toc.writer, doc.object, &ops_by_tag) catch return error.OutOfMemory;
+
+    var operations: std.ArrayList(Operation) = .empty;
+    var tit = ops_by_tag.iterator();
+    while (tit.next()) |te| for (te.value_ptr.items) |op| try operations.append(arena, .{
+        .method = op.method,
+        .path = op.path,
+        .summary = str(op.op, "summary") orelse op.path,
+        .tag = te.key_ptr.*,
+        .id = op.id,
+        .deprecated = if (op.op.get("deprecated")) |d| d == .bool and d.bool else false,
+    });
     return .{
         .title = title,
         .description = if (info) |i| str(i, "description") orelse "" else "",
         .html = try aw.toOwnedSlice(),
         .toc = try toc.toOwnedSlice(),
+        .version = if (info) |i| str(i, "version") orelse "" else "",
+        .operations = operations.items,
     };
 }
 
@@ -246,20 +274,30 @@ fn tagDescription(root: std.json.ObjectMap, name: []const u8) ?[]const u8 {
     return null;
 }
 
+/// One operation, as a card:
+///
+///   header   method pill, path, deprecation badge
+///   main     summary heading, description, parameters, request body
+///            fields, and a compact list of responses
+///   examples request and response bodies as JSON, beside the main
+///            column on wide screens
 fn writeOp(c: *Ctx, w: *Writer, op: Op) !void {
     const arena = c.arena;
     const deprecated = if (op.op.get("deprecated")) |d| d == .bool and d.bool else false;
     try w.print("<section class=\"mt-api-op{s}\" id=\"{s}\">\n", .{ if (deprecated) " mt-api-deprecated" else "", op.id });
-    try w.print("<h3 class=\"mt-api-endpoint\"><span class=\"mt-method mt-method-{s}\">{s}</span> <code class=\"mt-api-path\">", .{ op.method, op.method });
+    try w.print("<div class=\"mt-api-op-head\"><span class=\"mt-method mt-method-{s}\">{s}</span><code class=\"mt-api-path\">", .{ op.method, op.method });
     try writePath(w, op.path);
     try w.writeAll("</code>");
-    if (deprecated) try w.writeAll(" <span class=\"mt-badge\">deprecated</span>");
+    if (deprecated) try w.writeAll("<span class=\"mt-badge\">deprecated</span>");
+    try w.writeAll("</div>\n<div class=\"mt-api-op-body\">\n<div class=\"mt-api-op-main\">\n");
+
+    // Examples are collected while the main column is written.
+    var examples: Writer.Allocating = .init(arena);
+    const ex = &examples.writer;
+
+    try w.writeAll("<h3 class=\"mt-api-op-title\">");
+    try escapeHtml(w, str(op.op, "summary") orelse op.path);
     try w.writeAll("</h3>\n");
-    if (str(op.op, "summary")) |s| {
-        try w.writeAll("<p class=\"mt-api-summary\">");
-        try escapeHtml(w, s);
-        try w.writeAll("</p>\n");
-    }
     if (str(op.op, "description")) |d| try w.writeAll(try markdown.toHtml(arena, d));
 
     // Parameters: the path's shared ones, then the operation's.
@@ -293,33 +331,46 @@ fn writeOp(c: *Ctx, w: *Writer, op: Op) !void {
             if (rb.object.get("required")) |r| if (r == .bool and r.bool) try w.writeAll(" <span class=\"mt-api-required\">required</span>");
             try w.writeAll("</h4>\n");
             if (str(rb.object, "description")) |d| try w.writeAll(try markdown.toHtml(arena, d));
-            if (obj(rb.object, "content")) |content| try writeContent(c, w, content);
+            if (obj(rb.object, "content")) |content| try writeContent(c, w, ex, content, "Request", true);
         }
     }
 
     if (obj(op.op, "responses")) |responses| {
-        try w.writeAll("<h4>Responses</h4>\n");
+        try w.writeAll("<h4>Responses</h4>\n<ul class=\"mt-api-responses\">\n");
         var rit = responses.iterator();
         while (rit.next()) |re| {
             const r = c.deref(re.value_ptr.*);
             const code = re.key_ptr.*;
-            const class = switch (code[0]) {
-                '2' => "2xx",
-                '3' => "3xx",
-                '4' => "4xx",
-                '5' => "5xx",
-                else => "other",
-            };
-            try w.print("<div class=\"mt-api-response mt-status-{s}\">\n<p><span class=\"mt-api-status\">", .{class});
+            try w.print("<li class=\"mt-status-{s}\"><span class=\"mt-api-status\">", .{statusClass(code)});
             try escapeHtml(w, code);
-            try w.writeAll("</span> ");
+            try w.writeAll("</span><span class=\"mt-api-response-text\">");
             if (r == .object) if (str(r.object, "description")) |d| try writeInlineMarkdown(c, w, d);
-            try w.writeAll("</p>\n");
-            if (r == .object) if (obj(r.object, "content")) |content| try writeContent(c, w, content);
-            try w.writeAll("</div>\n");
+            try w.writeAll("</span>");
+            if (r == .object) if (obj(r.object, "content")) |content| {
+                const label = try std.fmt.allocPrint(arena, "{s} response", .{code});
+                try writeContent(c, w, ex, content, label, false);
+            };
+            try w.writeAll("</li>\n");
         }
+        try w.writeAll("</ul>\n");
     }
-    try w.writeAll("</section>\n");
+    try w.writeAll("</div>\n");
+    if (examples.written().len > 0) {
+        try w.writeAll("<div class=\"mt-api-op-examples\">\n");
+        try w.writeAll(examples.written());
+        try w.writeAll("</div>\n");
+    }
+    try w.writeAll("</div>\n</section>\n");
+}
+
+fn statusClass(code: []const u8) []const u8 {
+    return switch (code[0]) {
+        '2' => "2xx",
+        '3' => "3xx",
+        '4' => "4xx",
+        '5' => "5xx",
+        else => "other",
+    };
 }
 
 /// Writes a path, marking `{params}`.
@@ -347,31 +398,39 @@ fn writeInlineMarkdown(c: *Ctx, w: *Writer, text: []const u8) !void {
     } else try w.writeAll(html);
 }
 
-fn writeContent(c: *Ctx, w: *Writer, content: std.json.ObjectMap) !void {
+/// Writes a body's media type and schema to `w` and its example to `ex`.
+/// Request bodies show their fields as a table; responses show the type
+/// inline, since the Schemas section has the details.
+fn writeContent(c: *Ctx, w: *Writer, ex: *Writer, content: std.json.ObjectMap, label: []const u8, fields: bool) !void {
     var it = content.iterator();
     while (it.next()) |e| {
-        try w.writeAll("<p class=\"mt-api-media\"><code>");
+        try w.writeAll(if (fields) "<p class=\"mt-api-media\"><code>" else "<span class=\"mt-api-media\"><code>");
         try escapeHtml(w, e.key_ptr.*);
         try w.writeAll("</code>");
-        const media = if (e.value_ptr.* == .object) e.value_ptr.object else continue;
+        const media = if (e.value_ptr.* == .object) e.value_ptr.object else {
+            try w.writeAll(if (fields) "</p>\n" else "</span>");
+            continue;
+        };
         const schema = media.get("schema");
         if (schema) |s| {
             try w.writeAll(" ");
             try writeType(c, w, s);
         }
-        try w.writeAll("</p>\n");
-        if (schema) |s| {
+        try w.writeAll(if (fields) "</p>\n" else "</span>");
+        if (fields) if (schema) |s| {
             const resolved = c.deref(s);
             if (resolved == .object and (resolved.object.get("properties") != null)) try writeSchemaTable(c, w, resolved);
-        }
+        };
         // The example: given, or made from the schema.
         const example: ?JsonValue = media.get("example") orelse if (schema) |s| try exampleOf(c, s, 0) else null;
-        if (example) |ex| {
+        if (example) |value| {
             var aw: Writer.Allocating = .init(c.arena);
-            std.json.Stringify.value(ex, .{ .whitespace = .indent_2 }, &aw.writer) catch return error.OutOfMemory;
-            try w.writeAll("<div class=\"mt-code\">\n<div class=\"mt-code-title\">Example</div>\n<pre><code class=\"language-json\">");
-            try highlight.write(w, "json", aw.written());
-            try w.writeAll("</code></pre>\n</div>\n");
+            std.json.Stringify.value(value, .{ .whitespace = .indent_2 }, &aw.writer) catch return error.OutOfMemory;
+            try ex.writeAll("<div class=\"mt-code\">\n<div class=\"mt-code-title\">");
+            try escapeHtml(ex, label);
+            try ex.writeAll("</div>\n<pre><code class=\"language-json\">");
+            try highlight.write(ex, "json", aw.written());
+            try ex.writeAll("</code></pre>\n</div>\n");
         }
     }
 }
@@ -537,10 +596,12 @@ test "renders operations, parameters, responses, schemas, and examples" {
     try expect.has(h, "<span class=\"mt-badge\">v1.2.0</span> OpenAPI 3.0.3");
     try expect.has(h, "<h2 id=\"tag-pets\">pets</h2>");
     try expect.has(h, "<section class=\"mt-api-op\" id=\"getpet\">");
-    try expect.has(h, "<span class=\"mt-method mt-method-get\">get</span> <code class=\"mt-api-path\">/pets/<span class=\"mt-api-param\">{petId}</span></code>");
+    try expect.has(h, "<div class=\"mt-api-op-head\"><span class=\"mt-method mt-method-get\">get</span><code class=\"mt-api-path\">/pets/<span class=\"mt-api-param\">{petId}</span></code></div>");
+    // Examples sit in their own column, labelled by status.
+    try expect.has(h, "<div class=\"mt-api-op-examples\">\n<div class=\"mt-code\">\n<div class=\"mt-code-title\">200 response</div>");
     try expect.has(h, "<code>petId</code> <span class=\"mt-api-required\">required</span></td><td>path</td><td><span class=\"mt-api-type\">integer</span> <small>(int64)</small>");
     try expect.has(h, "<a class=\"mt-api-ref\" href=\"#schema-pet\">Pet</a>");
-    try expect.has(h, "<span class=\"mt-api-status\">404</span> Not found");
+    try expect.has(h, "<li class=\"mt-status-4xx\"><span class=\"mt-api-status\">404</span><span class=\"mt-api-response-text\">Not found</span></li>");
     // Untagged operations are grouped under "Endpoints"; deprecation shows.
     try expect.has(h, "<h2 id=\"tag-endpoints\">Endpoints</h2>");
     try expect.has(h, "mt-api-deprecated");
@@ -549,6 +610,10 @@ test "renders operations, parameters, responses, schemas, and examples" {
     try expect.has(h, "<section class=\"mt-api-schema\" id=\"schema-pet\">");
     try expect.has(h, "The <strong>name</strong>.");
     try expect.has(r.toc, "<a href=\"#getpet\">");
+    try testing.expectEqualStrings("1.2.0", r.version);
+    try testing.expectEqual(@as(usize, 2), r.operations.len);
+    try testing.expectEqualStrings("getpet", r.operations[0].id);
+    try testing.expect(r.operations[1].deprecated);
 }
 
 test "invalid specs are reported" {
