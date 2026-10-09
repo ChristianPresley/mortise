@@ -72,6 +72,10 @@ my-site/
 - Posts can set `tags: [zig, web]` (or one tag as a string). `site.tags`
   lists every tag, sorted by name, each with `name` and its `posts`, newest
   first.
+- Fenced code in Zig, C/C++, Rust, Go, JavaScript/TypeScript, Python,
+  shell, JSON, and YAML is syntax-highlighted at build time with
+  `hl-*` classes for your stylesheet; see the
+  [Markdown subset](docs/markdown.md#fenced-code-blocks).
 - Headings get anchor ids from their text, so `## Getting started` can be
   linked as `#getting-started`.
 - `paginate: 10` in a page's frontmatter splits it across pages of 10 posts
