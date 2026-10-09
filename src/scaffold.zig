@@ -38,6 +38,8 @@ const files = [_]struct { []const u8, []const u8 }{
         \\description: Built with Mortise
         \\# Set url to turn on feed.xml and sitemap.xml:
         \\# url: https://example.com
+        \\# Pick a built-in theme: visor (helmet HUD) or lcars (starship console).
+        \\# theme: visor
         \\
     },
     .{ "_layouts/base.html",
@@ -49,6 +51,7 @@ const files = [_]struct { []const u8, []const u8 }{
         \\<title>{% if page.title %}{{ page.title }} | {% endif %}{{ site.title }}</title>
         \\<link rel="stylesheet" href="{{ site.baseurl }}/mortise.css">
         \\<link rel="stylesheet" href="{{ site.baseurl }}/css/site.css">
+        \\{% if site.theme %}<link rel="stylesheet" href="{{ site.baseurl }}/theme.css">{% endif %}
         \\</head>
         \\<body>
         \\{% include "header.html" %}
