@@ -90,6 +90,14 @@ my-site/
 - Posts can set `tags: [zig, web]` (or one tag as a string). `site.tags`
   lists every tag, sorted by name, each with `name` and its `posts`, newest
   first.
+- [OpenAPI reference pages](docs/openapi.md): each `_api/NAME.json`
+  OpenAPI 3 document becomes a static page at `/api/NAME/` with every
+  operation, parameter, schema, and an example body.
+- Code blocks with titles, marked lines, line numbers, and diffs; tabs and
+  code groups; task lists, footnotes, and definition lists; and
+  `page.breadcrumbs`, `page.previous`/`page.next`, and `site.nav` for
+  wiki-style navigation. See [components](docs/components.md) and
+  [templates](docs/templates.md#navigation).
 - Built-in [components](docs/components.md): callouts (`> [!NOTE]`),
   cards, grids, details, figures, buttons, and steps (`:::card Title` ...
   `:::`), plus `:badge[New]` and `:kbd[Ctrl]`, styled by a `mortise.css`
