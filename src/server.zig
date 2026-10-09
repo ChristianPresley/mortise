@@ -239,6 +239,11 @@ pub const Server = struct {
                 error.BuildFailed => s.copyFailure(diag) catch null,
                 error.OutOfMemory => null,
             };
+            // The diagnostic points into the build's arena, so log it first.
+            switch (err) {
+                error.BuildFailed => s.logLine("error: {f}", .{diag}),
+                error.OutOfMemory => s.logLine("error: out of memory", .{}),
+            }
             snap.arena.deinit();
             s.gpa.destroy(snap);
             s.mutex.lockUncancelable(io);
@@ -247,10 +252,6 @@ pub const Server = struct {
             s.generation += 1;
             s.changed.broadcast(io);
             s.mutex.unlock(io);
-            switch (err) {
-                error.BuildFailed => s.logLine("error: {f}", .{diag}),
-                error.OutOfMemory => s.logLine("error: out of memory", .{}),
-            }
         }
     }
 
@@ -868,7 +869,10 @@ test "build errors reach the browser and the last good build keeps serving" {
     defer testing.allocator.free(root);
     const site = SiteDir.borrow(io, tmp.dir);
 
-    const server = try Server.init(testing.allocator, io, root, .{ .port = 0 });
+    // Logging an error reads the failed build's diagnostic.
+    var log_buf: [4096]u8 = undefined;
+    var log: Io.Writer = .fixed(&log_buf);
+    const server = try Server.init(testing.allocator, io, root, .{ .port = 0, .log = &log });
     defer server.deinit();
     var watcher = try Watcher.init(testing.allocator, io, root);
     defer watcher.deinit();
@@ -909,6 +913,7 @@ test "build errors reach the browser and the last good build keeps serving" {
     defer fixed.close();
     try fixed.send("GET / HTTP/1.1\r\nhost: localhost\r\n\r\n");
     try testing.expect(try fixed.readUntil(0, "<p>fixed</p>", 5000));
+    try testing.expect(std.mem.indexOf(u8, log.buffered(), "error: index.md:3: duplicate key 'layout'\n") != null);
 }
 
 test "one atomic save causes exactly one rebuild" {
