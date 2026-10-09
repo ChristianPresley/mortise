@@ -122,8 +122,8 @@ my-site/
   wireframes, with sprite-sheet CSS animations for the animated ones.
 - Two built-in [themes](docs/themes.md), picked with `theme:` in
   `_config.yml`: `visor`, a helmet heads-up display with a shield meter
-  and motion tracker, and `lcars`, a starship console frame. Both are
-  plain CSS with no images, fonts, or scripts.
+  and motion tracker, and `lcars`, a starship console frame. Both draw
+  their art with the built-in renderer and add no fonts or scripts.
 - Built-in [components](docs/components.md): callouts (`> [!NOTE]`),
   cards, grids, details, figures, buttons, and steps (`:::card Title` ...
   `:::`), plus `:badge[New]` and `:kbd[Ctrl]`, styled by a `mortise.css`
