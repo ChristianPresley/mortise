@@ -53,6 +53,15 @@ job:
   `javascript:` URL in a source file is written to the output unchanged.
 - Emphasis rules treat non-ASCII whitespace and punctuation as letters.
 
+## Data files
+
+- Changing anything in `_data/` rebuilds the whole site, since any page may
+  read `site.data`.
+- JSON `null` becomes an empty value. Very large JSON integers that do not
+  fit in 64 bits are kept as strings.
+- A data file and a directory with the same name (`_data/a.json` and
+  `_data/a/`) are an error.
+
 ## Feed and sitemap
 
 - The feed and sitemap are only generated when `_config.yml` sets an
