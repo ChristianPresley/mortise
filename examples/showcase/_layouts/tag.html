@@ -1,0 +1,10 @@
+---
+layout: base
+---
+<h1>Posts tagged <span class="tag">{{ page.tag }}</span></h1>
+<ul class="posts">
+{%- for post in page.posts %}
+<li><a href="{{ post.url }}">{{ post.title }}</a> <small>{{ post.date | date }}</small></li>
+{%- endfor %}
+</ul>
+<p><a href="{{ site.baseurl }}/tags/">All tags</a></p>

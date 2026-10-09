@@ -14,6 +14,10 @@ a { color: var(--accent); }
 .pager { display: flex; gap: 1rem; align-items: center; }
 .meta { color: var(--muted); }
 .tag { background: #fde7d9; color: var(--accent); border-radius: 4px; padding: 0 .4rem; margin-right: .3rem; font-size: .85rem; }
+.tag-cloud { list-style: none; padding: 0; display: flex; flex-wrap: wrap; gap: .5rem; }
+.tag-cloud .tag { font-size: 1rem; text-decoration: none; }
+.toc-box { float: right; margin: 0 0 1rem 1.5rem; padding: .75rem 1rem; background: var(--code); border-radius: 6px; font-size: .9rem; }
+.toc-box ul { margin: .25rem 0 0; padding-left: 1rem; }
 blockquote { margin: 1rem 0; padding: .25rem 1rem; border-left: 4px solid var(--accent); color: var(--muted); }
 table { border-collapse: collapse; width: 100%; }
 th, td { border: 1px solid #e5e5e5; padding: .4rem .6rem; }
