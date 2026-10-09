@@ -71,8 +71,10 @@ const files = [_]struct { []const u8, []const u8 }{
     },
     .{ "_includes/header.html",
         \\<header>
-        \\<a href="{{ site.baseurl }}/">{{ site.title }}</a>
-        \\{%- for p in site.pages %}{% if p.title %} <a href="{{ p.url }}">{{ p.title }}</a>{% endif %}{% endfor %}
+        \\<a class="brand" href="{{ site.baseurl }}/">{{ site.title }}</a>
+        \\<nav>
+        \\{%- for p in site.pages %}{% if p.title and p.nav != false %} <a href="{{ p.url }}">{{ p.title }}</a>{% endif %}{% endfor -%}
+        \\</nav>
         \\</header>
         \\
     },
@@ -81,6 +83,8 @@ const files = [_]struct { []const u8, []const u8 }{
         \\title: Home
         \\layout: base
         \\paginate: 10
+        \\# The site title in the header already links here.
+        \\nav: false
         \\---
         \\<h1>{{ site.title }}</h1>
         \\<ul>
@@ -103,9 +107,13 @@ const files = [_]struct { []const u8, []const u8 }{
         \\
     },
     .{ "css/site.css",
-        \\body { max-width: 42rem; margin: 2rem auto; padding: 0 1rem; font: 17px/1.6 system-ui, sans-serif; }
-        \\header a { margin-right: 1rem; }
-        \\pre { background: #f6f8fa; padding: 1rem; overflow-x: auto; }
+        \\body { max-width: 42rem; margin: 2rem auto; padding: 0 1rem; font: 17px/1.6 system-ui, sans-serif; color: #1d1d1f; }
+        \\a { color: #0b57d0; }
+        \\header { display: flex; justify-content: space-between; align-items: baseline; padding-bottom: .75rem; border-bottom: 1px solid #e5e5e5; }
+        \\header .brand { font-weight: 700; color: inherit; text-decoration: none; }
+        \\header nav a { margin-left: 1rem; color: #6e6e73; text-decoration: none; }
+        \\.date, small { color: #6e6e73; }
+        \\pre { background: #f6f8fa; padding: 1rem; overflow-x: auto; border-radius: 6px; }
         \\.hl-keyword { color: #a626a4; }
         \\.hl-literal, .hl-number { color: #986801; }
         \\.hl-string { color: #50a14f; }
