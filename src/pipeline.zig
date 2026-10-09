@@ -23,6 +23,7 @@ const sitepath = @import("path.zig");
 const markdown = @import("markdown.zig");
 const frontmatter = @import("frontmatter.zig");
 const template = @import("template.zig");
+const feeds = @import("feeds.zig");
 const Value = template.Value;
 const Entry = template.Entry;
 
@@ -111,6 +112,7 @@ pub const Site = struct {
 const State = struct {
     config_fields: frontmatter.Map,
     baseurl: []const u8,
+    site_url: ?[]const u8,
     /// Every page and post, in `pageOrder`.
     pages: []const Page,
     /// Files copied unchanged.
@@ -159,6 +161,9 @@ const Builder = struct {
     /// Whether a template used by the current page reads site collections.
     reads_collections: bool = false,
     baseurl: []const u8 = "",
+    /// Absolute site URL from `url` in the config, needed for the feed and
+    /// sitemap; null when unset.
+    site_url: ?[]const u8 = null,
 
     fn fail(b: *Builder, path: []const u8, line: usize, comptime fmt: []const u8, args: anytype) Error {
         b.diag.* = .{
@@ -217,6 +222,7 @@ pub fn build(arena: Allocator, src: SiteDir, diag: *Diagnostic) Error!Site {
         if (std.mem.eql(u8, path, config_path)) config_fields = try loadConfig(&b);
     }
     b.baseurl = try baseUrl(&b, config_fields);
+    b.site_url = try siteUrl(&b, config_fields);
 
     for (listing.files) |path| {
         if (std.mem.eql(u8, path, config_path)) continue;
@@ -255,7 +261,7 @@ pub fn build(arena: Allocator, src: SiteDir, diag: *Diagnostic) Error!Site {
 /// overflow. The result shares memory with `prev`.
 pub fn rebuild(arena: Allocator, src: SiteDir, prev: *const Site, changed: []const []const u8, diag: *Diagnostic) Error!Site {
     const st = prev.state;
-    var b: Builder = .{ .arena = arena, .src = src, .diag = diag, .baseurl = st.baseurl };
+    var b: Builder = .{ .arena = arena, .src = src, .diag = diag, .baseurl = st.baseurl, .site_url = st.site_url };
 
     var dirty_templates: std.ArrayList([]const u8) = .empty;
     var dirty_pages: std.ArrayList(usize) = .empty;
@@ -353,6 +359,63 @@ fn baseUrl(b: *Builder, config_fields: frontmatter.Map) Error![]const u8 {
     return raw;
 }
 
+/// Reads and normalizes `url` from the config, or null when unset.
+fn siteUrl(b: *Builder, config_fields: frontmatter.Map) Error!?[]const u8 {
+    const v = config_fields.get("url") orelse return null;
+    if (v != .string) return b.fail(config_path, 0, "'url' must be an absolute URL such as https://example.com", .{});
+    return feeds.normalizeSiteUrl(v.string) orelse
+        b.fail(config_path, 0, "'url' must be an absolute URL such as https://example.com", .{});
+}
+
+fn stringField(m: frontmatter.Map, key: []const u8) ?[]const u8 {
+    const v = m.get(key) orelse return null;
+    return if (v == .string) v.string else null;
+}
+
+/// Whether config switch `key` (such as `feed: false`) is on. Defaults on.
+fn enabled(b: *Builder, config_fields: frontmatter.Map, key: []const u8) Error!bool {
+    const v = config_fields.get(key) orelse return true;
+    if (v != .boolean) return b.fail(config_path, 0, "'{s}' must be true or false", .{key});
+    return v.boolean;
+}
+
+fn hasOutput(outputs: []const Output, path: []const u8) bool {
+    for (outputs) |o| if (std.mem.eql(u8, o.path, path)) return true;
+    return false;
+}
+
+/// Adds the Atom feed and the sitemap, unless the config turns them off or
+/// the site already has a file at that path.
+fn addGenerated(b: *Builder, outputs: *std.ArrayList(Output), config_fields: frontmatter.Map, pages: []const Page, url: []const u8) Error!void {
+    const arena = b.arena;
+    const title = stringField(config_fields, "title") orelse "";
+    const site: feeds.Site = .{
+        .url = url,
+        .baseurl = b.baseurl,
+        .title = title,
+        .author = stringField(config_fields, "author") orelse title,
+    };
+    var posts: std.ArrayList(feeds.Entry) = .empty;
+    var listed: std.ArrayList(feeds.Entry) = .empty;
+    for (pages) |p| {
+        const entry: feeds.Entry = .{
+            .title = stringField(p.fields, "title") orelse "",
+            .url = p.url,
+            .date = p.date,
+            .html = p.html orelse "",
+        };
+        if (p.is_post) try posts.append(arena, entry);
+        const opted_out = if (p.fields.get("sitemap")) |v| v == .boolean and !v.boolean else false;
+        if (!opted_out and !std.mem.eql(u8, p.out_path, "404.html")) try listed.append(arena, entry);
+    }
+    if (try enabled(b, config_fields, "feed") and posts.items.len > 0 and !hasOutput(outputs.items, feeds.feed_path)) {
+        try outputs.append(arena, .{ .path = feeds.feed_path, .source = config_path, .data = .{ .bytes = try feeds.atom(arena, site, posts.items) } });
+    }
+    if (try enabled(b, config_fields, "sitemap") and !hasOutput(outputs.items, feeds.sitemap_path)) {
+        try outputs.append(arena, .{ .path = feeds.sitemap_path, .source = config_path, .data = .{ .bytes = try feeds.sitemap(arena, site, listed.items) } });
+    }
+}
+
 /// Renders the pages selected by `render` (all when null) and assembles the
 /// site. `pages` must be in `pageOrder`.
 fn finish(b: *Builder, config_fields: frontmatter.Map, pages: []Page, statics: []const Output, render: ?[]const bool) Error!Site {
@@ -405,6 +468,8 @@ fn finish(b: *Builder, config_fields: frontmatter.Map, pages: []Page, statics: [
         d.* = .{ .output = p.out_path, .sources = p.sources, .reads_collections = p.reads_collections };
     }
 
+    if (b.site_url) |url| try addGenerated(b, &outputs, config_fields, pages, url);
+
     std.mem.sortUnstable(Output, outputs.items, {}, outputOrder);
     for (outputs.items[0..outputs.items.len -| 1], outputs.items[@min(1, outputs.items.len)..]) |a, c| {
         if (std.mem.eql(u8, a.path, c.path)) {
@@ -421,7 +486,7 @@ fn finish(b: *Builder, config_fields: frontmatter.Map, pages: []Page, statics: [
         .rendered = rendered,
         .full = render == null,
         .baseurl = b.baseurl,
-        .state = .{ .config_fields = config_fields, .baseurl = b.baseurl, .pages = pages, .statics = statics },
+        .state = .{ .config_fields = config_fields, .baseurl = b.baseurl, .site_url = b.site_url, .pages = pages, .statics = statics },
     };
 }
 
@@ -999,6 +1064,42 @@ test "baseurl prefixes page URLs but not output paths" {
 
     try expectBuildError(&.{.{ "_config.yml", "baseurl: blog\n" }}, "_config.yml", 0, "'baseurl' must be a path");
     try expectBuildError(&.{.{ "_config.yml", "baseurl: /../x\n" }}, "_config.yml", 0, "'baseurl' must be a path");
+}
+
+test "feed and sitemap are generated when the site has a url" {
+    var t: TestSite = try .init(&.{
+        .{ "_config.yml", "title: T\nurl: https://example.com/\n" },
+        .{ "about.md", "---\ntitle: About\n---\nA\n" },
+        .{ "hidden.md", "---\nsitemap: false\n---\nH\n" },
+        .{ "_posts/2024-01-05-a.md", "---\ntitle: A\n---\nA\n" },
+    });
+    defer t.deinit();
+    var diag: Diagnostic = .{};
+    const site = try t.build(&diag);
+    const feed = site.find("feed.xml").?.data.bytes;
+    try testing.expect(std.mem.indexOf(u8, feed, "<link href=\"https://example.com/2024/01/05/a/\"/>") != null);
+    const map = site.find("sitemap.xml").?.data.bytes;
+    try testing.expect(std.mem.indexOf(u8, map, "<loc>https://example.com/about/</loc>") != null);
+    try testing.expect(std.mem.indexOf(u8, map, "hidden") == null);
+
+    // No url, no generated files; switches turn them off; a site's own
+    // file at the same path wins.
+    var t2: TestSite = try .init(&.{.{ "_posts/2024-01-05-a.md", "A\n" }});
+    defer t2.deinit();
+    const s2 = try t2.build(&diag);
+    try testing.expect(s2.find("feed.xml") == null and s2.find("sitemap.xml") == null);
+
+    var t3: TestSite = try .init(&.{
+        .{ "_config.yml", "url: https://example.com\nfeed: false\n" },
+        .{ "_posts/2024-01-05-a.md", "A\n" },
+        .{ "sitemap.xml", "<mine/>" },
+    });
+    defer t3.deinit();
+    const s3 = try t3.build(&diag);
+    try testing.expect(s3.find("feed.xml") == null);
+    try testing.expect(s3.find("sitemap.xml").?.data == .copy);
+
+    try expectBuildError(&.{.{ "_config.yml", "url: example.com\n" }}, "_config.yml", 0, "'url' must be an absolute URL");
 }
 
 test "a frontmatter date overrides the file name date" {
