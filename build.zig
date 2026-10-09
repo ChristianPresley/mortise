@@ -137,10 +137,43 @@ pub fn build(b: *std.Build) void {
     });
     b.step("update-fixtures", "Regenerate expected fixture outputs").dependOn(&b.addRunArtifact(update_fixtures).step);
 
+    // The renderer for build-time graphics. It imports nothing from
+    // Mortise, so it can later move to its own repository unchanged.
+    const render_mod = b.addModule("render", .{
+        .root_source_file = b.path("render/root.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const render_tests = b.addTest(.{ .root_module = render_mod });
+    b.step("test-render", "Run the renderer's tests").dependOn(&b.addRunArtifact(render_tests).step);
+
+    // `zig build render-gallery -- [OUT_DIR]` renders every generator into
+    // OUT_DIR (default zig-out/render-gallery) with an index.html to view.
+    // Rendering is slow without optimization, so it always builds fast.
+    const gallery_exe = b.addExecutable(.{
+        .name = "render-gallery",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("render/gallery.zig"),
+            .target = target,
+            .optimize = .ReleaseFast,
+            .imports = &.{
+                .{ .name = "render", .module = b.createModule(.{
+                    .root_source_file = b.path("render/root.zig"),
+                    .target = target,
+                    .optimize = .ReleaseFast,
+                }) },
+            },
+        }),
+    });
+    const gallery_run = b.addRunArtifact(gallery_exe);
+    if (b.args) |args| gallery_run.addArgs(args) else gallery_run.addArg(b.getInstallPath(.prefix, "render-gallery"));
+    b.step("render-gallery", "Render the renderer's example gallery").dependOn(&gallery_run.step);
+
     const test_step = b.step("test", "Run all unit and fixture tests");
     test_step.dependOn(&b.addRunArtifact(mod_tests).step);
     test_step.dependOn(&b.addRunArtifact(exe_tests).step);
     test_step.dependOn(&b.addRunArtifact(fixture_tests).step);
+    test_step.dependOn(&b.addRunArtifact(render_tests).step);
 }
 
 /// Copies a generated file to an absolute path whenever the step runs,

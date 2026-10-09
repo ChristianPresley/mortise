@@ -17,6 +17,7 @@ Jekyll and Hugo.
 zig build                         # builds zig-out/bin/mortise
 zig build test                    # unit, fixture, and end-to-end tests
 zig build -Doptimize=ReleaseFast  # optimized binary
+zig build render-gallery          # renders example graphics to zig-out/render-gallery
 ```
 
 ### Working on Mortise itself
@@ -172,5 +173,6 @@ See the [Markdown subset](docs/markdown.md),
 | `src/main.zig`        | Command-line entry point                          |
 | `src/restart.zig`     | `serve --restart-on-rebuild` supervisor           |
 | `src/themes/`         | Built-in themes (`theme:` in `_config.yml`)       |
+| `render/`             | CPU renderer for build-time graphics; see [render/README.md](render/README.md) |
 | `test/`               | Fixture and end-to-end tests and their inputs     |
 | `bench/`              | Save-to-reload latency benchmark and results      |
