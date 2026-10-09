@@ -64,13 +64,15 @@ job:
 
 ## Site pipeline
 
-- Posts must be Markdown files in `_posts/` named `YYYY-MM-DD-slug.md`.
-  Their URL always uses the date from the file name, even when frontmatter
-  sets a different `date`.
+- Posts must be Markdown files in `_posts/` named `YYYY-MM-DD-slug.md`,
+  even when frontmatter sets a `date` that overrides the file name's.
+- Frontmatter dates are calendar dates. A time after the date is accepted
+  and ignored; there are no time zones.
 - Markdown content is not run through the template engine, so template tags
   inside a `.md` file appear literally.
-- There is no `baseurl` setting: sites are assumed to be served from the
-  root of their domain.
+- `baseurl` is added to page URLs only. Links to static files in templates
+  must add it themselves, as in `{{ site.baseurl }}/css/site.css`, and
+  Markdown links are written out exactly as authored.
 - `build` deletes the whole `_site` directory before writing, so files
   placed there by hand are lost.
 - Layouts are found only as `_layouts/NAME.html`; includes only under

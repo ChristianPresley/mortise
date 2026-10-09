@@ -62,6 +62,11 @@ my-site/
   other files are copied unchanged.
 - `permalink: /some/path/` in frontmatter overrides the output location, and
   `draft: true` leaves a page or post out.
+- A post's frontmatter `date: YYYY-MM-DD` overrides the date in its file
+  name, both for ordering and for its URL.
+- `baseurl: /blog` in `_config.yml` serves the site under a path prefix:
+  page URLs start with it, `serve` serves under it, and templates can link
+  to static files with `{{ site.baseurl }}/css/site.css`.
 - Templates see `site` (config values plus `site.posts`, newest first, and
   `site.pages`), `page` (frontmatter plus `url`, `path`, and for posts `date`
   and `slug`), and in layouts `content`.

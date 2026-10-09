@@ -84,6 +84,10 @@ pub const Site = struct {
     /// Whether this site was built from scratch, sharing no memory with an
     /// earlier build.
     full: bool,
+    /// The site's URL prefix from `baseurl` in `_config.yml`, such as
+    /// `/blog`, or "" when the site is served from the root. Page URLs
+    /// include it; output paths do not.
+    baseurl: []const u8,
     /// What `rebuild` needs to update this site. An incrementally rebuilt
     /// site shares memory with the site it came from, so that site's
     /// arena must outlive this one.
@@ -106,6 +110,7 @@ pub const Site = struct {
 
 const State = struct {
     config_fields: frontmatter.Map,
+    baseurl: []const u8,
     /// Every page and post, in `pageOrder`.
     pages: []const Page,
     /// Files copied unchanged.
@@ -119,8 +124,12 @@ const Page = struct {
     fields: frontmatter.Map,
     body: []const u8,
     body_line: usize,
+    /// Public URL, including the site's baseurl.
     url: []const u8,
     out_path: []const u8,
+    /// For posts, the `YYYY-MM-DD` date that orders the post and forms its
+    /// URL: frontmatter `date` if set, otherwise the file name's date.
+    date: []const u8 = "",
     /// Rendered Markdown, or null for HTML templates.
     html: ?[]const u8,
     object: template.Object = .{},
@@ -149,6 +158,7 @@ const Builder = struct {
     deps: std.ArrayList([]const u8) = .empty,
     /// Whether a template used by the current page reads site collections.
     reads_collections: bool = false,
+    baseurl: []const u8 = "",
 
     fn fail(b: *Builder, path: []const u8, line: usize, comptime fmt: []const u8, args: anytype) Error {
         b.diag.* = .{
@@ -201,13 +211,15 @@ pub fn build(arena: Allocator, src: SiteDir, diag: *Diagnostic) Error!Site {
 
     var pages: std.ArrayList(Page) = .empty;
     var statics: std.ArrayList(Output) = .empty;
+    // The config comes first: page URLs depend on its `baseurl`.
     var config_fields: frontmatter.Map = .{};
+    for (listing.files) |path| {
+        if (std.mem.eql(u8, path, config_path)) config_fields = try loadConfig(&b);
+    }
+    b.baseurl = try baseUrl(&b, config_fields);
 
     for (listing.files) |path| {
-        if (std.mem.eql(u8, path, config_path)) {
-            config_fields = try loadConfig(&b);
-            continue;
-        }
+        if (std.mem.eql(u8, path, config_path)) continue;
         if (std.mem.startsWith(u8, path, "_posts/")) {
             if (!std.mem.eql(u8, sitepath.extension(path), ".md")) continue;
             if (try loadPage(&b, path, true)) |p| try pages.append(arena, p);
@@ -242,8 +254,8 @@ pub fn build(arena: Allocator, src: SiteDir, diag: *Diagnostic) Error!Site {
 /// changed, a static `.html` file gaining frontmatter, or a watcher
 /// overflow. The result shares memory with `prev`.
 pub fn rebuild(arena: Allocator, src: SiteDir, prev: *const Site, changed: []const []const u8, diag: *Diagnostic) Error!Site {
-    var b: Builder = .{ .arena = arena, .src = src, .diag = diag };
     const st = prev.state;
+    var b: Builder = .{ .arena = arena, .src = src, .diag = diag, .baseurl = st.baseurl };
 
     var dirty_templates: std.ArrayList([]const u8) = .empty;
     var dirty_pages: std.ArrayList(usize) = .empty;
@@ -328,6 +340,19 @@ fn loadConfig(b: *Builder) Error!frontmatter.Map {
     };
 }
 
+/// Reads and normalizes `baseurl` from the config: "" for the root,
+/// otherwise a path starting with `/` and without a trailing `/`.
+fn baseUrl(b: *Builder, config_fields: frontmatter.Map) Error![]const u8 {
+    const v = config_fields.get("baseurl") orelse return "";
+    const fail_msg = "'baseurl' must be a path such as /blog";
+    if (v != .string) return b.fail(config_path, 0, fail_msg, .{});
+    const raw = std.mem.trimEnd(u8, v.string, "/");
+    if (raw.len == 0) return "";
+    if (raw[0] != '/') return b.fail(config_path, 0, fail_msg, .{});
+    _ = sitepath.normalize(b.arena, raw[1..]) catch return b.fail(config_path, 0, fail_msg, .{});
+    return raw;
+}
+
 /// Renders the pages selected by `render` (all when null) and assembles the
 /// site. `pages` must be in `pageOrder`.
 fn finish(b: *Builder, config_fields: frontmatter.Map, pages: []Page, statics: []const Output, render: ?[]const bool) Error!Site {
@@ -351,6 +376,10 @@ fn finish(b: *Builder, config_fields: frontmatter.Map, pages: []Page, statics: [
     for (config_fields.entries) |e| {
         if (std.mem.eql(u8, e.key, "posts") or std.mem.eql(u8, e.key, "pages")) {
             return b.fail(config_path, 0, "'{s}' is set by Mortise; use another key", .{e.key});
+        }
+        if (std.mem.eql(u8, e.key, "baseurl")) {
+            try site_entries.append(arena, .{ .key = e.key, .value = .{ .string = b.baseurl } });
+            continue;
         }
         try site_entries.append(arena, .{ .key = e.key, .value = try convert(arena, e.value) });
     }
@@ -391,7 +420,8 @@ fn finish(b: *Builder, config_fields: frontmatter.Map, pages: []Page, statics: [
         .static_files = statics.len,
         .rendered = rendered,
         .full = render == null,
-        .state = .{ .config_fields = config_fields, .pages = pages, .statics = statics },
+        .baseurl = b.baseurl,
+        .state = .{ .config_fields = config_fields, .baseurl = b.baseurl, .pages = pages, .statics = statics },
     };
 }
 
@@ -428,6 +458,22 @@ fn loadPage(b: *Builder, path: []const u8, is_post: bool) Error!?Page {
         .html = if (is_markdown) try markdown.toHtml(arena, doc.body) else null,
     };
 
+    if (is_post) {
+        const base = sitepath.basename(path);
+        const name_date = if (base.len > 11) template.parseDate(base[0..10]) else null;
+        if (name_date == null or base[10] != '-' or sitepath.stem(base).len <= 11) {
+            return b.fail(path, 0, "post file names must look like YYYY-MM-DD-slug.md", .{});
+        }
+        page.date = base[0..10];
+        // A frontmatter date overrides the file name's, as in Jekyll.
+        if (doc.fields.get("date")) |d| {
+            if (d != .string or template.parseDate(d.string) == null) {
+                return b.fail(path, fieldLine(data, "date"), "'date' must look like YYYY-MM-DD", .{});
+            }
+            page.date = d.string[0..10];
+        }
+    }
+
     if (doc.fields.get("permalink")) |pl| {
         const line = fieldLine(data, "permalink");
         if (pl != .string or pl.string.len == 0 or pl.string[0] != '/') {
@@ -435,12 +481,8 @@ fn loadPage(b: *Builder, path: []const u8, is_post: bool) Error!?Page {
         }
         page.url = pl.string;
     } else if (is_post) {
-        const base = sitepath.basename(path);
-        const date = if (base.len > 11) template.parseDate(base[0..10]) else null;
-        if (date == null or base[10] != '-' or sitepath.stem(base).len <= 11) {
-            return b.fail(path, 0, "post file names must look like YYYY-MM-DD-slug.md", .{});
-        }
-        page.url = try std.fmt.allocPrint(arena, "/{s}/{s}/{s}/{s}/", .{ base[0..4], base[5..7], base[8..10], sitepath.stem(base)[11..] });
+        const d = page.date;
+        page.url = try std.fmt.allocPrint(arena, "/{s}/{s}/{s}/{s}/", .{ d[0..4], d[5..7], d[8..10], sitepath.stem(path)[11..] });
     } else if (is_markdown) {
         const stem_path = path[0 .. path.len - ".md".len];
         if (std.mem.eql(u8, sitepath.basename(stem_path), "index")) {
@@ -464,6 +506,7 @@ fn loadPage(b: *Builder, path: []const u8, is_post: bool) Error!?Page {
         error.OutOfMemory => return error.OutOfMemory,
         else => return b.fail(path, fieldLine(data, "permalink"), "invalid output path '{s}': {s}", .{ out_raw, @errorName(err) }),
     };
+    if (b.baseurl.len > 0) page.url = try std.mem.concat(arena, u8, &.{ b.baseurl, page.url });
     return page;
 }
 
@@ -483,9 +526,7 @@ fn fieldLine(data: []const u8, key: []const u8) usize {
 fn pageOrder(_: void, a: Page, c: Page) bool {
     if (a.is_post != c.is_post) return a.is_post;
     if (a.is_post) {
-        const ad = sitepath.basename(a.source)[0..10];
-        const cd = sitepath.basename(c.source)[0..10];
-        switch (std.mem.order(u8, ad, cd)) {
+        switch (std.mem.order(u8, a.date, c.date)) {
             .gt => return true,
             .lt => return false,
             .eq => {},
@@ -513,7 +554,7 @@ fn pageObject(arena: Allocator, p: *const Page) Allocator.Error!template.Object 
     if (p.is_post) {
         const base = sitepath.basename(p.source);
         if (p.fields.get("date") == null) {
-            try entries.append(arena, .{ .key = "date", .value = .{ .string = base[0..10] } });
+            try entries.append(arena, .{ .key = "date", .value = .{ .string = p.date } });
         }
         try entries.append(arena, .{ .key = "slug", .value = .{ .string = sitepath.stem(base)[11..] } });
     }
@@ -941,4 +982,36 @@ test "incremental rebuild ignores vanished temporary files but not vanished dire
     site = try rebuild(t.arena.allocator(), src, &site, &.{"docs"}, &diag);
     try testing.expect(site.full);
     try testing.expect(site.find("docs/b/index.html") == null);
+}
+
+test "baseurl prefixes page URLs but not output paths" {
+    var t: TestSite = try .init(&.{
+        .{ "_config.yml", "baseurl: /blog/\n" },
+        .{ "index.html", "---\nx: 1\n---\n{{ site.baseurl }}|{% for p in site.posts %}{{ p.url }}{% endfor %}|{{ page.url }}" },
+        .{ "_posts/2024-01-05-a.md", "A\n" },
+    });
+    defer t.deinit();
+    var diag: Diagnostic = .{};
+    const site = try t.build(&diag);
+    try testing.expectEqualStrings("/blog", site.baseurl);
+    try testing.expectEqualStrings("/blog|/blog/2024/01/05/a/|/blog/", site.find("index.html").?.data.bytes);
+    try testing.expect(site.find("2024/01/05/a/index.html") != null);
+
+    try expectBuildError(&.{.{ "_config.yml", "baseurl: blog\n" }}, "_config.yml", 0, "'baseurl' must be a path");
+    try expectBuildError(&.{.{ "_config.yml", "baseurl: /../x\n" }}, "_config.yml", 0, "'baseurl' must be a path");
+}
+
+test "a frontmatter date overrides the file name date" {
+    var t: TestSite = try .init(&.{
+        .{ "index.html", "---\nx: 1\n---\n{% for p in site.posts %}{{ p.url }} {% endfor %}" },
+        .{ "_posts/2024-01-05-a.md", "---\ndate: 2024-06-01\n---\nA\n" },
+        .{ "_posts/2024-03-01-b.md", "B\n" },
+    });
+    defer t.deinit();
+    var diag: Diagnostic = .{};
+    const site = try t.build(&diag);
+    // Post a is now the newest, published under its frontmatter date.
+    try testing.expectEqualStrings("/2024/06/01/a/ /2024/03/01/b/ ", site.find("index.html").?.data.bytes);
+
+    try expectBuildError(&.{.{ "_posts/2024-01-05-a.md", "---\ndate: soon\n---\n" }}, "_posts/2024-01-05-a.md", 2, "'date' must look like YYYY-MM-DD");
 }
