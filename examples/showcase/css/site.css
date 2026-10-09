@@ -18,6 +18,26 @@ a { color: var(--accent); }
 .tag-cloud .tag { font-size: 1rem; text-decoration: none; }
 .toc-box { float: right; margin: 0 0 1rem 1.5rem; padding: .75rem 1rem; background: var(--code); border-radius: 6px; font-size: .9rem; }
 .toc-box ul { margin: .25rem 0 0; padding-left: 1rem; }
+body:has(.wiki) :is(header, main, footer) { max-width: 66rem; }
+.wiki { display: grid; grid-template-columns: 13rem minmax(0, 1fr); gap: 2.5rem; align-items: start; }
+.wiki-nav { position: sticky; top: 1rem; font-size: .92rem; }
+.wiki-nav-title { margin: 0 0 .5rem; font-size: .75rem; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+.wiki-nav ul { list-style: none; margin: 0; padding: 0; }
+.wiki-nav ul ul { margin: .15rem 0 .4rem .75rem; padding-left: .6rem; border-left: 1px solid #e5e5e5; }
+.wiki-nav a { display: block; padding: .2rem .5rem; border-radius: 6px; color: var(--fg); text-decoration: none; }
+.wiki-nav a:hover { background: var(--code); }
+.wiki-nav a.current { background: #fde7d9; color: var(--accent); font-weight: 600; }
+.breadcrumbs { display: flex; flex-wrap: wrap; gap: .4rem; font-size: .85rem; color: var(--muted); margin-bottom: .5rem; }
+.breadcrumbs a { color: var(--muted); text-decoration: none; }
+.breadcrumbs a:hover { color: var(--accent); }
+.breadcrumbs .here { color: var(--fg); font-weight: 600; }
+.wiki-main > h1:first-of-type, .wiki-main > .toc-box + h1 { margin-top: .5rem; }
+.wiki-main .pager { display: flex; justify-content: space-between; gap: 1rem; margin-top: 3rem; padding-top: 1rem; border-top: 1px solid #e5e5e5; }
+.pager .prev, .pager .next { flex: 1; max-width: 48%; padding: .6rem .9rem; border: 1px solid #e5e5e5; border-radius: 8px; text-decoration: none; font-weight: 600; }
+.pager .next { text-align: right; margin-left: auto; }
+.pager small { display: block; font-weight: 400; color: var(--muted); font-size: .78rem; }
+.pager .prev:hover, .pager .next:hover { border-color: var(--accent); }
+@media (max-width: 760px) { .wiki { grid-template-columns: 1fr; } .wiki-nav { position: static; } }
 blockquote { margin: 1rem 0; padding: .25rem 1rem; border-left: 4px solid var(--accent); color: var(--muted); }
 table { border-collapse: collapse; width: 100%; }
 th, td { border: 1px solid #e5e5e5; padding: .4rem .6rem; }

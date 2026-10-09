@@ -1,6 +1,7 @@
 ---
 title: Components
 layout: doc
+weight: 2
 ---
 # Components
 

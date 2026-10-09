@@ -1,6 +1,7 @@
 ---
 title: Code
 layout: doc
+weight: 3
 ---
 # Code blocks
 

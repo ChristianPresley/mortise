@@ -142,6 +142,10 @@ const Page = struct {
     toc: ?[]const u8 = null,
     /// Whether the Markdown uses a component that needs `mortise.css`.
     uses_components: bool = false,
+    /// The page's own fields, without navigation; computed once per load.
+    base: template.Object = .{},
+    /// `base` plus `breadcrumbs`, `previous`, and `next`, recomputed by
+    /// every build because they depend on other pages.
     object: template.Object = .{},
     /// Set once rendered: the output and what it depended on.
     output: []const u8 = "",
@@ -486,7 +490,10 @@ fn finish(b: *Builder, config_fields: frontmatter.Map, pages: []Page, statics: [
     var page_values: std.ArrayList(Value) = .empty;
     var post_count: usize = 0;
     for (pages) |*p| {
-        if (p.object.entries.len == 0) p.object = try pageObject(arena, p);
+        if (p.base.entries.len == 0) p.base = try pageObject(arena, p);
+    }
+    try addNavigation(arena, pages);
+    for (pages) |*p| {
         if (p.is_post) {
             try post_values.append(arena, .{ .object = p.object });
             post_count += 1;
@@ -498,7 +505,7 @@ fn finish(b: *Builder, config_fields: frontmatter.Map, pages: []Page, statics: [
     var site_entries: std.ArrayList(Entry) = .empty;
     for (config_fields.entries) |e| {
         if (std.mem.eql(u8, e.key, "posts") or std.mem.eql(u8, e.key, "pages") or
-            std.mem.eql(u8, e.key, "data") or std.mem.eql(u8, e.key, "tags"))
+            std.mem.eql(u8, e.key, "data") or std.mem.eql(u8, e.key, "tags") or std.mem.eql(u8, e.key, "nav"))
         {
             return b.fail(config_path, 0, "'{s}' is set by Mortise; use another key", .{e.key});
         }
@@ -511,6 +518,7 @@ fn finish(b: *Builder, config_fields: frontmatter.Map, pages: []Page, statics: [
     try site_entries.append(arena, .{ .key = "posts", .value = .{ .list = post_values.items } });
     try site_entries.append(arena, .{ .key = "pages", .value = .{ .list = page_values.items } });
     try site_entries.append(arena, .{ .key = "data", .value = b.data });
+    try site_entries.append(arena, .{ .key = "nav", .value = try navTree(arena, pages, b.baseurl) });
     const tag_pages = b.exists(tag_layout);
     const tags = try tagIndex(arena, pages, if (tag_pages) b.baseurl else null);
     try site_entries.append(arena, .{ .key = "tags", .value = tags });
@@ -709,6 +717,143 @@ fn pageObject(arena: Allocator, p: *const Page) Allocator.Error!template.Object 
         }
     }
     return .{ .entries = entries.items };
+}
+
+/// A page's title for navigation: its `title`, else the last URL segment,
+/// else "Home".
+fn navTitle(p: *const Page) []const u8 {
+    if (stringField(p.fields, "title")) |t| return t;
+    const trimmed = std.mem.trim(u8, p.url, "/");
+    if (trimmed.len == 0) return "Home";
+    return trimmed[(std.mem.lastIndexOfScalar(u8, trimmed, '/') orelse return trimmed) + 1 ..];
+}
+
+/// `weight` from frontmatter orders navigation; pages without one sort
+/// after those with one.
+fn navWeight(p: *const Page) i64 {
+    const v = p.fields.get("weight") orelse return std.math.maxInt(i64);
+    return if (v == .int) v.int else std.math.maxInt(i64);
+}
+
+fn navLink(arena: Allocator, p: *const Page) Allocator.Error!Value {
+    const entries = try arena.alloc(Entry, 2);
+    entries[0] = .{ .key = "title", .value = .{ .string = navTitle(p) } };
+    entries[1] = .{ .key = "url", .value = .{ .string = p.url } };
+    return .{ .object = .{ .entries = entries } };
+}
+
+/// The URL directory a page lives in: `/docs/guide/` for both
+/// `/docs/guide/setup/` and `/docs/guide/page.html`; "" for the root.
+fn parentUrl(url: []const u8) []const u8 {
+    const trimmed = if (url.len > 1 and url[url.len - 1] == '/') url[0 .. url.len - 1] else url;
+    const slash = std.mem.lastIndexOfScalar(u8, trimmed, '/') orelse return "";
+    return trimmed[0 .. slash + 1];
+}
+
+fn pageAtUrl(pages: []const Page, url: []const u8) ?*const Page {
+    for (pages) |*p| if (!p.is_post and std.mem.eql(u8, p.url, url)) return p;
+    return null;
+}
+
+/// Sets each page's `object` to its fields plus navigation:
+///
+///   page.breadcrumbs  ancestor pages by URL, root first, as {title, url}
+///   page.previous     for posts, the next older post; for pages, the
+///   page.next         previous and next page in the same URL directory,
+///                     ordered by `weight` then title
+fn addNavigation(arena: Allocator, pages: []Page) Allocator.Error!void {
+    for (pages, 0..) |*p, i| {
+        var entries: std.ArrayList(Entry) = .empty;
+        try entries.appendSlice(arena, p.base.entries);
+
+        // Breadcrumbs: every existing page whose URL is a prefix directory.
+        var crumbs: std.ArrayList(Value) = .empty;
+        var dir = parentUrl(p.url);
+        var stack: std.ArrayList(Value) = .empty;
+        while (dir.len > 0) : (dir = parentUrl(dir)) {
+            if (pageAtUrl(pages, dir)) |anc| try stack.append(arena, try navLink(arena, anc));
+            if (dir.len == 1) break;
+        }
+        var k = stack.items.len;
+        while (k > 0) {
+            k -= 1;
+            try crumbs.append(arena, stack.items[k]);
+        }
+        try entries.append(arena, .{ .key = "breadcrumbs", .value = .{ .list = crumbs.items } });
+
+        var prev: ?*const Page = null;
+        var next: ?*const Page = null;
+        if (p.is_post) {
+            // Posts are newest first: the next item is older.
+            if (i + 1 < pages.len and pages[i + 1].is_post) prev = &pages[i + 1];
+            if (i > 0 and pages[i - 1].is_post) next = &pages[i - 1];
+        } else {
+            const siblings = try siblingPages(arena, pages, p);
+            for (siblings, 0..) |s, si| {
+                if (s != p) continue;
+                if (si > 0) prev = siblings[si - 1];
+                if (si + 1 < siblings.len) next = siblings[si + 1];
+            }
+        }
+        try entries.append(arena, .{ .key = "previous", .value = if (prev) |q| try navLink(arena, q) else .nil });
+        try entries.append(arena, .{ .key = "next", .value = if (next) |q| try navLink(arena, q) else .nil });
+        p.object = .{ .entries = entries.items };
+    }
+}
+
+/// Pages in the same URL directory as `p` (not counting the directory's
+/// own index page), in navigation order.
+fn siblingPages(arena: Allocator, pages: []const Page, p: *const Page) Allocator.Error![]const *const Page {
+    const dir = parentUrl(p.url);
+    var out: std.ArrayList(*const Page) = .empty;
+    if (std.mem.eql(u8, p.url, "/") or dir.len == 0) return out.items;
+    for (pages) |*q| {
+        if (q.is_post or isHiddenFromNav(q)) continue;
+        if (std.mem.eql(u8, parentUrl(q.url), dir) and !std.mem.eql(u8, q.url, "/")) try out.append(arena, q);
+    }
+    std.mem.sortUnstable(*const Page, out.items, {}, navLess);
+    return out.items;
+}
+
+fn isHiddenFromNav(p: *const Page) bool {
+    const v = p.fields.get("nav") orelse return false;
+    return v == .boolean and !v.boolean;
+}
+
+fn navLess(_: void, a: *const Page, b: *const Page) bool {
+    const wa = navWeight(a);
+    const wb = navWeight(b);
+    if (wa != wb) return wa < wb;
+    return std.mem.lessThan(u8, navTitle(a), navTitle(b));
+}
+
+/// `site.nav`: the non-post pages as a tree by URL, each node
+/// {title, url, children}, ordered by `weight` then title. The home page
+/// is not in the tree; pages with `nav: false` are left out.
+fn navTree(arena: Allocator, pages: []const Page, baseurl: []const u8) Allocator.Error!Value {
+    const root = try std.fmt.allocPrint(arena, "{s}/", .{baseurl});
+    return navChildren(arena, pages, root);
+}
+
+fn navChildren(arena: Allocator, pages: []const Page, dir: []const u8) Allocator.Error!Value {
+    var kids: std.ArrayList(*const Page) = .empty;
+    for (pages) |*q| {
+        if (q.is_post or isHiddenFromNav(q) or std.mem.eql(u8, q.url, dir)) continue;
+        // The nearest ancestor page decides where a page hangs in the tree.
+        var anc = parentUrl(q.url);
+        while (anc.len > dir.len and pageAtUrl(pages, anc) == null) anc = parentUrl(anc);
+        if (std.mem.eql(u8, anc, dir)) try kids.append(arena, q);
+    }
+    std.mem.sortUnstable(*const Page, kids.items, {}, navLess);
+    const out = try arena.alloc(Value, kids.items.len);
+    for (kids.items, out) |q, *o| {
+        const entries = try arena.alloc(Entry, 3);
+        entries[0] = .{ .key = "title", .value = .{ .string = navTitle(q) } };
+        entries[1] = .{ .key = "url", .value = .{ .string = q.url } };
+        entries[2] = .{ .key = "children", .value = if (std.mem.endsWith(u8, q.url, "/")) try navChildren(arena, pages, q.url) else .{ .list = &.{} } };
+        o.* = .{ .object = .{ .entries = entries } };
+    }
+    return .{ .list = out };
 }
 
 /// A nested list of links to the level 2 and 3 headings, or null when
@@ -1441,6 +1586,35 @@ test "mortise.css is written only when a page uses a component" {
     });
     defer off.deinit();
     try testing.expect((try off.build(&diag)).find(components_css_path) == null);
+}
+
+test "breadcrumbs, previous and next, and the navigation tree" {
+    var t: TestSite = try .init(&.{
+        .{ "_layouts/l.html", "{% for c in page.breadcrumbs %}{{ c.title }}>{% endfor %}|{{ page.previous.title }}|{{ page.next.title }}" },
+        .{ "_layouts/tree.html", "{% for a in site.nav %}[{{ a.title }}{% for b in a.children %}({{ b.title }}{% for c in b.children %}<{{ c.title }}>{% endfor %}){% endfor %}]{% endfor %}" },
+        .{ "index.md", "---\nlayout: tree\n---\n" },
+        .{ "docs/index.md", "---\ntitle: Docs\nlayout: l\n---\n" },
+        .{ "docs/b.md", "---\ntitle: Beta\nlayout: l\nweight: 2\n---\n" },
+        .{ "docs/a.md", "---\ntitle: Alpha\nlayout: l\nweight: 1\n---\n" },
+        .{ "docs/z.md", "---\ntitle: Zed\nlayout: l\n---\n" },
+        .{ "docs/guide/setup.md", "---\ntitle: Setup\nlayout: l\n---\n" },
+        .{ "about.md", "---\ntitle: About\nnav: false\n---\n" },
+        .{ "_posts/2024-01-01-old.md", "---\ntitle: Old\nlayout: l\n---\n" },
+        .{ "_posts/2024-02-01-new.md", "---\ntitle: New\nlayout: l\n---\n" },
+    });
+    defer t.deinit();
+    var diag: Diagnostic = .{};
+    const site = try t.build(&diag);
+    // Weighted pages first, then by title; the section index is not a sibling.
+    try testing.expectEqualStrings("Home>Docs>|Alpha|Zed", site.find("docs/b/index.html").?.data.bytes);
+    try testing.expectEqualStrings("Home>Docs>||Beta", site.find("docs/a/index.html").?.data.bytes);
+    try testing.expectEqualStrings("Home>||", site.find("docs/index.html").?.data.bytes);
+    // A page under a directory with no index hangs from the nearest page.
+    try testing.expectEqualStrings("Home>Docs>||", site.find("docs/guide/setup/index.html").?.data.bytes);
+    // Posts: previous is older, next is newer.
+    try testing.expectEqualStrings("Home>|Old|", site.find("2024/02/01/new/index.html").?.data.bytes);
+    try testing.expectEqualStrings("Home>||New", site.find("2024/01/01/old/index.html").?.data.bytes);
+    try testing.expectEqualStrings("[Docs(Alpha)(Beta)(Setup)(Zed)]", site.find("index.html").?.data.bytes);
 }
 
 test "page.toc lists level 2 and 3 headings" {
