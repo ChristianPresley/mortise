@@ -1,6 +1,6 @@
 ---
 title: Docs
-layout: base
+layout: doc
 ---
 # Markdown reference
 

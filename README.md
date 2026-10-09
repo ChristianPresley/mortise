@@ -94,6 +94,11 @@ my-site/
   shell, JSON, and YAML is syntax-highlighted at build time with
   `hl-*` classes for your stylesheet; see the
   [Markdown subset](docs/markdown.md#fenced-code-blocks).
+- Add `_layouts/tag.html` to generate a page per tag at `/tags/<slug>/`.
+  The layout sees `page.tag` and `page.posts`, and each `site.tags` entry
+  gains a `url`. Tags differing only in case or punctuation are merged.
+- Markdown pages get `page.toc`, a nested list linking to their level 2
+  and 3 headings.
 - Headings get anchor ids from their text, so `## Getting started` can be
   linked as `#getting-started`.
 - `paginate: 10` in a page's frontmatter splits it across pages of 10 posts

@@ -13,18 +13,56 @@ pub const Error = Allocator.Error || Writer.Error;
 
 /// Renders `src` to HTML. The result is allocated with `arena`.
 pub fn toHtml(arena: Allocator, src: []const u8) Allocator.Error![]u8 {
+    return (try toDocument(arena, src)).html;
+}
+
+pub const Heading = struct {
+    level: u8,
+    /// The heading's anchor id.
+    id: []const u8,
+    /// The heading's plain text, without markup.
+    text: []const u8,
+};
+
+pub const Document = struct {
+    html: []u8,
+    /// Every heading, in document order.
+    headings: []const Heading,
+};
+
+/// Renders `src` and also returns its headings, for tables of contents.
+pub fn toDocument(arena: Allocator, src: []const u8) Allocator.Error!Document {
     var aw: Writer.Allocating = .init(arena);
+    var r: Renderer = .{ .arena = arena };
     // An allocating writer only fails when it runs out of memory.
-    render(arena, src, &aw.writer) catch return error.OutOfMemory;
-    return aw.toOwnedSlice();
+    renderWith(&r, src, &aw.writer) catch return error.OutOfMemory;
+    return .{ .html = try aw.toOwnedSlice(), .headings = r.headings.items };
 }
 
 /// Renders `src` to HTML on `w`. Scratch memory comes from `arena`.
 pub fn render(arena: Allocator, src: []const u8, w: *Writer) Error!void {
-    const lines = try splitLines(arena, src);
-    const doc = try parseBlocks(arena, lines);
     var r: Renderer = .{ .arena = arena };
-    try renderBlocks(&r, doc.blocks, false, w);
+    try renderWith(&r, src, w);
+}
+
+fn renderWith(r: *Renderer, src: []const u8, w: *Writer) Error!void {
+    const lines = try splitLines(r.arena, src);
+    const doc = try parseBlocks(r.arena, lines);
+    try renderBlocks(r, doc.blocks, false, w);
+}
+
+/// A URL-friendly slug of `text`, as used for heading ids: lowercase ASCII
+/// letters and digits, `-` and `_`, spaces as `-`, other punctuation
+/// dropped, non-ASCII bytes kept. Empty text gives "section".
+pub fn slugify(arena: Allocator, text: []const u8) Allocator.Error![]const u8 {
+    var slug: std.ArrayList(u8) = .empty;
+    for (text) |c| switch (c) {
+        'A'...'Z' => try slug.append(arena, c + 32),
+        'a'...'z', '0'...'9', '-', '_', 0x80...0xff => try slug.append(arena, c),
+        ' ', '\t', '\n' => try slug.append(arena, '-'),
+        else => {},
+    };
+    return if (slug.items.len == 0) "section" else slug.items;
 }
 
 // ---------------------------------------------------------------------------
@@ -479,20 +517,12 @@ const Renderer = struct {
     arena: Allocator,
     /// Heading ids already used, so each id in the document is unique.
     ids: std.StringHashMapUnmanaged(void) = .empty,
+    headings: std.ArrayList(Heading) = .empty,
 
-    /// A unique id for a heading whose plain text is `text`: lowercase
-    /// ASCII letters and digits, `-` and `_`, with spaces as `-`, other
-    /// punctuation dropped, and non-ASCII bytes kept. Repeats get `-1`,
-    /// `-2`, and so on.
+    /// A unique id for a heading whose plain text is `text` (see
+    /// `slugify`). Repeats get `-1`, `-2`, and so on.
     fn headingId(r: *Renderer, text: []const u8) Allocator.Error![]const u8 {
-        var slug: std.ArrayList(u8) = .empty;
-        for (text) |c| switch (c) {
-            'A'...'Z' => try slug.append(r.arena, c + 32),
-            'a'...'z', '0'...'9', '-', '_', 0x80...0xff => try slug.append(r.arena, c),
-            ' ', '\t', '\n' => try slug.append(r.arena, '-'),
-            else => {},
-        };
-        const base = if (slug.items.len == 0) "section" else slug.items;
+        const base = try slugify(r.arena, text);
         var id: []const u8 = base;
         var n: usize = 1;
         while (r.ids.contains(id)) : (n += 1) {
@@ -542,7 +572,10 @@ fn renderBlock(r: *Renderer, b: Block, tight: bool, w: *Writer) Error!void {
         .heading => |h| {
             const nodes = try parseInlines(arena, h.text);
             try w.print("<h{d} id=\"", .{h.level});
-            try escapeHtml(w, try r.headingId(try plainText(arena, nodes)));
+            const text = try plainText(arena, nodes);
+            const id = try r.headingId(text);
+            try r.headings.append(arena, .{ .level = h.level, .id = id, .text = text });
+            try escapeHtml(w, id);
             try w.writeAll("\">");
             for (nodes) |n| try renderNode(n, w);
             try w.print("</h{d}>\n", .{h.level});
