@@ -81,6 +81,9 @@ pub const Server = struct {
     snapshot: ?*Snapshot = null,
     /// Incremented after every build attempt, successful or not.
     generation: u64 = 0,
+    /// `generation` again when the latest build only changed stylesheets,
+    /// so pages one build behind can swap them in place; otherwise 0.
+    css_generation: u64 = 0,
     /// The last build's error, or null if it succeeded.
     failure: ?Failure = null,
     stopping: bool = false,
@@ -213,10 +216,12 @@ pub const Server = struct {
                 snap.depth = prev.?.depth + 1;
                 prev_kept = true;
             }
+            const css_only = !site.full and site.rendered == 0 and onlyStylesheets(s.src, s.pending.items);
             s.clearPending();
             s.mutex.lockUncancelable(io);
             const old = s.snapshot;
             s.generation += 1;
+            s.css_generation = if (css_only) s.generation else 0;
             snap.generation = s.generation;
             s.snapshot = snap;
             s.clearFailure();
@@ -507,8 +512,8 @@ fn serveEvents(s: *Server, req: *http.Server.Request, query: []const u8) !void {
             s.mutex.unlock(io);
             break;
         }
+        const event = eventFor(s, s.gpa, seen) catch null;
         seen = s.generation;
-        const event = eventFor(s, s.gpa, seen - 1) catch null;
         s.mutex.unlock(io);
         const e = event orelse continue;
         defer s.gpa.free(e);
@@ -535,9 +540,28 @@ fn eventFor(s: *Server, gpa: Allocator, since: u64) Allocator.Error!?[]u8 {
         return try aw.toOwnedSlice();
     }
     if (s.generation != since) {
-        return try std.fmt.allocPrint(gpa, "event: reload\ndata: {d}\n\n", .{s.generation});
+        // A client one build behind, when that build only changed
+        // stylesheets, can swap them in place instead of reloading.
+        const kind = if (s.css_generation == s.generation and since + 1 == s.generation) "css" else "reload";
+        return try std.fmt.allocPrint(gpa, "event: {s}\ndata: {d}\n\n", .{ kind, s.generation });
     }
     return null;
+}
+
+/// Whether every changed path that still exists is a `.css` file, and at
+/// least one is. Paths that are gone, such as the temporary file an
+/// editor writes and renames over a stylesheet, do not count.
+fn onlyStylesheets(src: SiteDir, changes: []const []const u8) bool {
+    var any = false;
+    for (changes) |c| {
+        if (std.ascii.eqlIgnoreCase(sitepath.extension(c), ".css")) {
+            any = true;
+            continue;
+        }
+        src.dir.access(src.io, c, .{}) catch continue;
+        return false;
+    }
+    return any;
 }
 
 fn parseSince(query: []const u8) ?u64 {
@@ -571,18 +595,24 @@ pub const reload_script_template =
     \\<script data-mortise-dev>(function(){
     \\var es=new EventSource("/__reload?since=GENERATION");
     \\es.addEventListener("reload",function(){location.reload();});
+    \\es.addEventListener("css",function(){
+    \\var links=document.querySelectorAll('link[rel="stylesheet"]');
+    \\for(var i=0;i<links.length;i++){var u=new URL(links[i].href);u.searchParams.set("mortise",Date.now());links[i].href=u.href;}
+    \\var el=document.getElementById("mortise-error-overlay");if(el)el.remove();});
     \\es.addEventListener("build-error",function(e){show(JSON.parse(e.data));});
     \\function div(css,text){var d=document.createElement("div");d.style.cssText=css;d.textContent=text;return d;}
     \\function show(err){
     \\var el=document.getElementById("mortise-error-overlay");
     \\if(!el){el=document.createElement("div");el.id="mortise-error-overlay";el.setAttribute("role","alert");
-    \\el.style.cssText="position:fixed;inset:0;z-index:2147483647;overflow:auto;padding:32px;background:rgba(24,24,28,.94);color:#f4f4f5;font:14px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace";
+    \\el.style.cssText="position:fixed;inset:0;z-index:2147483647;overflow:auto;padding:48px 24px;background:#18181b;color:#f4f4f5;font:15px/1.6 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace";
     \\document.documentElement.appendChild(el);}
     \\el.textContent="";
-    \\el.appendChild(div("color:#f87171;font-weight:700;font-size:16px;margin-bottom:12px","Build failed"));
-    \\el.appendChild(div("color:#7dd3fc;margin-bottom:8px",err.file+(err.line?":"+err.line:"")));
-    \\el.appendChild(div("white-space:pre-wrap",err.message));
-    \\el.appendChild(div("margin-top:16px;color:#a1a1aa","Still serving the last successful build. Fix the error and save to reload."));
+    \\var box=div("max-width:56rem;margin:0 auto;padding:24px 28px;border:1px solid #3f3f46;border-left:4px solid #f87171;border-radius:8px;background:#27272a","");
+    \\box.appendChild(div("color:#f87171;font-weight:700;font-size:18px;margin-bottom:16px","Build failed"));
+    \\box.appendChild(div("color:#7dd3fc;margin-bottom:8px",err.file+(err.line?":"+err.line:"")));
+    \\box.appendChild(div("white-space:pre-wrap;font-size:16px",err.message));
+    \\box.appendChild(div("margin-top:20px;color:#a1a1aa;font-size:13px","Still serving the last successful build. Fix the error and save to reload."));
+    \\el.appendChild(box);
     \\}
     \\})();</script>
 ;
@@ -938,4 +968,34 @@ test "dev server serves a site with a baseurl under its prefix" {
     mark = c.len;
     try c.send("GET /css/site.css HTTP/1.1\r\nhost: localhost\r\n\r\n");
     try testing.expect(try c.readUntil(mark, "not found", 5000));
+}
+
+test "a stylesheet-only change sends a css event instead of a reload" {
+    const io = testing.io;
+    var tmp = testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+    const root = try testServerSite(io, &tmp);
+    defer testing.allocator.free(root);
+    const site = SiteDir.borrow(io, tmp.dir);
+
+    const server = try Server.init(testing.allocator, io, root, .{ .port = 0 });
+    defer server.deinit();
+    var watcher = try Watcher.init(testing.allocator, io, root);
+    defer watcher.deinit();
+    try server.start();
+    try server.watch(&watcher);
+
+    var events = try TestClient.connect(io, server.port);
+    defer events.close();
+    try events.send("GET /__reload?since=1 HTTP/1.1\r\nhost: localhost\r\n\r\n");
+    try testing.expect(try events.readUntil(0, "retry: 1000", 5000));
+
+    var mark = events.len;
+    try site.writeFile("css/site.css", "body{color:red}");
+    try testing.expect(try events.readUntil(mark, "event: css\ndata: 2\n", 5000));
+
+    // A page change after that is a normal reload.
+    mark = events.len;
+    try site.writeFile("about.md", "changed\n");
+    try testing.expect(try events.readUntil(mark, "event: reload\ndata: 3\n", 5000));
 }
