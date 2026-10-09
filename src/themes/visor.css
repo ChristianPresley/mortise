@@ -1,12 +1,15 @@
 /* Mortise theme "visor": a helmet heads-up display.
    Written to /theme.css by `theme: visor` in _config.yml. Link it after
-   the site's own stylesheet. Plain CSS and inline SVG; no images, fonts,
-   or scripts. Motion stops under prefers-reduced-motion. */
+   the site's own stylesheet. The images in theme/ (a starfield, a radar,
+   a reticle, and a panel frame) are drawn by Mortise's renderer during the
+   build; there are no fonts or scripts. Motion stops under
+   prefers-reduced-motion. */
+@import url("theme/radar.css");
 
 :root {
   color-scheme: dark;
   --v-bg: #04070b;
-  --v-panel: rgba(9, 22, 31, .78);
+  --v-panel: rgba(7, 18, 26, .92);
   --v-panel-solid: #08141c;
   --v-line: rgba(92, 225, 255, .22);
   --v-cyan: #5ce1ff;
@@ -40,18 +43,23 @@
   --mt-radius: 2px;
 }
 
-html { background: var(--v-bg); scrollbar-color: var(--v-cyan-dim) transparent; }
+html {
+  scrollbar-color: var(--v-cyan-dim) transparent;
+  background:
+    radial-gradient(ellipse 80% 60% at 50% -10%, rgba(92, 225, 255, .13), transparent 70%) fixed,
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='56' height='98'%3E%3Cpath d='M28 0l28 16v33L28 65 0 49V16zM28 65v33' fill='none' stroke='%235ce1ff' stroke-opacity='.06'/%3E%3C/svg%3E"),
+    url("theme/stars.png") 0 0 / 1024px repeat fixed,
+    var(--v-bg);
+}
 
 :root body {
   color: var(--v-text);
-  background:
-    radial-gradient(ellipse 80% 60% at 50% -10%, rgba(92, 225, 255, .13), transparent 70%),
-    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='56' height='98'%3E%3Cpath d='M28 0l28 16v33L28 65 0 49V16zM28 65v33' fill='none' stroke='%235ce1ff' stroke-opacity='.06'/%3E%3C/svg%3E"),
-    var(--v-bg);
+  /* The sky is on html so it fills the window on short pages too. */
+  background: transparent;
   font-family: var(--v-display);
   font-size: 17px;
   letter-spacing: .01em;
-  cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='32' height='32'%3E%3Cg fill='none' stroke='%235ce1ff' stroke-width='1.5'%3E%3Ccircle cx='16' cy='16' r='9'/%3E%3Cpath d='M16 1v6M16 25v6M1 16h6M25 16h6'/%3E%3C/g%3E%3Ccircle cx='16' cy='16' r='1.5' fill='%23ffb347'/%3E%3C/svg%3E") 16 16, crosshair;
+  cursor: url("theme/reticle.png") 16 16, url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='32' height='32'%3E%3Cg fill='none' stroke='%235ce1ff' stroke-width='1.5'%3E%3Ccircle cx='16' cy='16' r='9'/%3E%3Cpath d='M16 1v6M16 25v6M1 16h6M25 16h6'/%3E%3C/g%3E%3Ccircle cx='16' cy='16' r='1.5' fill='%23ffb347'/%3E%3C/svg%3E") 16 16, crosshair;
 }
 :root body :is(a, button, label, summary, input) { cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='32' height='32'%3E%3Cg fill='none' stroke='%23ffb347' stroke-width='2'%3E%3Ccircle cx='16' cy='16' r='7'/%3E%3Cpath d='M16 3v7M16 22v7M3 16h7M22 16h7'/%3E%3C/g%3E%3C/svg%3E") 16 16, pointer; }
 
@@ -127,37 +135,23 @@ html { background: var(--v-bg); scrollbar-color: var(--v-cyan-dim) transparent; 
 :root body > header nav a.current { background: var(--v-cyan); color: #00121a; font-weight: 700; }
 
 /* Motion tracker: rings and blips behind the content, with a sweep. */
-:root body > main::before,
-:root body > main::after {
+/* Motion tracker: a rendered scope (theme/radar.png, 24 frames) behind the
+   content. Its keyframes come from theme/radar.css. */
+:root body > main::before {
   content: "";
   position: fixed;
   right: 1.25rem;
   bottom: 1.25rem;
-  width: 7.5rem;
-  height: 7.5rem;
-  border-radius: 50%;
+  width: 128px;
+  height: 128px;
   z-index: -1;
   pointer-events: none;
+  background: url("theme/radar.png") 0 0 no-repeat;
+  animation: radar-frames 2.6s step-end infinite;
+  opacity: .9;
+  transform: scale(.75);
+  transform-origin: bottom right;
 }
-:root body > main::before {
-  border: 1px solid rgba(92, 225, 255, .45);
-  background:
-    radial-gradient(circle at 32% 38%, var(--v-red) 0 2.5px, transparent 3.5px),
-    radial-gradient(circle at 70% 64%, var(--v-amber) 0 2px, transparent 3px),
-    radial-gradient(circle, transparent 0 32%, rgba(92, 225, 255, .3) 32.5% 33.5%, transparent 34% 65%, rgba(92, 225, 255, .3) 65.5% 66.5%, transparent 67%),
-    linear-gradient(rgba(92, 225, 255, .25), rgba(92, 225, 255, .25)) center / 1px 100% no-repeat,
-    linear-gradient(rgba(92, 225, 255, .25), rgba(92, 225, 255, .25)) center / 100% 1px no-repeat,
-    radial-gradient(circle, rgba(92, 225, 255, .1), rgba(4, 7, 11, .85) 72%);
-  animation: v-blips 2.6s ease-in-out infinite;
-}
-:root body > main::after {
-  background: conic-gradient(from 0deg, rgba(92, 225, 255, .5), rgba(92, 225, 255, 0) 70deg, transparent);
-  -webkit-mask: radial-gradient(circle, #000 70%, transparent 71%);
-  mask: radial-gradient(circle, #000 70%, transparent 71%);
-  animation: v-spin 2.6s linear infinite;
-}
-@keyframes v-spin { to { transform: rotate(1turn); } }
-@keyframes v-blips { 0%, 100% { filter: brightness(.7); } 40% { filter: brightness(1.4); } }
 
 /* Headings: mission readouts. */
 :root body :is(h1, h2, h3, h4) { font-family: var(--v-display); color: #fff; font-weight: 700; letter-spacing: .04em; }
@@ -260,7 +254,7 @@ html { background: var(--v-bg); scrollbar-color: var(--v-cyan-dim) transparent; 
 }
 :root body > footer p::before { content: "SYS ▸ NOMINAL  ·  "; color: var(--v-green); letter-spacing: .2em; }
 
-@media (max-width: 1250px) {
+@media (max-width: 1350px) {
   :root body > main::before, :root body > main::after { display: none; }
 }
 @media (max-width: 760px) {
@@ -290,4 +284,13 @@ html { background: var(--v-bg); scrollbar-color: var(--v-cyan-dim) transparent; 
   :root body > header { position: static; flex-direction: column; align-items: flex-start; gap: .7rem; }
   :root body > header nav { gap: .3rem; }
   :root body .wiki-nav { max-height: none; }
+}
+/* Cards and the contents box sit in a rendered HUD frame with chamfered
+   corners and glowing brackets (theme/panel.png). */
+:root body :is(.mt-card, .toc-box, .mt-api-card) {
+  border: 22px solid transparent;
+  border-image: url("theme/panel.png") 62 fill / 22px / 6px stretch;
+  border-radius: 0;
+  background: none;
+  padding: .55rem .8rem;
 }

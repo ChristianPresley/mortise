@@ -84,7 +84,7 @@ test "the showcase example builds" {
         std.debug.print("showcase failed to build: {f}\n", .{diag});
         return err;
     };
-    for ([_][]const u8{ "index.html", "page/2/index.html", "tags/index.html", "docs/index.html", "404.html", "feed.xml", "sitemap.xml", "tags/templates/index.html", "components/index.html", "mortise.css", "code/index.html", "wiki/index.html", "docs/install/index.html", "api/pets/index.html", "api/accounts/index.html", "api/index.html", "theme.css", "rendering.html", "images/rendered/stars.png", "images/rendered/hud-panel.css", "images/rendered/radar.css" }) |p| {
+    for ([_][]const u8{ "index.html", "page/2/index.html", "tags/index.html", "docs/index.html", "404.html", "feed.xml", "sitemap.xml", "tags/templates/index.html", "components/index.html", "mortise.css", "code/index.html", "wiki/index.html", "docs/install/index.html", "api/pets/index.html", "api/accounts/index.html", "api/index.html", "theme.css", "rendering.html", "images/rendered/stars.png", "images/rendered/hud-panel.css", "images/rendered/radar.css", "theme/stars.png", "theme/radar.png", "theme/radar.css", "theme/reticle.png", "theme/panel.png" }) |p| {
         if (site.find(p) == null) {
             std.debug.print("showcase is missing {s}\n", .{p});
             return error.TestExpectedOutput;
