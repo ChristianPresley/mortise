@@ -25,6 +25,7 @@ const frontmatter = @import("frontmatter.zig");
 const template = @import("template.zig");
 const feeds = @import("feeds.zig");
 const data_files = @import("data.zig");
+const openapi = @import("openapi.zig");
 const Value = template.Value;
 const Entry = template.Entry;
 
@@ -262,6 +263,10 @@ pub fn buildWith(arena: Allocator, src: SiteDir, options: Options, diag: *Diagno
             if (try loadPage(&b, path, true)) |p| try pages.append(arena, p);
             continue;
         }
+        if (openapi.isSpec(path)) {
+            try pages.append(arena, try loadApiPage(&b, path));
+            continue;
+        }
         if (sitepath.hasHiddenComponent(path)) continue;
 
         const ext = sitepath.extension(path);
@@ -318,6 +323,8 @@ pub fn rebuild(arena: Allocator, src: SiteDir, prev: *const Site, changed: []con
         }
         // Unpublished files such as `_drafts/` never affect the output, as
         // long as they are not new pages in disguise.
+        // A new API spec adds a page.
+        if (openapi.isSpec(path)) return buildWith(arena, src, st.options, diag);
         if (sitepath.hasHiddenComponent(path) and !std.mem.startsWith(u8, path, "_posts/")) continue;
         // Something unknown that no longer exists, such as an editor's
         // temporary file that was renamed over a page, changed nothing,
@@ -576,6 +583,7 @@ fn startsWithFrontmatter(b: *Builder, path: []const u8) Error!bool {
 
 /// Reads and parses a page or post. Returns null for drafts.
 fn loadPage(b: *Builder, path: []const u8, is_post: bool) Error!?Page {
+    if (openapi.isSpec(path)) return try loadApiPage(b, path);
     const arena = b.arena;
     const data = try b.read(path);
     var fd: frontmatter.Diagnostic = .{};
@@ -657,6 +665,43 @@ fn loadPage(b: *Builder, path: []const u8, is_post: bool) Error!?Page {
     };
     if (b.baseurl.len > 0) page.url = try std.mem.concat(arena, u8, &.{ b.baseurl, page.url });
     return page;
+}
+
+/// Turns `_api/NAME.json` into a page at `/api/NAME/` holding the rendered
+/// reference, laid out with `_layouts/api.html`, else `_layouts/doc.html`,
+/// else no layout. `page.toc` lists its tags and operations.
+fn loadApiPage(b: *Builder, path: []const u8) Error!Page {
+    const arena = b.arena;
+    var od: openapi.Diagnostic = .{};
+    const r = openapi.render(arena, try b.read(path), &od) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.InvalidSpec => return b.fail(path, od.line, "{s}", .{od.message}),
+    };
+    var fields: std.ArrayList(frontmatter.Entry) = .empty;
+    try fields.append(arena, .{ .key = "title", .value = .{ .string = r.title } });
+    if (r.description.len > 0) try fields.append(arena, .{ .key = "description", .value = .{ .string = r.description } });
+    for ([_][]const u8{ "api", "doc" }) |name| {
+        const layout_path = try std.fmt.allocPrint(arena, "_layouts/{s}.html", .{name});
+        if (b.exists(layout_path)) {
+            try fields.append(arena, .{ .key = "layout", .value = .{ .string = name } });
+            break;
+        }
+    }
+    const name = sitepath.stem(path);
+    const url = try std.fmt.allocPrint(arena, "{s}/api/{s}/", .{ b.baseurl, name });
+    return .{
+        .source = path,
+        .is_post = false,
+        .is_markdown = true,
+        .fields = .{ .entries = fields.items },
+        .body = "",
+        .body_line = 1,
+        .url = url,
+        .out_path = try std.fmt.allocPrint(arena, "api/{s}/index.html", .{name}),
+        .html = r.html,
+        .toc = if (r.toc.len > 0) r.toc else null,
+        .uses_components = true,
+    };
 }
 
 /// Best-effort line number of `key:` in a file's frontmatter, or 0.
