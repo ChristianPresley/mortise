@@ -60,6 +60,43 @@ Linux, macOS, and Windows.
 
 Unknown names (`:::foo`) are not containers and stay paragraph text.
 
+## Task lists
+
+A list item starting with `[ ]` or `[x]` gets a checkbox:
+
+```markdown
+- [x] Write the parser
+- [ ] Ship it
+```
+
+Output: `<li class="mt-task"><input type="checkbox" disabled checked> ...`.
+
+## Footnotes
+
+```markdown
+Mortise is written in Zig[^zig].
+
+[^zig]: A systems language.
+    Indent further paragraphs by four spaces.
+```
+
+References are numbered in order of first use as `<sup class="mt-fnref">`
+links, and the footnotes are listed at the end of the page in a
+`<section class="mt-footnotes">`, each with a link back to the text. A
+reference to a label with no definition stays literal text.
+
+## Definition lists
+
+A term line followed by one or more lines starting with `: `:
+
+```markdown
+Layout
+: A template that wraps page content.
+: Lives in _layouts/.
+```
+
+Output: `<dl class="mt-dl">` with `<dt>` and `<dd>` elements.
+
 ## Tabs and code groups
 
 Tabs work without JavaScript: each tab is a radio button and its label,

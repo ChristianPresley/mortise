@@ -3,6 +3,7 @@
   { "title": "Docs", "url": "/docs/" },
   { "title": "Components", "url": "/components/" },
   { "title": "Code", "url": "/code/" },
+  { "title": "Wiki", "url": "/wiki/" },
   { "title": "Tags", "url": "/tags/" },
   { "title": "About", "url": "/about/" }
 ]
