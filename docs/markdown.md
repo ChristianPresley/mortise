@@ -101,6 +101,22 @@ const x = 1;
 - A list may interrupt a paragraph only if its first item is not empty and,
   when ordered, starts at 1.
 
+### Tables
+
+GitHub-style tables: a header row containing `|`, then a delimiter row of
+`---` cells with the same number of cells, then body rows until a blank
+line or another block. Leading and trailing pipes are optional, and `\|`
+is a literal pipe inside a cell. Colons in the delimiter row set column
+alignment (`:--` left, `:-:` center, `--:` right), written as an `align`
+attribute. Short body rows are padded with empty cells and extra cells are
+dropped. Cells are parsed for inlines.
+
+```markdown
+| Name | Count |
+| :--- | ----: |
+| a    |     1 |
+```
+
 ## Inlines
 
 ### Emphasis
@@ -109,6 +125,11 @@ const x = 1;
 `<strong>`. Matching follows CommonMark's delimiter-run rules, including
 left/right flanking, the "multiple of three" rule, and the rule that `_`
 does not create emphasis inside a word, so `snake_case_name` stays plain.
+
+### Strikethrough
+
+`~~text~~` or `~text~` renders as `<del>`. The opening and closing runs
+must have the same length; runs of three or more tildes are literal text.
 
 ### Inline code
 
@@ -169,4 +190,5 @@ These render as plain paragraph text:
 - Reference-style links and link reference definitions.
 - HTML entities and numeric character references (`&amp;` renders as
   `&amp;amp;`).
-- Tables, task lists, strikethrough, footnotes, and other extensions.
+- Task lists, footnotes, and other extensions besides tables and
+  strikethrough.

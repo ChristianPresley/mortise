@@ -2,9 +2,11 @@
 
 <div>raw html is escaped</div>
 
-| tables | are |
-| ------ | --- |
-| not    | supported |
+- [ ] task lists are plain list items
+
+Footnotes[^1] are literal.
+
+[^1]: Like this one.
 
 Entities like &copy; are escaped.
 
