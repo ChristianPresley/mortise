@@ -275,6 +275,14 @@ pub const Server = struct {
         w.flush() catch {};
     }
 
+    /// Writes the URL the site is served at, including its baseurl.
+    pub fn writeUrl(s: *Server, w: *Io.Writer) Io.Writer.Error!void {
+        const snap = s.acquire();
+        defer if (snap) |sn| s.release(sn);
+        const base = if (snap) |sn| sn.site.baseurl else "";
+        try w.print("http://localhost:{d}{s}/", .{ s.port, base });
+    }
+
     fn acquire(s: *Server) ?*Snapshot {
         s.mutex.lockUncancelable(s.io);
         defer s.mutex.unlock(s.io);

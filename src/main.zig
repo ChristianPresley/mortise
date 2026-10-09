@@ -225,9 +225,9 @@ fn cmdServe(ctx: Ctx, rest: []const [:0]const u8) u8 {
         ctx.err.print("mortise: cannot start watching: {s}\n", .{@errorName(e)}) catch {};
         return 1;
     };
-    ctx.out.print("Serving {s} at http://localhost:{d}/ (watching with {s}). Press Ctrl+C to stop.\n", .{
-        args.dir, server.port, watcher.backendName(),
-    }) catch {};
+    ctx.out.print("Serving {s} at ", .{args.dir}) catch {};
+    server.writeUrl(ctx.out) catch {};
+    ctx.out.print(" (watching with {s}). Press Ctrl+C to stop.\n", .{watcher.backendName()}) catch {};
     ctx.out.flush() catch {};
     server.wait();
     return 0;
