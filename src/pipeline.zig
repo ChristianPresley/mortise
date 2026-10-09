@@ -996,7 +996,7 @@ test "pages, posts, layouts, and static files" {
         "<title>Hello | Test Site</title><article><p>First post.</p>\n</article>",
         site.find("2024/01/05/hello/index.html").?.data.bytes,
     );
-    try testing.expectEqualStrings("<h1>About <em>me</em></h1>\n", site.find("about/index.html").?.data.bytes);
+    try testing.expectEqualStrings("<h1 id=\"about-me\">About <em>me</em></h1>\n", site.find("about/index.html").?.data.bytes);
     try testing.expect(site.find("plain.html").?.data == .copy);
 
     // The home page depends on itself, its layout, and the include it used.

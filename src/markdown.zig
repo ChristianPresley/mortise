@@ -22,7 +22,8 @@ pub fn toHtml(arena: Allocator, src: []const u8) Allocator.Error![]u8 {
 pub fn render(arena: Allocator, src: []const u8, w: *Writer) Error!void {
     const lines = try splitLines(arena, src);
     const doc = try parseBlocks(arena, lines);
-    try renderBlocks(arena, doc.blocks, false, w);
+    var r: Renderer = .{ .arena = arena };
+    try renderBlocks(&r, doc.blocks, false, w);
 }
 
 // ---------------------------------------------------------------------------
@@ -394,21 +395,54 @@ fn parseQuote(arena: Allocator, lines: []const []const u8, start: usize, out: *s
     return j;
 }
 
-fn renderBlocks(arena: Allocator, blocks: []const Block, tight: bool, w: *Writer) Error!void {
-    for (blocks) |b| try renderBlock(arena, b, tight, w);
+/// State for rendering one document.
+const Renderer = struct {
+    arena: Allocator,
+    /// Heading ids already used, so each id in the document is unique.
+    ids: std.StringHashMapUnmanaged(void) = .empty,
+
+    /// A unique id for a heading whose plain text is `text`: lowercase
+    /// ASCII letters and digits, `-` and `_`, with spaces as `-`, other
+    /// punctuation dropped, and non-ASCII bytes kept. Repeats get `-1`,
+    /// `-2`, and so on.
+    fn headingId(r: *Renderer, text: []const u8) Allocator.Error![]const u8 {
+        var slug: std.ArrayList(u8) = .empty;
+        for (text) |c| switch (c) {
+            'A'...'Z' => try slug.append(r.arena, c + 32),
+            'a'...'z', '0'...'9', '-', '_', 0x80...0xff => try slug.append(r.arena, c),
+            ' ', '\t', '\n' => try slug.append(r.arena, '-'),
+            else => {},
+        };
+        const base = if (slug.items.len == 0) "section" else slug.items;
+        var id: []const u8 = base;
+        var n: usize = 1;
+        while (r.ids.contains(id)) : (n += 1) {
+            id = try std.fmt.allocPrint(r.arena, "{s}-{d}", .{ base, n });
+        }
+        try r.ids.put(r.arena, id, {});
+        return id;
+    }
+};
+
+fn renderBlocks(r: *Renderer, blocks: []const Block, tight: bool, w: *Writer) Error!void {
+    for (blocks) |b| try renderBlock(r, b, tight, w);
 }
 
-fn renderBlock(arena: Allocator, b: Block, tight: bool, w: *Writer) Error!void {
+fn renderBlock(r: *Renderer, b: Block, tight: bool, w: *Writer) Error!void {
+    const arena = r.arena;
     switch (b) {
         .thematic_break => try w.writeAll("<hr />\n"),
         .quote => |children| {
             try w.writeAll("<blockquote>\n");
-            try renderBlocks(arena, children, false, w);
+            try renderBlocks(r, children, false, w);
             try w.writeAll("</blockquote>\n");
         },
         .heading => |h| {
-            try w.print("<h{d}>", .{h.level});
-            try renderInline(arena, h.text, w);
+            const nodes = try parseInlines(arena, h.text);
+            try w.print("<h{d} id=\"", .{h.level});
+            try escapeHtml(w, try r.headingId(try plainText(arena, nodes)));
+            try w.writeAll("\">");
+            for (nodes) |n| try renderNode(n, w);
             try w.print("</h{d}>\n", .{h.level});
         },
         .paragraph => |p| {
@@ -447,7 +481,7 @@ fn renderBlock(arena: Allocator, b: Block, tight: bool, w: *Writer) Error!void {
                         if (idx + 1 < children.len) try w.writeAll("\n");
                     } else {
                         if (idx == 0) try w.writeAll("\n");
-                        try renderBlock(arena, child, l.tight, w);
+                        try renderBlock(r, child, l.tight, w);
                     }
                 }
                 try w.writeAll("</li>\n");
@@ -975,10 +1009,17 @@ fn expectHtml(expected: []const u8, src: []const u8) !void {
 }
 
 test "headings" {
-    try expectHtml("<h1>Title</h1>\n", "# Title");
-    try expectHtml("<h3>Three</h3>\n", "### Three ###");
-    try expectHtml("<h2>a#</h2>\n", "## a#");
-    try expectHtml("<h1></h1>\n", "#");
+    try expectHtml("<h1 id=\"title\">Title</h1>\n", "# Title");
+    try expectHtml("<h3 id=\"three\">Three</h3>\n", "### Three ###");
+    try expectHtml("<h2 id=\"a\">a#</h2>\n", "## a#");
+    try expectHtml("<h1 id=\"section\"></h1>\n", "#");
+}
+
+test "heading ids are slugs, unique within a document" {
+    try expectHtml(
+        "<h2 id=\"zig-016-notes\">Zig 0.16: notes</h2>\n<h2 id=\"zig-016-notes-1\">Zig 0.16: <em>notes</em></h2>\n<h2 id=\"café\">Café!</h2>\n",
+        "## Zig 0.16: notes\n## Zig 0.16: *notes*\n## Café!",
+    );
     try expectHtml("<p>#nospace</p>\n", "#nospace");
     try expectHtml("<p>####### seven</p>\n", "####### seven");
 }
@@ -986,7 +1027,7 @@ test "headings" {
 test "paragraphs and soft breaks" {
     try expectHtml("<p>one\ntwo</p>\n<p>three</p>\n", "one \n  two\n\nthree\n");
     try expectHtml("<p>one<br />\ntwo<br />\nthree</p>\n", "one  \ntwo\\\nthree");
-    try expectHtml("<p>a</p>\n<h2>b</h2>\n", "a\n## b");
+    try expectHtml("<p>a</p>\n<h2 id=\"b\">b</h2>\n", "a\n## b");
 }
 
 test "fenced code" {
