@@ -53,6 +53,17 @@ job:
   `javascript:` URL in a source file is written to the output unchanged.
 - Emphasis rules treat non-ASCII whitespace and punctuation as letters.
 
+## Feed and sitemap
+
+- The feed and sitemap are only generated when `_config.yml` sets an
+  absolute `url`.
+- Feed entries use midnight UTC on the post's date as their time, so builds
+  stay reproducible. Posts without a title get an empty one.
+- Feed content is the post's rendered Markdown; relative links in it are
+  not rewritten to absolute ones.
+- The sitemap has no `changefreq` or `priority`, and `lastmod` only for
+  posts.
+
 ## Templates
 
 - Five built-in filters and no custom filters.

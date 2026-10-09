@@ -67,6 +67,12 @@ my-site/
 - `baseurl: /blog` in `_config.yml` serves the site under a path prefix:
   page URLs start with it, `serve` serves under it, and templates can link
   to static files with `{{ site.baseurl }}/css/site.css`.
+- `url: https://example.com` in `_config.yml` turns on two generated files:
+  an Atom feed of the 20 newest posts at `feed.xml` and a sitemap of every
+  page at `sitemap.xml`. Set `feed: false` or `sitemap: false` to skip one,
+  or `sitemap: false` in a page's frontmatter to leave that page out. A file
+  of your own at either path takes precedence. The feed's author is
+  `author` from the config, or the site title.
 - Templates see `site` (config values plus `site.posts`, newest first, and
   `site.pages`), `page` (frontmatter plus `url`, `path`, and for posts `date`
   and `slug`), and in layouts `content`.
