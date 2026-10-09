@@ -1,10 +1,13 @@
-> Blockquotes are not supported.
-
----
-
     Indented code is a paragraph.
 
 <div>raw html is escaped</div>
 
-Line ending with two spaces  
-is a soft break.
+| tables | are |
+| ------ | --- |
+| not    | supported |
+
+Entities like &copy; are escaped.
+
+[reference links][ref] are literal.
+
+[ref]: https://example.com

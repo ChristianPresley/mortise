@@ -33,6 +33,8 @@ const Block = union(enum) {
     paragraph: []const u8,
     code: struct { info: []const u8, text: []const u8 },
     list: List,
+    quote: []const Block,
+    thematic_break,
 };
 
 const List = struct {
@@ -113,6 +115,11 @@ fn parseBlocks(arena: Allocator, lines: []const []const u8) Allocator.Error!Pars
 
         if (fenceStart(line)) |f| {
             i = try parseFence(arena, lines, i, f, &blocks);
+        } else if (isThematicBreak(line)) {
+            try blocks.append(arena, .thematic_break);
+            i += 1;
+        } else if (quoteContent(line) != null) {
+            i = try parseQuote(arena, lines, i, &blocks);
         } else if (atxHeading(line)) |h| {
             try blocks.append(arena, h);
             i += 1;
@@ -238,6 +245,7 @@ fn listMarker(line: []const u8) ?Marker {
 /// Whether `line` starts a block that may interrupt a paragraph.
 fn interruptsParagraph(line: []const u8) bool {
     if (fenceStart(line) != null or atxHeading(line) != null) return true;
+    if (isThematicBreak(line) or quoteContent(line) != null) return true;
     if (listMarker(line)) |m| return !m.empty and (!m.ordered or m.start == 1);
     return false;
 }
@@ -314,11 +322,75 @@ fn parseParagraph(arena: Allocator, lines: []const []const u8, start: usize, out
     var j = start + 1;
     while (j < lines.len) : (j += 1) {
         const l = lines[j];
+        // A setext underline turns the paragraph so far into a heading. It
+        // is checked first because `---` would otherwise be a thematic break.
+        if (setextLevel(l)) |level| {
+            try out.append(arena, .{ .heading = .{ .level = level, .text = trimRight(text.items) } });
+            return j + 1;
+        }
         if (isBlank(l) or interruptsParagraph(l)) break;
         try text.append(arena, '\n');
         try text.appendSlice(arena, trimLeft(l));
     }
     try out.append(arena, .{ .paragraph = trimRight(text.items) });
+    return j;
+}
+
+/// 1 for a `===` underline, 2 for `---`, null otherwise.
+fn setextLevel(line: []const u8) ?u8 {
+    const ind = indentOf(line);
+    if (ind > 3 or ind >= line.len) return null;
+    const c = line[ind];
+    if (c != '=' and c != '-') return null;
+    const rest = trimRight(line[ind..]);
+    for (rest) |x| if (x != c) return null;
+    return if (c == '=') 1 else 2;
+}
+
+/// Three or more `-`, `*`, or `_`, optionally separated by spaces.
+fn isThematicBreak(line: []const u8) bool {
+    const ind = indentOf(line);
+    if (ind > 3 or ind >= line.len) return false;
+    const c = line[ind];
+    if (c != '-' and c != '*' and c != '_') return false;
+    var n: usize = 0;
+    for (line[ind..]) |x| {
+        if (x == c) {
+            n += 1;
+        } else if (x != ' ' and x != '\t') return false;
+    }
+    return n >= 3;
+}
+
+/// The text after a block quote marker (`>` and one optional space), or
+/// null if `line` does not start a quote.
+fn quoteContent(line: []const u8) ?[]const u8 {
+    const ind = indentOf(line);
+    if (ind > 3 or ind >= line.len or line[ind] != '>') return null;
+    const rest = line[ind + 1 ..];
+    return if (rest.len > 0 and rest[0] == ' ') rest[1..] else rest;
+}
+
+fn parseQuote(arena: Allocator, lines: []const []const u8, start: usize, out: *std.ArrayList(Block)) Allocator.Error!usize {
+    var inner: std.ArrayList([]const u8) = .empty;
+    var j = start;
+    var in_paragraph = false;
+    while (j < lines.len) : (j += 1) {
+        const l = lines[j];
+        if (quoteContent(l)) |content| {
+            try inner.append(arena, content);
+            in_paragraph = !isBlank(content) and fenceStart(content) == null;
+            continue;
+        }
+        // Lazy continuation of a paragraph inside the quote.
+        if (in_paragraph and !isBlank(l) and !interruptsParagraph(l)) {
+            try inner.append(arena, l);
+            continue;
+        }
+        break;
+    }
+    const parsed = try parseBlocks(arena, inner.items);
+    try out.append(arena, .{ .quote = parsed.blocks });
     return j;
 }
 
@@ -328,6 +400,12 @@ fn renderBlocks(arena: Allocator, blocks: []const Block, tight: bool, w: *Writer
 
 fn renderBlock(arena: Allocator, b: Block, tight: bool, w: *Writer) Error!void {
     switch (b) {
+        .thematic_break => try w.writeAll("<hr />\n"),
+        .quote => |children| {
+            try w.writeAll("<blockquote>\n");
+            try renderBlocks(arena, children, false, w);
+            try w.writeAll("</blockquote>\n");
+        },
         .heading => |h| {
             try w.print("<h{d}>", .{h.level});
             try renderInline(arena, h.text, w);
@@ -495,10 +573,29 @@ fn parseInlines(arena: Allocator, s: []const u8) Allocator.Error![]const Inline 
                 i = try closeBracket(&p, i);
                 text_start = i;
             },
+            '<' => {
+                if (autolink(s[i..])) |len| {
+                    try p.addText(s[text_start..i]);
+                    try p.add(.{ .raw = try autolinkHtml(arena, s[i + 1 .. i + len - 1]) });
+                    i += len;
+                    text_start = i;
+                } else i += 1;
+            },
             '\n' => {
-                // Soft line break: drop trailing spaces before it.
-                try p.addText(trimRight(s[text_start..i]));
-                try p.add(.{ .text = "\n" });
+                const before = s[text_start..i];
+                if (std.mem.endsWith(u8, before, "\\")) {
+                    // Hard line break: a backslash at the end of the line.
+                    try p.addText(before[0 .. before.len - 1]);
+                    try p.add(.{ .raw = .{ .html = "<br />\n", .plain = "\n" } });
+                } else if (std.mem.endsWith(u8, before, "  ")) {
+                    // Hard line break: two or more spaces at the end.
+                    try p.addText(trimRight(before));
+                    try p.add(.{ .raw = .{ .html = "<br />\n", .plain = "\n" } });
+                } else {
+                    // Soft line break: drop trailing spaces before it.
+                    try p.addText(trimRight(before));
+                    try p.add(.{ .text = "\n" });
+                }
                 i += 1;
                 while (i < s.len and s[i] == ' ') i += 1;
                 text_start = i;
@@ -509,6 +606,57 @@ fn parseInlines(arena: Allocator, s: []const u8) Allocator.Error![]const Inline 
     try p.addText(s[text_start..]);
     try processEmphasis(arena, p.nodes.items, 0);
     return p.nodes.items;
+}
+
+/// Length of an autolink (`<https://...>` or `<name@example.com>`) at the
+/// start of `s`, including the angle brackets, or null.
+fn autolink(s: []const u8) ?usize {
+    const close = std.mem.indexOfScalar(u8, s, '>') orelse return null;
+    const inner = s[1..close];
+    if (inner.len == 0) return null;
+    for (inner) |c| if (c <= ' ' or c == '<' or c == 0x7f) return null;
+    if (isUriAutolink(inner) or isEmailAutolink(inner)) return close + 1;
+    return null;
+}
+
+/// A scheme of 2-32 letters, digits, `+`, `.`, or `-` starting with a
+/// letter, then `:`.
+fn isUriAutolink(s: []const u8) bool {
+    const colon = std.mem.indexOfScalar(u8, s, ':') orelse return false;
+    if (colon < 2 or colon > 32 or !std.ascii.isAlphabetic(s[0])) return false;
+    for (s[0..colon]) |c| {
+        if (!(std.ascii.isAlphanumeric(c) or c == '+' or c == '.' or c == '-')) return false;
+    }
+    return true;
+}
+
+fn isEmailAutolink(s: []const u8) bool {
+    const at = std.mem.indexOfScalar(u8, s, '@') orelse return false;
+    if (at == 0 or at + 1 >= s.len) return false;
+    for (s[0..at]) |c| {
+        if (!(std.ascii.isAlphanumeric(c) or std.mem.indexOfScalar(u8, ".!#$%&'*+/=?^_`{|}~-", c) != null)) return false;
+    }
+    var labels = std.mem.splitScalar(u8, s[at + 1 ..], '.');
+    while (labels.next()) |label| {
+        if (label.len == 0 or label.len > 63 or label[0] == '-' or label[label.len - 1] == '-') return false;
+        for (label) |c| if (!(std.ascii.isAlphanumeric(c) or c == '-')) return false;
+    }
+    return true;
+}
+
+fn autolinkHtml(arena: Allocator, target: []const u8) Allocator.Error!@FieldType(Inline, "raw") {
+    var aw: Writer.Allocating = .init(arena);
+    writeAutolink(&aw.writer, target, !isUriAutolink(target)) catch return error.OutOfMemory;
+    return .{ .html = try aw.toOwnedSlice(), .plain = target };
+}
+
+fn writeAutolink(w: *Writer, target: []const u8, email: bool) Writer.Error!void {
+    try w.writeAll("<a href=\"");
+    if (email) try w.writeAll("mailto:");
+    try escapeHtml(w, target);
+    try w.writeAll("\">");
+    try escapeHtml(w, target);
+    try w.writeAll("</a>");
 }
 
 fn addBracket(p: *InlineParser, image: bool) Allocator.Error!void {
@@ -836,7 +984,8 @@ test "headings" {
 }
 
 test "paragraphs and soft breaks" {
-    try expectHtml("<p>one\ntwo</p>\n<p>three</p>\n", "one  \n  two\n\nthree\n");
+    try expectHtml("<p>one\ntwo</p>\n<p>three</p>\n", "one \n  two\n\nthree\n");
+    try expectHtml("<p>one<br />\ntwo<br />\nthree</p>\n", "one  \ntwo\\\nthree");
     try expectHtml("<p>a</p>\n<h2>b</h2>\n", "a\n## b");
 }
 

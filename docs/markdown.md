@@ -24,12 +24,13 @@ spec. Each `name.md` must render exactly to `name.html`.
 Consecutive non-blank lines form a paragraph. Leading whitespace on each
 line and trailing whitespace on the last line are removed. Line breaks inside
 a paragraph are kept as newlines (soft breaks). A blank line ends the
-paragraph, as does any line that starts a heading, a fenced code block, or a
-list (see "Lists" for which list markers may interrupt a paragraph).
+paragraph, as does any line that starts a heading, a fenced code block, a
+block quote, a thematic break, or a list (see "Lists" for which list
+markers may interrupt a paragraph).
 
 ### Headings
 
-ATX headings only: one to six `#` characters, indented by at most three
+**ATX headings:** one to six `#` characters, indented by at most three
 spaces, followed by a space, a tab, or the end of the line. An optional
 closing run of `#` characters preceded by a space is removed. Heading text is
 parsed for inlines.
@@ -39,7 +40,29 @@ parsed for inlines.
 ## Section ##
 ```
 
-Setext headings (text underlined with `===` or `---`) are not supported.
+**Setext headings:** a paragraph followed by a line of only `=` (level 1)
+or only `-` (level 2) characters, indented by at most three spaces. The
+underline wins over a thematic break, so `---` under text makes a heading.
+
+```markdown
+Title
+=====
+```
+
+### Thematic breaks
+
+Three or more `-`, `*`, or `_` characters on a line of their own, optionally
+separated by spaces and indented by at most three spaces, render as
+`<hr />`. A thematic break takes precedence over a list item, so `- - -`
+is a break.
+
+### Block quotes
+
+Lines starting with `>` (indented by at most three spaces, with one
+optional space after the marker) form a block quote. The text after the
+markers is parsed as blocks, so quotes can contain lists, code, and other
+quotes. A line without `>` directly after paragraph text in a quote
+continues that paragraph (lazy continuation).
 
 ### Fenced code blocks
 
@@ -113,6 +136,19 @@ Inline links only: `[text](destination)` or `[text](destination "title")`.
 text is the plain text of the bracketed content, with emphasis markup
 removed. Images may appear inside link text.
 
+### Autolinks
+
+`<https://example.com>` and any other `<scheme:...>` with a scheme of 2 to
+32 letters, digits, `+`, `.`, or `-` renders as a link to itself.
+`<name@example.com>` renders as a `mailto:` link. Anything else in angle
+brackets is escaped text.
+
+### Hard line breaks
+
+A line inside a paragraph that ends with two or more spaces, or with a
+backslash, is followed by `<br />`. Other line breaks are soft and kept as
+newlines.
+
 ### Backslash escapes
 
 A backslash before any ASCII punctuation character produces that character
@@ -128,12 +164,9 @@ through.
 
 These render as plain paragraph text:
 
-- Block quotes (`>`), thematic breaks (`---`, `***`), setext headings.
 - Indented code blocks (four-space indented lines become paragraph text).
 - Raw HTML blocks and inline HTML, which are escaped instead.
-- Reference-style links and link reference definitions, autolinks
-  (`<https://...>`).
+- Reference-style links and link reference definitions.
 - HTML entities and numeric character references (`&amp;` renders as
   `&amp;amp;`).
-- Hard line breaks (trailing two spaces or a trailing backslash).
 - Tables, task lists, strikethrough, footnotes, and other extensions.
