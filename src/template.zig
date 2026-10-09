@@ -468,7 +468,14 @@ fn parseExpr(lx: *Lexer) ParseError!Expr {
             const path = segs.items;
             if (path.len >= 2 and std.mem.eql(u8, path[0], "site") and
                 (std.mem.eql(u8, path[1], "posts") or std.mem.eql(u8, path[1], "pages") or
-                    std.mem.eql(u8, path[1], "tags")))
+                    std.mem.eql(u8, path[1], "tags") or std.mem.eql(u8, path[1], "nav")))
+            {
+                lx.p.reads_collections = true;
+            }
+            // Navigation fields depend on other pages' titles and URLs.
+            if (path.len >= 2 and std.mem.eql(u8, path[0], "page") and
+                (std.mem.eql(u8, path[1], "breadcrumbs") or std.mem.eql(u8, path[1], "previous") or
+                    std.mem.eql(u8, path[1], "next")))
             {
                 lx.p.reads_collections = true;
             }
