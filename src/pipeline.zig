@@ -137,6 +137,9 @@ const Page = struct {
     date: []const u8 = "",
     /// Rendered Markdown, or null for HTML templates.
     html: ?[]const u8,
+    /// Table of contents of the Markdown's level 2 and 3 headings, as HTML,
+    /// or null when there are none.
+    toc: ?[]const u8 = null,
     object: template.Object = .{},
     /// Set once rendered: the output and what it depended on.
     output: []const u8 = "",
@@ -492,7 +495,9 @@ fn finish(b: *Builder, config_fields: frontmatter.Map, pages: []Page, statics: [
     try site_entries.append(arena, .{ .key = "posts", .value = .{ .list = post_values.items } });
     try site_entries.append(arena, .{ .key = "pages", .value = .{ .list = page_values.items } });
     try site_entries.append(arena, .{ .key = "data", .value = b.data });
-    try site_entries.append(arena, .{ .key = "tags", .value = try tagIndex(arena, pages) });
+    const tag_pages = b.exists(tag_layout);
+    const tags = try tagIndex(arena, pages, if (tag_pages) b.baseurl else null);
+    try site_entries.append(arena, .{ .key = "tags", .value = tags });
     b.site = .{ .entries = site_entries.items };
 
     var rendered: usize = 0;
@@ -514,6 +519,7 @@ fn finish(b: *Builder, config_fields: frontmatter.Map, pages: []Page, statics: [
         d.* = .{ .output = p.out_path, .sources = p.sources, .reads_collections = p.reads_collections };
     }
 
+    if (tag_pages) try addTagPages(b, &outputs, tags.list);
     if (b.site_url) |url| try addGenerated(b, &outputs, config_fields, pages, url);
 
     std.mem.sortUnstable(Output, outputs.items, {}, outputOrder);
@@ -567,8 +573,13 @@ fn loadPage(b: *Builder, path: []const u8, is_post: bool) Error!?Page {
         .body_line = doc.body_line,
         .url = undefined,
         .out_path = undefined,
-        .html = if (is_markdown) try markdown.toHtml(arena, doc.body) else null,
+        .html = null,
     };
+    if (is_markdown) {
+        const rendered = try markdown.toDocument(arena, doc.body);
+        page.html = rendered.html;
+        page.toc = try tocHtml(arena, rendered.headings);
+    }
 
     if (is_post) {
         const base = sitepath.basename(path);
@@ -672,6 +683,7 @@ fn pageObject(arena: Allocator, p: *const Page) Allocator.Error!template.Object 
     }
     if (p.html) |h| {
         try entries.append(arena, .{ .key = "content", .value = .{ .html = h } });
+        if (p.toc) |toc| try entries.append(arena, .{ .key = "toc", .value = .{ .html = toc } });
         // The excerpt is frontmatter `excerpt` if set, else the first
         // paragraph of the rendered Markdown.
         if (p.fields.get("excerpt") == null) {
@@ -679,6 +691,53 @@ fn pageObject(arena: Allocator, p: *const Page) Allocator.Error!template.Object 
         }
     }
     return .{ .entries = entries.items };
+}
+
+/// A nested list of links to the level 2 and 3 headings, or null when
+/// there are none:
+///
+///   <ul class="toc"><li><a href="#a">A</a><ul><li>...</li></ul></li></ul>
+fn tocHtml(arena: Allocator, headings: []const markdown.Heading) Allocator.Error!?[]const u8 {
+    var aw: std.Io.Writer.Allocating = .init(arena);
+    writeToc(&aw.writer, headings) catch return error.OutOfMemory;
+    const html = try aw.toOwnedSlice();
+    return if (html.len == 0) null else html;
+}
+
+fn writeToc(w: *std.Io.Writer, headings: []const markdown.Heading) std.Io.Writer.Error!void {
+    var started = false;
+    var open = false; // a level 2 <li> is open
+    var nested = false; // a <ul> of level 3 items is open inside it
+    for (headings) |h| {
+        if (h.level != 2 and h.level != 3) continue;
+        if (!started) try w.writeAll("<ul class=\"toc\">\n");
+        started = true;
+        if (h.level == 3 and open) {
+            if (!nested) try w.writeAll("\n<ul>\n");
+            nested = true;
+            try tocLink(w, h);
+            try w.writeAll("</li>\n");
+            continue;
+        }
+        if (nested) try w.writeAll("</ul>\n");
+        if (open) try w.writeAll("</li>\n");
+        nested = false;
+        try tocLink(w, h);
+        // A level 2 item stays open for its level 3 children.
+        open = h.level == 2;
+        if (!open) try w.writeAll("</li>\n");
+    }
+    if (nested) try w.writeAll("</ul>\n");
+    if (open) try w.writeAll("</li>\n");
+    if (started) try w.writeAll("</ul>\n");
+}
+
+fn tocLink(w: *std.Io.Writer, h: markdown.Heading) std.Io.Writer.Error!void {
+    try w.writeAll("<li><a href=\"#");
+    try markdown.escapeHtml(w, h.id);
+    try w.writeAll("\">");
+    try markdown.escapeHtml(w, h.text);
+    try w.writeAll("</a>");
 }
 
 /// The first `<p>...</p>` element of rendered Markdown, or null.
@@ -703,18 +762,28 @@ fn pageTags(arena: Allocator, p: *const Page) Allocator.Error![]const []const u8
     }
 }
 
+/// Layout that turns on generated tag pages at `/tags/<slug>/`.
+pub const tag_layout = "_layouts/tag.html";
+
 /// `site.tags`: one object per tag, sorted by name, with the tag's posts
-/// newest first.
-fn tagIndex(arena: Allocator, pages: []const Page) Allocator.Error!Value {
+/// newest first. When tag pages are generated, each also has its `url`
+/// and `slug`.
+fn tagIndex(arena: Allocator, pages: []const Page, tag_pages_base: ?[]const u8) Allocator.Error!Value {
+    // Tags that differ only in case or punctuation ("Zig Lang", "zig-lang")
+    // are one tag, named as in the newest post that uses it, so each gets
+    // one page.
     var names: std.ArrayList([]const u8) = .empty;
+    var slugs: std.ArrayList([]const u8) = .empty;
     var lists: std.ArrayList(std.ArrayList(Value)) = .empty;
     for (pages) |*p| {
         if (!p.is_post) continue;
         for (try pageTags(arena, p)) |tag| {
-            const i = for (names.items, 0..) |n, i| {
-                if (std.mem.eql(u8, n, tag)) break i;
+            const slug = try markdown.slugify(arena, tag);
+            const i = for (slugs.items, 0..) |s, i| {
+                if (std.mem.eql(u8, s, slug)) break i;
             } else blk: {
                 try names.append(arena, tag);
+                try slugs.append(arena, slug);
                 try lists.append(arena, .empty);
                 break :blk names.items.len - 1;
             };
@@ -731,16 +800,52 @@ fn tagIndex(arena: Allocator, pages: []const Page) Allocator.Error!Value {
     }.lt);
     const out = try arena.alloc(Value, tags.len);
     for (tags, out) |t, *o| {
-        const entries = try arena.alloc(Entry, 2);
-        entries[0] = .{ .key = "name", .value = .{ .string = t.name } };
-        entries[1] = .{ .key = "posts", .value = .{ .list = t.posts } };
-        o.* = .{ .object = .{ .entries = entries } };
+        var entries: std.ArrayList(Entry) = .empty;
+        try entries.append(arena, .{ .key = "name", .value = .{ .string = t.name } });
+        try entries.append(arena, .{ .key = "posts", .value = .{ .list = t.posts } });
+        if (tag_pages_base) |base| {
+            const slug = try markdown.slugify(arena, t.name);
+            try entries.append(arena, .{ .key = "slug", .value = .{ .string = slug } });
+            try entries.append(arena, .{ .key = "url", .value = .{ .string = try std.fmt.allocPrint(arena, "{s}/tags/{s}/", .{ base, slug }) } });
+        }
+        o.* = .{ .object = .{ .entries = entries.items } };
     }
     return .{ .list = out };
 }
 
+/// Renders one page per tag with the `tag` layout, which sees `page.tag`,
+/// `page.title` (both the tag name), `page.posts`, and `page.url`.
+fn addTagPages(b: *Builder, outputs: *std.ArrayList(Output), tags: []const Value) Error!void {
+    const arena = b.arena;
+    const layout_field = try arena.dupe(frontmatter.Entry, &.{.{ .key = "layout", .value = .{ .string = "tag" } }});
+    for (tags) |tag| {
+        const t = tag.object;
+        const slug = t.get("slug").?.string;
+        var page: Page = .{
+            .source = tag_layout,
+            .is_post = false,
+            .is_markdown = false,
+            .fields = .{ .entries = layout_field },
+            .body = "",
+            .body_line = 1,
+            .url = t.get("url").?.string,
+            .out_path = try std.fmt.allocPrint(arena, "tags/{s}/index.html", .{slug}),
+            .html = "",
+        };
+        const entries = try arena.alloc(Entry, 4);
+        entries[0] = .{ .key = "title", .value = t.get("name").? };
+        entries[1] = .{ .key = "tag", .value = t.get("name").? };
+        entries[2] = .{ .key = "posts", .value = t.get("posts").? };
+        entries[3] = .{ .key = "url", .value = .{ .string = page.url } };
+        page.object = .{ .entries = entries };
+        b.deps = .empty;
+        const html = try renderPage(b, &page);
+        try outputs.append(arena, .{ .path = page.out_path, .source = tag_layout, .data = .{ .bytes = html } });
+    }
+}
+
 fn isComputedKey(key: []const u8) bool {
-    for ([_][]const u8{ "url", "path", "slug", "content" }) |k| {
+    for ([_][]const u8{ "url", "path", "slug", "content", "toc" }) |k| {
         if (std.mem.eql(u8, key, k)) return true;
     }
     return false;
@@ -1274,6 +1379,47 @@ test "drafts are published only when asked" {
     try testing.expectEqual(@as(usize, 0), (try t.build(&diag)).posts);
     const with = try buildWith(t.arena.allocator(), SiteDir.borrow(testing.io, t.tmp.dir), .{ .drafts = true }, &diag);
     try testing.expectEqual(@as(usize, 1), with.posts);
+}
+
+test "a tag layout generates one page per tag" {
+    var t: TestSite = try .init(&.{
+        .{ "_layouts/tag.html", "<h1>{{ page.tag }}</h1>{% for p in page.posts %}[{{ p.slug }}]{% endfor %}" },
+        .{ "index.html", "---\nx: 1\n---\n{% for t in site.tags %}<a href=\"{{ t.url }}\">{{ t.name }}</a>{% endfor %}" },
+        .{ "_posts/2024-01-01-a.md", "---\ntags: [Zig Lang, web]\n---\nA\n" },
+        .{ "_posts/2024-01-02-b.md", "---\ntags: web\n---\nB\n" },
+    });
+    defer t.deinit();
+    const src = SiteDir.borrow(testing.io, t.tmp.dir);
+    var diag: Diagnostic = .{};
+    var site = try t.build(&diag);
+    try testing.expectEqualStrings("<h1>Zig Lang</h1>[a]", site.find("tags/zig-lang/index.html").?.data.bytes);
+    try testing.expectEqualStrings("<h1>web</h1>[b][a]", site.find("tags/web/index.html").?.data.bytes);
+    try testing.expectEqualStrings("<a href=\"/tags/zig-lang/\">Zig Lang</a><a href=\"/tags/web/\">web</a>", site.find("index.html").?.data.bytes);
+
+    // Tag pages follow incremental rebuilds.
+    try src.writeFile("_posts/2024-01-02-b.md", "---\ntags: [web, zig lang]\n---\nB\n");
+    site = rebuild(t.arena.allocator(), src, &site, &.{"_posts/2024-01-02-b.md"}, &diag) catch |err| {
+        std.debug.print("{f}\n", .{diag});
+        return err;
+    };
+    // "zig lang" and "Zig Lang" are one tag, named as in the newest post.
+    try testing.expectEqualStrings("<h1>zig lang</h1>[b][a]", site.find("tags/zig-lang/index.html").?.data.bytes);
+}
+
+test "page.toc lists level 2 and 3 headings" {
+    var t: TestSite = try .init(&.{
+        .{ "_layouts/l.html", "{{ page.toc }}" },
+        .{ "a.md", "---\nlayout: l\n---\n# Title\n## One\n### One A\n### One B\n## Two\n#### Deep\n" },
+        .{ "b.md", "---\nlayout: l\n---\nNo headings.\n" },
+    });
+    defer t.deinit();
+    var diag: Diagnostic = .{};
+    const site = try t.build(&diag);
+    try testing.expectEqualStrings(
+        "<ul class=\"toc\">\n<li><a href=\"#one\">One</a>\n<ul>\n<li><a href=\"#one-a\">One A</a></li>\n<li><a href=\"#one-b\">One B</a></li>\n</ul>\n</li>\n<li><a href=\"#two\">Two</a></li>\n</ul>\n",
+        site.find("a/index.html").?.data.bytes,
+    );
+    try testing.expectEqualStrings("", site.find("b/index.html").?.data.bytes);
 }
 
 test "excerpts and tags" {
