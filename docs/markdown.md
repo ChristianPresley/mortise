@@ -83,6 +83,13 @@ Supported: `zig`, `c`/`h`/`cpp`/`c++`/`cc`, `rust`/`rs`, `go`,
 stylesheet; style the classes in your site's CSS. Other languages are
 escaped without spans.
 
+The rest of the info string after the language may hold options:
+`title="file.zig"` (or single quotes), line ranges to mark such as
+`{2,4-6}`, and `lineNumbers` (or `showLineNumbers`). With any option, or
+with the language `diff`, the block is wrapped in a `mt-code` container
+and each line in a `mt-line` span; see [components](components.md#code-block-options).
+Unknown options are ignored.
+
 ````markdown
 ```zig
 const x = 1;

@@ -60,6 +60,60 @@ Linux, macOS, and Windows.
 
 Unknown names (`:::foo`) are not containers and stay paragraph text.
 
+## Tabs and code groups
+
+Tabs work without JavaScript: each tab is a radio button and its label,
+and CSS shows the selected panel. A group holds up to 8 tabs.
+
+```markdown
+::::tabs
+:::tab Overview
+Any Markdown.
+:::
+:::tab Install
+1. Install Zig.
+:::
+::::
+```
+
+`:::code-group` turns the code blocks inside it into tabs, labeled by each
+block's `title` or else its language:
+
+````markdown
+:::code-group
+```sh title="macOS"
+brew install zig
+```
+```sh title="Windows"
+winget install zig.zig
+```
+:::
+````
+
+Inside `:::tabs`, anything that is not a `:::tab` is left out.
+
+## Code block options
+
+After the language, a fence takes options (see the
+[Markdown spec](markdown.md#fenced-code-blocks)):
+
+````markdown
+```zig title="src/main.zig" {4-5} lineNumbers
+...
+```
+````
+
+| Option        | Effect                                                   |
+| ------------- | -------------------------------------------------------- |
+| `title="..."` | A file-name bar above the code                           |
+| `{2,4-6}`     | Marks those lines (1-based, inclusive ranges)            |
+| `lineNumbers` | Numbers every line (CSS counters, so copying skips them) |
+
+The language `diff` colors lines starting with `+`, `-`, and `@@`. Code
+with options is wrapped in `<div class="mt-code">`, and each line is a
+`<span class="mt-line">` with `mt-line-marked`, `mt-line-add`,
+`mt-line-del`, or `mt-line-hunk` as needed.
+
 ## Inline components
 
 | Syntax         | Renders as                                   |
