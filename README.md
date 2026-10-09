@@ -19,6 +19,23 @@ zig build test                    # unit, fixture, and end-to-end tests
 zig build -Doptimize=ReleaseFast  # optimized binary
 ```
 
+### Working on Mortise itself
+
+Run these two commands in separate terminals:
+
+```sh
+zig build dev --watch -fincremental
+zig-out/bin/mortise serve examples/showcase --restart-on-rebuild
+```
+
+The first recompiles Mortise after every save to a `.zig` file. On x86_64
+it uses Zig's own backend instead of LLVM, and incremental compilation
+takes roughly 60 to 150 ms per change. The second restarts the dev server
+whenever that binary changes, and open pages reload on their own. On a
+Windows desktop a Zig edit reached the reloaded page in about 0.9 s,
+against more than 3 s for a full LLVM build before restarting by hand.
+Most of that time goes to copying the 27 MB debug binary and starting it.
+
 ## Usage
 
 ```sh
@@ -149,5 +166,6 @@ See the [Markdown subset](docs/markdown.md),
 | `src/watch.zig`       | Native file watchers                              |
 | `src/server.zig`      | Dev server and Server-Sent Events live reload     |
 | `src/main.zig`        | Command-line entry point                          |
+| `src/restart.zig`     | `serve --restart-on-rebuild` supervisor           |
 | `test/`               | Fixture and end-to-end tests and their inputs     |
 | `bench/`              | Save-to-reload latency benchmark and results      |
