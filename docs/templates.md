@@ -76,6 +76,31 @@ There are five built-ins and no way to add more.
 - Looping over a missing value renders nothing. Looping over anything other
   than a list is an error.
 
+## Pagination
+
+A page whose frontmatter sets `paginate: N` is rendered once for every N
+posts: page 1 at its own URL and page k at `<url>page/k/`, such as
+`/page/2/`. Its URL must end in `/`. Each copy sees a `paginator`:
+
+| Variable                 | Value                                       |
+| ------------------------ | ------------------------------------------- |
+| `paginator.posts`        | This page's posts, newest first             |
+| `paginator.page`         | This page's number, from 1                  |
+| `paginator.per_page`     | N                                           |
+| `paginator.total_pages`  | Number of pages (at least 1)                |
+| `paginator.total_posts`  | Number of posts                             |
+| `paginator.previous_url` | URL of the previous page, or empty          |
+| `paginator.next_url`     | URL of the next page, or empty              |
+
+```html
+---
+paginate: 10
+layout: base
+---
+{% for post in paginator.posts %}<a href="{{ post.url }}">{{ post.title }}</a>{% endfor %}
+{% if paginator.next_url %}<a href="{{ paginator.next_url }}">Older</a>{% endif %}
+```
+
 ## Includes
 
 ```html

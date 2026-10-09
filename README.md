@@ -67,6 +67,9 @@ my-site/
 - `baseurl: /blog` in `_config.yml` serves the site under a path prefix:
   page URLs start with it, `serve` serves under it, and templates can link
   to static files with `{{ site.baseurl }}/css/site.css`.
+- `paginate: 10` in a page's frontmatter splits it across pages of 10 posts
+  (`/`, `/page/2/`, ...) with a `paginator` variable; see the
+  [template syntax](docs/templates.md#pagination).
 - Files in `_data/` are available as `site.data`: `_data/nav.json` becomes
   `site.data.nav` and `_data/team/lead.yml` becomes `site.data.team.lead`.
   YAML data files use the frontmatter subset; JSON files may hold any JSON,
