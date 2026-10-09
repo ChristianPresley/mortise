@@ -4,6 +4,13 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Run by hand from the Actions tab, optionally building the dev binary.
+  workflow_dispatch:
+    inputs:
+      dev_build:
+        description: Also build the fast dev binary (zig build dev)
+        type: boolean
+        default: false
 
 env:
   # Pinned toolchain. Keep in sync with minimum_zig_version in build.zig.zon.
@@ -52,7 +59,9 @@ jobs:
       - name: Build
         run: zig build
 
+      # Off by default: it adds several minutes to every job.
       - name: Build the fast dev binary
+        if: ${{ inputs.dev_build }}
         run: zig build dev
 
       - name: Test
