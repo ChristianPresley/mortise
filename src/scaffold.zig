@@ -47,6 +47,7 @@ const files = [_]struct { []const u8, []const u8 }{
         \\<meta charset="utf-8">
         \\<meta name="viewport" content="width=device-width, initial-scale=1">
         \\<title>{% if page.title %}{{ page.title }} | {% endif %}{{ site.title }}</title>
+        \\<link rel="stylesheet" href="{{ site.baseurl }}/mortise.css">
         \\<link rel="stylesheet" href="{{ site.baseurl }}/css/site.css">
         \\</head>
         \\<body>
@@ -135,6 +136,10 @@ const welcome_post =
     \\```zig
     \\const std = @import("std");
     \\```
+    \\
+    \\> [!TIP]
+    \\> Callouts, cards, buttons, and more are built in. See
+    \\> [the components docs](https://github.com/ChristianPresley/mortise/blob/main/docs/components.md).
     \\
 ;
 

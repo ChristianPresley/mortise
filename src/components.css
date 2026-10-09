@@ -1,0 +1,168 @@
+/* Mortise components: styles for callouts, containers, badges, and keys.
+   Written to /mortise.css when a page uses a component. Link it from a
+   layout:  <link rel="stylesheet" href="{{ site.baseurl }}/mortise.css">
+   Override the --mt-* variables in your own stylesheet to theme them. */
+
+/* Neutral colors are mixed from the surrounding text color (currentColor),
+   so components fit light and dark sites without a separate theme. */
+:root {
+  --mt-radius: 10px;
+  --mt-border: color-mix(in srgb, currentColor 16%, transparent);
+  --mt-surface: color-mix(in srgb, currentColor 3%, transparent);
+  --mt-subtle: color-mix(in srgb, currentColor 7%, transparent);
+  --mt-muted: color-mix(in srgb, currentColor 62%, transparent);
+  --mt-accent: #c2410c;
+  --mt-accent-text: #ffffff;
+  --mt-shadow: 0 1px 2px rgba(0, 0, 0, .05);
+  --mt-note: #2563eb;
+  --mt-tip: #16a34a;
+  --mt-important: #7c3aed;
+  --mt-warning: #b45309;
+  --mt-caution: #dc2626;
+}
+
+/* Callouts: > [!NOTE], [!TIP], [!IMPORTANT], [!WARNING], [!CAUTION] */
+.mt-callout {
+  --mt-tone: var(--mt-note);
+  margin: 1.25rem 0;
+  padding: .75rem 1rem;
+  border: 1px solid color-mix(in srgb, var(--mt-tone) 30%, transparent);
+  border-left: 4px solid var(--mt-tone);
+  border-radius: var(--mt-radius);
+  background: color-mix(in srgb, var(--mt-tone) 7%, transparent);
+}
+.mt-callout > :last-child { margin-bottom: 0; }
+.mt-callout-title + * { margin-top: 0; }
+.mt-callout-title { margin: 0 0 .35rem; font-weight: 700; color: var(--mt-tone); }
+.mt-callout-title::before { margin-right: .4rem; }
+.mt-callout-note { --mt-tone: var(--mt-note); }
+.mt-callout-note .mt-callout-title::before { content: "ℹ"; }
+.mt-callout-tip { --mt-tone: var(--mt-tip); }
+.mt-callout-tip .mt-callout-title::before { content: "✓"; }
+.mt-callout-important { --mt-tone: var(--mt-important); }
+.mt-callout-important .mt-callout-title::before { content: "★"; }
+.mt-callout-warning { --mt-tone: var(--mt-warning); }
+.mt-callout-warning .mt-callout-title::before { content: "⚠"; }
+.mt-callout-caution { --mt-tone: var(--mt-caution); }
+.mt-callout-caution .mt-callout-title::before { content: "⛔"; }
+
+/* :::card Title */
+.mt-card {
+  margin: 1rem 0;
+  padding: 1rem 1.25rem;
+  border: 1px solid var(--mt-border);
+  border-radius: var(--mt-radius);
+  background: var(--mt-surface);
+  box-shadow: var(--mt-shadow);
+}
+.mt-card > :last-child { margin-bottom: 0; }
+.mt-card-title { margin: 0 0 .5rem; font-weight: 700; font-size: 1.05rem; }
+
+/* ::::grid holding :::card blocks */
+.mt-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr));
+  gap: 1rem;
+  margin: 1.25rem 0;
+}
+.mt-grid > .mt-card { margin: 0; }
+.mt-grid-title { grid-column: 1 / -1; margin: 0; font-weight: 700; }
+
+/* :::details Summary */
+.mt-details {
+  margin: 1rem 0;
+  border: 1px solid var(--mt-border);
+  border-radius: var(--mt-radius);
+  background: var(--mt-surface);
+}
+.mt-details > summary {
+  cursor: pointer;
+  padding: .7rem 1rem;
+  font-weight: 600;
+  list-style: none;
+}
+.mt-details > summary::-webkit-details-marker { display: none; }
+.mt-details > summary::before {
+  content: "▸";
+  display: inline-block;
+  margin-right: .5rem;
+  transition: transform .15s ease;
+}
+.mt-details[open] > summary::before { transform: rotate(90deg); }
+.mt-details[open] > summary { border-bottom: 1px solid var(--mt-border); }
+.mt-details > :not(summary) { margin-left: 1rem; margin-right: 1rem; }
+
+/* :::figure Caption */
+.mt-figure { margin: 1.5rem 0; text-align: center; }
+.mt-figure p { margin: 0; }
+.mt-figure img { max-width: 100%; height: auto; border-radius: var(--mt-radius); }
+.mt-figure figcaption { margin-top: .5rem; color: var(--mt-muted); font-size: .9rem; }
+
+/* :::actions with links, shown as buttons; the first is the primary one */
+.mt-actions { display: flex; flex-wrap: wrap; gap: .75rem; margin: 1.25rem 0; }
+.mt-actions p { display: contents; }
+.mt-actions a {
+  display: inline-block;
+  padding: .55rem 1.1rem;
+  border: 1px solid var(--mt-border);
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
+  font-weight: 600;
+  text-decoration: none;
+}
+.mt-actions a:first-of-type {
+  border-color: var(--mt-accent);
+  background: var(--mt-accent);
+  color: var(--mt-accent-text);
+}
+.mt-actions a:hover { filter: brightness(.95); }
+
+/* :::steps holding an ordered list */
+.mt-steps ol { list-style: none; counter-reset: mt-step; padding-left: 0; }
+.mt-steps li {
+  counter-increment: mt-step;
+  position: relative;
+  padding: 0 0 1.1rem 2.75rem;
+  border-left: 2px solid var(--mt-border);
+  margin-left: .9rem;
+}
+.mt-steps li:last-child { border-left-color: transparent; }
+.mt-steps li::before {
+  content: counter(mt-step);
+  position: absolute;
+  left: -.95rem;
+  top: -.1rem;
+  width: 1.8rem;
+  height: 1.8rem;
+  border-radius: 50%;
+  background: var(--mt-accent);
+  color: var(--mt-accent-text);
+  font-weight: 700;
+  font-size: .9rem;
+  line-height: 1.8rem;
+  text-align: center;
+}
+
+/* :badge[text] */
+.mt-badge {
+  display: inline-block;
+  padding: .05rem .5rem;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--mt-accent) 14%, transparent);
+  color: var(--mt-accent);
+  font-size: .78em;
+  font-weight: 700;
+  vertical-align: .1em;
+}
+
+/* :kbd[Ctrl] */
+.mt-kbd {
+  display: inline-block;
+  padding: .05rem .4rem;
+  border: 1px solid var(--mt-border);
+  border-bottom-width: 2px;
+  border-radius: 5px;
+  background: var(--mt-subtle);
+  font: .85em ui-monospace, SFMono-Regular, Consolas, monospace;
+}

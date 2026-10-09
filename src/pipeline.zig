@@ -140,6 +140,8 @@ const Page = struct {
     /// Table of contents of the Markdown's level 2 and 3 headings, as HTML,
     /// or null when there are none.
     toc: ?[]const u8 = null,
+    /// Whether the Markdown uses a component that needs `mortise.css`.
+    uses_components: bool = false,
     object: template.Object = .{},
     /// Set once rendered: the output and what it depended on.
     output: []const u8 = "",
@@ -428,6 +430,20 @@ fn hasOutput(outputs: []const Output, path: []const u8) bool {
     return false;
 }
 
+/// Path of the built-in component stylesheet in the output.
+pub const components_css_path = "mortise.css";
+
+/// Writes the component stylesheet when any page uses a component, unless
+/// the config sets `components_css: false` or the site has its own file
+/// at that path.
+fn addComponentsCss(b: *Builder, outputs: *std.ArrayList(Output), config_fields: frontmatter.Map, pages: []const Page) Error!void {
+    const used = for (pages) |p| {
+        if (p.uses_components) break true;
+    } else false;
+    if (!used or !try enabled(b, config_fields, "components_css") or hasOutput(outputs.items, components_css_path)) return;
+    try outputs.append(b.arena, .{ .path = components_css_path, .source = config_path, .data = .{ .bytes = markdown.components_css } });
+}
+
 /// Adds the Atom feed and the sitemap, unless the config turns them off or
 /// the site already has a file at that path.
 fn addGenerated(b: *Builder, outputs: *std.ArrayList(Output), config_fields: frontmatter.Map, pages: []const Page, url: []const u8) Error!void {
@@ -520,6 +536,7 @@ fn finish(b: *Builder, config_fields: frontmatter.Map, pages: []Page, statics: [
     }
 
     if (tag_pages) try addTagPages(b, &outputs, tags.list);
+    try addComponentsCss(b, &outputs, config_fields, pages);
     if (b.site_url) |url| try addGenerated(b, &outputs, config_fields, pages, url);
 
     std.mem.sortUnstable(Output, outputs.items, {}, outputOrder);
@@ -579,6 +596,7 @@ fn loadPage(b: *Builder, path: []const u8, is_post: bool) Error!?Page {
         const rendered = try markdown.toDocument(arena, doc.body);
         page.html = rendered.html;
         page.toc = try tocHtml(arena, rendered.headings);
+        page.uses_components = rendered.uses_components;
     }
 
     if (is_post) {
@@ -1404,6 +1422,25 @@ test "a tag layout generates one page per tag" {
     };
     // "zig lang" and "Zig Lang" are one tag, named as in the newest post.
     try testing.expectEqualStrings("<h1>zig lang</h1>[b][a]", site.find("tags/zig-lang/index.html").?.data.bytes);
+}
+
+test "mortise.css is written only when a page uses a component" {
+    var with: TestSite = try .init(&.{.{ "a.md", "> [!NOTE]\n> Hi.\n" }});
+    defer with.deinit();
+    var diag: Diagnostic = .{};
+    const s1 = try with.build(&diag);
+    try testing.expect(std.mem.startsWith(u8, s1.find(components_css_path).?.data.bytes, "/* Mortise components"));
+
+    var without: TestSite = try .init(&.{.{ "a.md", "Plain.\n" }});
+    defer without.deinit();
+    try testing.expect((try without.build(&diag)).find(components_css_path) == null);
+
+    var off: TestSite = try .init(&.{
+        .{ "_config.yml", "components_css: false\n" },
+        .{ "a.md", ":badge[x]\n" },
+    });
+    defer off.deinit();
+    try testing.expect((try off.build(&diag)).find(components_css_path) == null);
 }
 
 test "page.toc lists level 2 and 3 headings" {
