@@ -67,6 +67,10 @@ my-site/
 - `baseurl: /blog` in `_config.yml` serves the site under a path prefix:
   page URLs start with it, `serve` serves under it, and templates can link
   to static files with `{{ site.baseurl }}/css/site.css`.
+- Files in `_data/` are available as `site.data`: `_data/nav.json` becomes
+  `site.data.nav` and `_data/team/lead.yml` becomes `site.data.team.lead`.
+  YAML data files use the frontmatter subset; JSON files may hold any JSON,
+  including lists of objects.
 - `url: https://example.com` in `_config.yml` turns on two generated files:
   an Atom feed of the 20 newest posts at `feed.xml` and a sitemap of every
   page at `sitemap.xml`. Set `feed: false` or `sitemap: false` to skip one,
