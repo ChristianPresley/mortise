@@ -1,0 +1,8 @@
+# A turning planet; planet.css animates .planet.
+kind: planet
+type: terran
+size: 128
+seed: 11
+frames: 24
+seconds: 8
+samples: 2

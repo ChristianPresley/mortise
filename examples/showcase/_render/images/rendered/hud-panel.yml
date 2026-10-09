@@ -1,0 +1,3 @@
+# A panel frame; hud-panel.css styles .hud-panel with it as a border image.
+kind: panel
+color: "#3fd8ff"

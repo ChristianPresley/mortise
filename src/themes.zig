@@ -13,7 +13,21 @@ pub const css_path = "theme.css";
 pub const Theme = struct {
     name: []const u8,
     css: []const u8,
+    /// Images the build renders for the theme. The stylesheet refers to
+    /// them relative to itself, as `url("theme/NAME.png")`.
+    assets: []const Asset = &.{},
 };
+
+/// A rendered image a theme ships, written to `/theme/NAME.png` (and
+/// `/theme/NAME.css` for kinds that come with CSS). `spec` uses the same
+/// format as a site's `_render/*.yml` files; see docs/rendering.md.
+pub const Asset = struct {
+    name: []const u8,
+    spec: []const u8,
+};
+
+/// Output directory of theme assets.
+pub const assets_dir = "theme";
 
 pub const all = [_]Theme{
     .{ .name = "visor", .css = @embedFile("themes/visor.css") },

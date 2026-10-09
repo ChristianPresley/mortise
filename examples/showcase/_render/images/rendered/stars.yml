@@ -1,0 +1,5 @@
+# A seamless starfield tile with a violet-teal nebula.
+kind: starfield
+width: 512
+height: 256
+seed: 7
