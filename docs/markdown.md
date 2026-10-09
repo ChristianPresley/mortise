@@ -147,6 +147,12 @@ does not create emphasis inside a word, so `snake_case_name` stays plain.
 `~~text~~` or `~text~` renders as `<del>`. The opening and closing runs
 must have the same length; runs of three or more tildes are literal text.
 
+### Highlight
+
+`==text==` renders as `<mark>`. Only runs of exactly two equals signs
+count, and like emphasis they cannot open before a space or close after
+one, so `a == b` and `===x===` stay literal.
+
 ### Inline code
 
 A run of N backticks opens a code span that closes at the next run of
@@ -206,5 +212,5 @@ These render as plain paragraph text:
 - Reference-style links and link reference definitions.
 - HTML entities and numeric character references (`&amp;` renders as
   `&amp;amp;`).
-- Extensions other than tables, strikethrough, task lists, footnotes,
+- Extensions other than tables, strikethrough, highlight, task lists, footnotes,
   definition lists, and the [components](components.md).
