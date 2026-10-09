@@ -39,7 +39,9 @@ posts marked `draft: true`.
 watches the source tree. After each save it rebuilds and the open browser
 tabs reload. If a build fails, the browser shows an overlay with the file,
 line, and message while the server keeps serving the last successful
-build; the next good save clears it.
+build; the next good save clears it. A save that only changes stylesheets
+swaps them into the open page without reloading it, so scroll position and
+form input are kept.
 
 Rebuilds are incremental: a change re-renders only the pages that depend
 on it (the page itself, pages using a changed layout or include, and pages
