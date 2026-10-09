@@ -1,0 +1,305 @@
+/* Mortise theme "visor": a helmet heads-up display.
+   Written to /theme.css by `theme: visor` in _config.yml. Link it after
+   the site's own stylesheet. Plain CSS and inline SVG; no images, fonts,
+   or scripts. Motion stops under prefers-reduced-motion. */
+
+:root {
+  color-scheme: dark;
+  --v-bg: #04070b;
+  --v-panel: rgba(9, 22, 31, .78);
+  --v-panel-solid: #08141c;
+  --v-line: rgba(92, 225, 255, .22);
+  --v-cyan: #5ce1ff;
+  --v-cyan-dim: rgba(92, 225, 255, .55);
+  --v-amber: #ffb347;
+  --v-red: #ff5a5f;
+  --v-green: #6dffb0;
+  --v-violet: #b99cff;
+  --v-text: #cfe6ef;
+  --v-muted: #7f9aa6;
+  --v-display: "Bahnschrift", "DIN Alternate", "Barlow Semi Condensed", "Rajdhani", "Segoe UI Variable Display", system-ui, sans-serif;
+  --v-mono: "Cascadia Code", ui-monospace, SFMono-Regular, Consolas, monospace;
+  /* Four L-shaped corner brackets, drawn with gradients. */
+  --v-b: linear-gradient(var(--v-tone, var(--v-cyan)), var(--v-tone, var(--v-cyan)));
+  --v-brackets:
+    var(--v-b) top left / 14px 2px no-repeat, var(--v-b) top left / 2px 14px no-repeat,
+    var(--v-b) top right / 14px 2px no-repeat, var(--v-b) top right / 2px 14px no-repeat,
+    var(--v-b) bottom left / 14px 2px no-repeat, var(--v-b) bottom left / 2px 14px no-repeat,
+    var(--v-b) bottom right / 14px 2px no-repeat, var(--v-b) bottom right / 2px 14px no-repeat;
+  /* The components' neutral colors, retuned for the dark visor. */
+  --mt-border: rgba(92, 225, 255, .2);
+  --mt-surface: rgba(9, 22, 31, .6);
+  --mt-subtle: rgba(92, 225, 255, .07);
+  --mt-muted: #7f9aa6;
+  --mt-accent: #5ce1ff;
+  --mt-note: #5ce1ff;
+  --mt-tip: #6dffb0;
+  --mt-important: #b99cff;
+  --mt-warning: #ffb347;
+  --mt-caution: #ff5a5f;
+  --mt-radius: 2px;
+}
+
+html { background: var(--v-bg); scrollbar-color: var(--v-cyan-dim) transparent; }
+
+:root body {
+  color: var(--v-text);
+  background:
+    radial-gradient(ellipse 80% 60% at 50% -10%, rgba(92, 225, 255, .13), transparent 70%),
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='56' height='98'%3E%3Cpath d='M28 0l28 16v33L28 65 0 49V16zM28 65v33' fill='none' stroke='%235ce1ff' stroke-opacity='.06'/%3E%3C/svg%3E"),
+    var(--v-bg);
+  font-family: var(--v-display);
+  font-size: 17px;
+  letter-spacing: .01em;
+  cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='32' height='32'%3E%3Cg fill='none' stroke='%235ce1ff' stroke-width='1.5'%3E%3Ccircle cx='16' cy='16' r='9'/%3E%3Cpath d='M16 1v6M16 25v6M1 16h6M25 16h6'/%3E%3C/g%3E%3Ccircle cx='16' cy='16' r='1.5' fill='%23ffb347'/%3E%3C/svg%3E") 16 16, crosshair;
+}
+:root body :is(a, button, label, summary, input) { cursor: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='32' height='32'%3E%3Cg fill='none' stroke='%23ffb347' stroke-width='2'%3E%3Ccircle cx='16' cy='16' r='7'/%3E%3Cpath d='M16 3v7M16 22v7M3 16h7M22 16h7'/%3E%3C/g%3E%3C/svg%3E") 16 16, pointer; }
+
+/* Scanlines and the curve of the visor, over everything. */
+:root body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 2147483000;
+  pointer-events: none;
+  background:
+    repeating-linear-gradient(to bottom, rgba(255, 255, 255, .022) 0 1px, transparent 1px 3px),
+    radial-gradient(ellipse 120% 100% at 50% 50%, transparent 62%, rgba(0, 0, 0, .55) 100%);
+}
+/* A slow sweep of light down the visor. */
+:root body::after {
+  content: "";
+  position: fixed;
+  left: 0;
+  right: 0;
+  top: -30vh;
+  height: 30vh;
+  z-index: 2147483000;
+  pointer-events: none;
+  background: linear-gradient(to bottom, transparent, rgba(92, 225, 255, .045) 70%, rgba(92, 225, 255, .09) 98%, transparent);
+  animation: v-sweep 9s linear infinite;
+}
+@keyframes v-sweep { to { transform: translateY(160vh); } }
+
+::selection { background: var(--v-cyan); color: #00121a; }
+
+/* The HUD bar: the brand, the shield meter, and the nav. */
+:root body > header {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  max-width: none;
+  margin: 0;
+  padding: 1.35rem max(1rem, calc(50% - 33rem)) .7rem;
+  border-bottom: 1px solid var(--v-line);
+  background: linear-gradient(to bottom, rgba(4, 7, 11, .96), rgba(4, 7, 11, .82));
+  backdrop-filter: blur(6px);
+  box-shadow: 0 1px 0 rgba(92, 225, 255, .08), 0 10px 30px -18px rgba(92, 225, 255, .5);
+}
+/* Shield meter: segments that charge when the page loads. */
+:root body > header::before {
+  content: "";
+  position: absolute;
+  top: .45rem;
+  left: calc(50% - 10rem);
+  width: 20rem;
+  height: .45rem;
+  background: repeating-linear-gradient(90deg, var(--v-cyan) 0 .62rem, transparent .62rem .75rem);
+  clip-path: polygon(0 0, 100% 0, calc(100% - .45rem) 100%, .45rem 100%);
+  filter: drop-shadow(0 0 4px var(--v-cyan));
+  transform-origin: left;
+  animation: v-charge 1.4s steps(26) .2s both;
+}
+:root body > header::after {
+  content: "SHIELD";
+  position: absolute;
+  top: .3rem;
+  left: calc(50% + 10.6rem);
+  color: var(--v-cyan-dim);
+  font: 600 .58rem/1 var(--v-display);
+  letter-spacing: .3em;
+}
+@keyframes v-charge { from { transform: scaleX(0); opacity: .4; } to { transform: scaleX(1); opacity: 1; } }
+
+:root body > header .brand {
+  color: #fff;
+  font-weight: 700;
+  font-stretch: 87.5%;
+  letter-spacing: .14em;
+  text-transform: uppercase;
+  text-shadow: 0 0 12px rgba(92, 225, 255, .7);
+}
+:root body > header .brand::before { content: "◢ "; color: var(--v-amber); text-shadow: none; }
+:root body > header .brand::after { content: "_"; color: var(--v-cyan); animation: v-blink 1.1s steps(2) infinite; }
+@keyframes v-blink { 50% { opacity: 0; } }
+
+:root body > header nav { display: flex; flex-wrap: wrap; gap: .35rem; }
+:root body > header nav a {
+  margin: 0;
+  padding: .3rem .95rem;
+  color: var(--v-cyan);
+  font-size: .78rem;
+  font-weight: 600;
+  letter-spacing: .14em;
+  text-transform: uppercase;
+  text-decoration: none;
+  background: rgba(92, 225, 255, .07);
+  clip-path: polygon(.6rem 0, 100% 0, calc(100% - .6rem) 100%, 0 100%);
+  transition: background .15s, color .15s;
+}
+:root body > header nav a:hover { background: rgba(92, 225, 255, .22); color: #fff; }
+:root body > header nav a.current { background: var(--v-cyan); color: #00121a; font-weight: 700; }
+
+/* Motion tracker: rings and blips behind the content, with a sweep. */
+:root body > main::before,
+:root body > main::after {
+  content: "";
+  position: fixed;
+  left: 1.25rem;
+  bottom: 1.25rem;
+  width: 7.5rem;
+  height: 7.5rem;
+  border-radius: 50%;
+  z-index: -1;
+  pointer-events: none;
+}
+:root body > main::before {
+  border: 1px solid rgba(92, 225, 255, .45);
+  background:
+    radial-gradient(circle at 32% 38%, var(--v-red) 0 2.5px, transparent 3.5px),
+    radial-gradient(circle at 70% 64%, var(--v-amber) 0 2px, transparent 3px),
+    radial-gradient(circle, transparent 0 32%, rgba(92, 225, 255, .3) 32.5% 33.5%, transparent 34% 65%, rgba(92, 225, 255, .3) 65.5% 66.5%, transparent 67%),
+    linear-gradient(rgba(92, 225, 255, .25), rgba(92, 225, 255, .25)) center / 1px 100% no-repeat,
+    linear-gradient(rgba(92, 225, 255, .25), rgba(92, 225, 255, .25)) center / 100% 1px no-repeat,
+    radial-gradient(circle, rgba(92, 225, 255, .1), rgba(4, 7, 11, .85) 72%);
+  animation: v-blips 2.6s ease-in-out infinite;
+}
+:root body > main::after {
+  background: conic-gradient(from 0deg, rgba(92, 225, 255, .5), rgba(92, 225, 255, 0) 70deg, transparent);
+  -webkit-mask: radial-gradient(circle, #000 70%, transparent 71%);
+  mask: radial-gradient(circle, #000 70%, transparent 71%);
+  animation: v-spin 2.6s linear infinite;
+}
+@keyframes v-spin { to { transform: rotate(1turn); } }
+@keyframes v-blips { 0%, 100% { filter: brightness(.7); } 40% { filter: brightness(1.4); } }
+
+/* Headings: mission readouts. */
+:root body :is(h1, h2, h3, h4) { font-family: var(--v-display); color: #fff; font-weight: 700; letter-spacing: .04em; }
+:root body h1 {
+  font-size: 2.3rem;
+  font-stretch: 87.5%;
+  text-transform: uppercase;
+  letter-spacing: .08em;
+  text-shadow: 0 0 18px rgba(92, 225, 255, .55);
+  animation: v-boot .7s steps(7) both;
+}
+:root body h1::after {
+  content: "";
+  display: block;
+  height: 2px;
+  margin-top: .35rem;
+  background: linear-gradient(90deg, var(--v-cyan), rgba(92, 225, 255, .15) 60%, transparent);
+}
+@keyframes v-boot { 0% { opacity: 0; } 30% { opacity: .8; } 45% { opacity: .2; } 100% { opacity: 1; } }
+:root body main { counter-reset: v-obj; }
+:root body h2 { margin-top: 2.4rem; text-transform: uppercase; font-size: 1.35rem; letter-spacing: .1em; }
+:root body h2::before {
+  counter-increment: v-obj;
+  content: "OBJ-" counter(v-obj, decimal-leading-zero) " //";
+  display: block;
+  margin-bottom: .15rem;
+  color: var(--v-amber);
+  font-size: .66rem;
+  letter-spacing: .32em;
+}
+:root body h3::before { content: "◆ "; color: var(--v-cyan); font-size: .7em; vertical-align: .12em; }
+
+:root body a { color: var(--v-cyan); text-decoration-color: rgba(92, 225, 255, .35); text-underline-offset: 3px; }
+:root body a:hover { color: #fff; text-shadow: -1px 0 var(--v-red), 1px 0 var(--v-cyan); }
+:root body :is(.lead, .meta, small) { color: var(--v-muted); }
+:root body hr { border: 0; height: 1px; background: linear-gradient(90deg, transparent, var(--v-cyan-dim), transparent); }
+
+/* Panels: translucent with corner brackets. */
+:root body :is(pre, .toc-box, .mt-card, .mt-details, .mt-figure, .mt-code, .mt-api-op, .mt-api-schema, .mt-api-card, .pager .prev, .pager .next) {
+  border: 1px solid var(--v-line);
+  border-radius: 2px;
+  background: var(--v-brackets), var(--v-panel);
+}
+:root body pre { padding: 1rem 1.1rem; background: var(--v-brackets), rgba(2, 6, 9, .92); color: #d6f6ff; }
+:root body .mt-code pre { background: rgba(2, 6, 9, .92); border: 0; }
+:root body .mt-code-title { background: rgba(92, 225, 255, .08); color: var(--v-cyan); letter-spacing: .08em; }
+:root body code { font-family: var(--v-mono); }
+:root body :not(pre) > code { padding: .05rem .35rem; background: rgba(92, 225, 255, .1); color: #bff3ff; border-radius: 2px; }
+:root body .hl-keyword { color: #ff7ad9; }
+:root body :is(.hl-literal, .hl-number) { color: var(--v-amber); }
+:root body .hl-string { color: var(--v-green); }
+:root body .hl-comment { color: #5f7d89; font-style: italic; }
+:root body .hl-builtin { color: var(--v-cyan); }
+
+:root body .toc-box { color: var(--v-muted); }
+:root body .toc-box strong { color: var(--v-amber); font-size: .7rem; letter-spacing: .25em; text-transform: uppercase; }
+
+/* Callouts: incoming transmissions. */
+:root body .mt-callout { --v-tone: var(--mt-tone); background: var(--v-brackets), linear-gradient(90deg, color-mix(in srgb, var(--mt-tone) 16%, transparent), var(--v-panel) 55%); border: 1px solid color-mix(in srgb, var(--mt-tone) 40%, transparent); border-left: 3px solid var(--mt-tone); border-radius: 2px; }
+:root body .mt-callout-title { text-transform: uppercase; letter-spacing: .18em; font-size: .78rem; }
+:root body .mt-callout-title::after { content: "  ·  incoming"; color: var(--v-muted); font-weight: 400; letter-spacing: .1em; }
+
+/* Tables: telemetry. */
+:root body table { border-collapse: collapse; }
+:root body :is(th, td) { border: 0; border-bottom: 1px solid rgba(92, 225, 255, .14); }
+:root body th { background: rgba(92, 225, 255, .08); color: var(--v-cyan); font-size: .75rem; letter-spacing: .14em; text-transform: uppercase; text-align: left; }
+:root body tbody tr:hover { background: rgba(92, 225, 255, .05); }
+:root body blockquote { border-left: 3px solid var(--v-amber); background: rgba(255, 179, 71, .06); color: #e8d6bd; }
+
+/* Small parts. */
+:root body :is(.tag, .mt-badge) { background: rgba(255, 179, 71, .12); color: var(--v-amber); border: 1px solid rgba(255, 179, 71, .45); border-radius: 1px; text-transform: uppercase; letter-spacing: .1em; font-size: .72rem; }
+:root body .mt-kbd { background: #0b1a23; color: #fff; border: 1px solid var(--v-cyan-dim); box-shadow: 0 2px 0 var(--v-cyan-dim); }
+:root body .mt-method { border-radius: 0; clip-path: polygon(.35rem 0, 100% 0, calc(100% - .35rem) 100%, 0 100%); padding-inline: .7rem; }
+:root body .mt-steps li::before { background: var(--v-cyan); color: #00121a; border-radius: 0; clip-path: polygon(50% 0, 100% 50%, 50% 100%, 0 50%); }
+:root body .mt-steps li { border-left-style: dashed; border-left-color: rgba(92, 225, 255, .35); }
+:root body .mt-actions a { border-radius: 0; border-color: var(--v-cyan-dim); color: var(--v-cyan); text-transform: uppercase; letter-spacing: .12em; font-size: .82rem; clip-path: polygon(.7rem 0, 100% 0, calc(100% - .7rem) 100%, 0 100%); padding-inline: 1.5rem; background: rgba(92, 225, 255, .08); }
+:root body .mt-actions a:first-of-type { background: var(--v-cyan); color: #00121a; }
+:root body .mt-actions a:hover { filter: brightness(1.2); }
+:root body .mt-tab-label { text-transform: uppercase; letter-spacing: .1em; font-size: .8rem; }
+
+/* Wiki sidebar and pager: squad roster. */
+:root body .wiki-nav-title { color: var(--v-amber); letter-spacing: .3em; }
+:root body .wiki-nav a { color: var(--v-text); border-radius: 0; border-left: 2px solid transparent; }
+:root body .wiki-nav a:hover { background: rgba(92, 225, 255, .08); border-left-color: var(--v-cyan-dim); }
+:root body .wiki-nav a.current { background: linear-gradient(90deg, rgba(92, 225, 255, .22), transparent); color: #fff; border-left-color: var(--v-cyan); }
+:root body .wiki-nav ul ul { border-left-color: rgba(92, 225, 255, .18); }
+:root body .breadcrumbs, :root body .breadcrumbs a { color: var(--v-muted); text-transform: uppercase; letter-spacing: .12em; font-size: .72rem; }
+:root body .breadcrumbs .here { color: var(--v-cyan); }
+:root body .wiki-main .pager { border-top-color: var(--v-line); }
+:root body .pager small { color: var(--v-amber); letter-spacing: .2em; text-transform: uppercase; }
+:root body .posts li { padding-left: .9rem; border-left: 2px solid rgba(92, 225, 255, .25); }
+:root body .posts li:hover { border-left-color: var(--v-cyan); }
+
+:root body > footer {
+  max-width: none;
+  margin-top: 3rem;
+  padding: .9rem max(1rem, calc(50% - 33rem));
+  border-top: 1px solid var(--v-line);
+  color: var(--v-muted);
+  font-size: .78rem;
+  letter-spacing: .08em;
+  background: rgba(4, 7, 11, .9);
+}
+:root body > footer p::before { content: "SYS ▸ NOMINAL  ·  "; color: var(--v-green); letter-spacing: .2em; }
+
+@media (max-width: 1100px) {
+  :root body > main::before, :root body > main::after { width: 4.5rem; height: 4.5rem; }
+}
+@media (max-width: 760px) {
+  :root body > main::before, :root body > main::after, :root body > header::after { display: none; }
+  :root body > header::before { left: 1rem; width: calc(100% - 2rem); }
+}
+@media (prefers-reduced-motion: reduce) {
+  :root body *, :root body *::before, :root body *::after, :root body::after { animation: none !important; transition: none !important; }
+  :root body::after { display: none; }
+}
+
+/* Anchored targets clear the sticky HUD bar. */
+:root body [id] { scroll-margin-top: 5.5rem; }
+@media (max-width: 760px) { :root body .toc-box { float: none; margin: 0 0 1rem; } }
+:root body mark { background: rgba(255, 179, 71, .22); color: #ffe2b8; box-shadow: inset 0 -2px 0 var(--v-amber); padding: 0 .2rem; }

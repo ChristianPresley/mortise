@@ -81,7 +81,8 @@ job:
   string interpolation, and nested constructs such as JavaScript template
   literals are marked as one string.
 - Only the listed languages are highlighted; HTML and CSS are not.
-- There is no bundled stylesheet or theme.
+- There are two built-in themes (see docs/themes.md). They style the layout
+  hooks listed there; other markup keeps the site's own styles.
 
 ## Templates
 

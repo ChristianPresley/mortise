@@ -1,0 +1,318 @@
+/* Mortise theme "lcars": a starship computer console.
+   Written to /theme.css by `theme: lcars` in _config.yml. Link it after
+   the site's own stylesheet. Plain CSS; no images, fonts, or scripts.
+   Motion stops under prefers-reduced-motion. */
+
+:root {
+  color-scheme: dark;
+  --l-orange: #ff9c3c;
+  --l-peach: #ffbb88;
+  --l-gold: #ffcc66;
+  --l-lilac: #cc99dd;
+  --l-violet: #9a8cf0;
+  --l-blue: #8fb8ff;
+  --l-red: #e8665a;
+  --l-text: #f3e6cf;
+  --l-muted: #b7a58c;
+  --l-display: "Antonio", "Bahnschrift", "Arial Narrow", "Roboto Condensed", "Helvetica Neue", sans-serif;
+  --l-mono: "Cascadia Code", ui-monospace, SFMono-Regular, Consolas, monospace;
+  --l-col: 10rem;
+  /* The components' neutral colors, retuned for the console. */
+  --mt-border: rgba(255, 187, 136, .3);
+  --mt-surface: #0b0907;
+  --mt-subtle: rgba(255, 187, 136, .08);
+  --mt-muted: #b7a58c;
+  --mt-accent: #ff9c3c;
+  --mt-note: #8fb8ff;
+  --mt-tip: #99dd99;
+  --mt-important: #cc99dd;
+  --mt-warning: #ffcc66;
+  --mt-caution: #e8665a;
+  --mt-radius: 1.2rem;
+}
+
+html { background: #000; }
+:root body {
+  position: relative;
+  min-height: 100vh;
+  color: var(--l-text);
+  background: #000;
+  font-family: var(--l-display);
+  font-stretch: 87.5%;
+  font-size: 18px;
+  letter-spacing: .015em;
+}
+::selection { background: var(--l-gold); color: #000; }
+
+/* The frame: an elbow at the top left, a bar along the top, and a
+   segmented column down the left side. */
+:root body > header {
+  position: relative;
+  display: flex;
+  align-items: flex-end;
+  justify-content: flex-start;
+  min-height: 5.6rem;
+  max-width: none;
+  margin: .75rem 1rem 0;
+  padding: 0 0 1.55rem calc(var(--l-col) + 2.1rem);
+  border: 0;
+}
+:root body > header .brand {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: var(--l-col);
+  display: flex;
+  align-items: flex-end;
+  justify-content: flex-end;
+  padding: .35rem .7rem;
+  background: var(--l-orange);
+  border-radius: 3.2rem 0 0 0;
+  color: #000;
+  font-size: .95rem;
+  font-weight: 700;
+  line-height: 1.05;
+  text-align: right;
+  text-transform: uppercase;
+  text-decoration: none;
+}
+/* The inner curve where the column meets the top bar. */
+:root body > header::before {
+  content: "";
+  position: absolute;
+  left: var(--l-col);
+  bottom: 1.1rem;
+  width: 1.8rem;
+  height: 1.8rem;
+  background: radial-gradient(circle at 100% 0, transparent 1.8rem, var(--l-orange) 1.8rem);
+}
+:root body > header::after {
+  content: "";
+  position: absolute;
+  left: var(--l-col);
+  right: 0;
+  bottom: 0;
+  height: 1.1rem;
+  background: linear-gradient(90deg,
+    var(--l-orange) 0 46%, #000 46% calc(46% + .3rem),
+    var(--l-lilac) calc(46% + .3rem) 62%, #000 62% calc(62% + .3rem),
+    var(--l-peach) calc(62% + .3rem) 80%, #000 80% calc(80% + .3rem),
+    var(--l-blue) calc(80% + .3rem));
+  border-radius: 0 999px 999px 0;
+}
+
+:root body > header nav { display: flex; flex-wrap: wrap; gap: .3rem; }
+:root body > header nav a {
+  --l-pill: var(--l-peach);
+  margin: 0;
+  min-width: 5.5rem;
+  padding: .55rem .9rem .1rem;
+  border-radius: 999px;
+  background: var(--l-pill);
+  color: #000;
+  font-size: .82rem;
+  font-weight: 700;
+  line-height: 1.1;
+  text-align: right;
+  text-transform: uppercase;
+  text-decoration: none;
+  transition: filter .12s;
+}
+:root body > header nav a:nth-child(5n+2) { --l-pill: var(--l-lilac); }
+:root body > header nav a:nth-child(5n+3) { --l-pill: var(--l-blue); }
+:root body > header nav a:nth-child(5n+4) { --l-pill: var(--l-orange); }
+:root body > header nav a:nth-child(5n+5) { --l-pill: var(--l-violet); }
+:root body > header nav a:hover { filter: brightness(1.18); }
+:root body > header nav a.current { --l-pill: var(--l-gold); box-shadow: 0 0 0 .18rem #000, 0 0 0 .32rem var(--l-gold); }
+
+:root body::before {
+  content: "";
+  position: absolute;
+  left: 1rem;
+  top: 6.65rem;
+  bottom: 1rem;
+  width: var(--l-col);
+  background: linear-gradient(to bottom,
+    var(--l-lilac) 0 7rem, #000 7rem 7.3rem,
+    var(--l-peach) 7.3rem 10rem, #000 10rem 10.3rem,
+    var(--l-blue) 10.3rem 17rem, #000 17rem 17.3rem,
+    var(--l-red) 17.3rem 18.6rem, #000 18.6rem 18.9rem,
+    var(--l-orange) 18.9rem);
+  border-radius: 0 0 0 3.2rem;
+}
+:root body::after {
+  box-sizing: border-box;
+  content: "LCARS 47-1173\A ACCESS 22\A\A\A\A 03-918 \A\A\A\A\A\A\A\A SUB 117";
+  position: absolute;
+  left: 1rem;
+  top: 6.65rem;
+  width: var(--l-col);
+  padding: 5.4rem .7rem 0;
+  color: #000;
+  font: 700 .72rem/1.15 var(--l-display);
+  text-align: right;
+  white-space: pre;
+  pointer-events: none;
+}
+
+:root body > main {
+  margin-left: calc(var(--l-col) + 3rem);
+  margin-right: auto;
+  padding-top: 1.6rem;
+}
+:root body > footer {
+  position: relative;
+  max-width: none;
+  margin: 2.5rem 1rem 1rem calc(var(--l-col) + 2.1rem);
+  padding: 1.6rem 0 0;
+  border: 0;
+  color: var(--l-muted);
+  font-size: .82rem;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+}
+:root body > footer::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: .8rem;
+  background: linear-gradient(90deg, var(--l-orange) 0 30%, #000 30% calc(30% + .3rem), var(--l-violet) calc(30% + .3rem));
+  border-radius: 0 999px 999px 0;
+}
+/* A readout of blinking cells, as if the console were thinking. */
+:root body > footer::after {
+  content: "";
+  display: block;
+  width: 15rem;
+  height: .7rem;
+  margin-top: .6rem;
+  background:
+    repeating-linear-gradient(90deg, var(--l-blue) 0 .6rem, transparent .6rem .9rem, var(--l-peach) .9rem 1.5rem, transparent 1.5rem 1.8rem, var(--l-lilac) 1.8rem 2.1rem, transparent 2.1rem 2.7rem);
+  animation: l-compute 2.4s steps(9) infinite;
+}
+@keyframes l-compute { to { background-position: 2.7rem 0; } }
+
+/* Headings run into colored bars. */
+:root body :is(h1, h2, h3, h4) { font-family: var(--l-display); font-weight: 700; text-transform: uppercase; letter-spacing: .04em; }
+:root body h1 {
+  display: flex;
+  align-items: center;
+  gap: .9rem;
+  color: var(--l-orange);
+  font-size: 2.5rem;
+  line-height: 1;
+}
+:root body h1::after { content: ""; flex: 1; min-width: 3rem; height: 1rem; border-radius: 999px; background: linear-gradient(90deg, var(--l-orange) 0 70%, #000 70% calc(70% + .3rem), var(--l-gold) calc(70% + .3rem)); }
+:root body main { counter-reset: l-sec; }
+:root body h2 {
+  display: flex;
+  align-items: center;
+  gap: .6rem;
+  margin-top: 2.6rem;
+  color: var(--l-peach);
+  font-size: 1.45rem;
+}
+:root body h2::before {
+  counter-increment: l-sec;
+  content: counter(l-sec, decimal-leading-zero) "-" counter(l-sec, upper-alpha);
+  padding: .3rem .7rem .05rem;
+  border-radius: 999px 0 0 999px;
+  background: var(--l-lilac);
+  color: #000;
+  font-size: .7rem;
+}
+:root body h2::after { content: ""; flex: 1; height: .55rem; border-radius: 0 999px 999px 0; background: var(--l-lilac); opacity: .85; }
+:root body h3 { color: var(--l-blue); }
+:root body h4 { color: var(--l-lilac); }
+
+:root body a { color: var(--l-blue); text-decoration-color: rgba(143, 184, 255, .4); text-underline-offset: 3px; }
+:root body a:hover { color: var(--l-gold); text-decoration-color: var(--l-gold); }
+:root body :is(.lead, .meta, small) { color: var(--l-muted); }
+:root body .lead { text-transform: uppercase; letter-spacing: .06em; }
+:root body hr { border: 0; height: .4rem; border-radius: 999px; background: var(--l-violet); opacity: .7; }
+
+/* Panels: open brackets in the console's colors. */
+:root body :is(pre, .toc-box, .mt-card, .mt-details, .mt-figure, .mt-code, .mt-api-op, .mt-api-schema, .mt-api-card, .mt-callout) {
+  --l-tone: var(--l-lilac);
+  border: .5rem solid var(--l-tone);
+  border-right: 0;
+  border-radius: 1.4rem 0 0 1.4rem;
+  background: #0b0907;
+}
+:root body .mt-card:nth-child(3n+2) { --l-tone: var(--l-peach); }
+:root body .mt-card:nth-child(3n+3) { --l-tone: var(--l-blue); }
+:root body pre { --l-tone: var(--l-violet); padding: 1rem 1.2rem; color: #f8eedd; }
+:root body .mt-code pre { border: 0; border-radius: 0; background: transparent; }
+:root body .mt-code { --l-tone: var(--l-violet); overflow: hidden; }
+:root body .mt-code-title { background: var(--l-violet); color: #000; font-weight: 700; text-transform: uppercase; border: 0; }
+:root body .mt-code-title::before { content: none; }
+:root body code { font-family: var(--l-mono); }
+:root body :not(pre) > code { padding: .05rem .4rem; border-radius: .4rem; background: rgba(204, 153, 221, .16); color: #f1d9ff; }
+:root body .hl-keyword { color: var(--l-lilac); }
+:root body :is(.hl-literal, .hl-number) { color: var(--l-gold); }
+:root body .hl-string { color: #a9e6a0; }
+:root body .hl-comment { color: #8a7d6a; font-style: italic; }
+:root body .hl-builtin { color: var(--l-blue); }
+
+:root body .mt-callout { --l-tone: var(--mt-tone); background: linear-gradient(90deg, color-mix(in srgb, var(--mt-tone) 14%, #0b0907), #0b0907 60%); }
+:root body .mt-callout-title { text-transform: uppercase; letter-spacing: .08em; }
+:root body .toc-box { --l-tone: var(--l-peach); color: var(--l-muted); }
+:root body .toc-box strong { color: var(--l-peach); text-transform: uppercase; }
+
+/* Tables: headers are colored blocks. */
+:root body table { border-collapse: separate; border-spacing: 0 .2rem; }
+:root body :is(th, td) { border: 0; }
+:root body th { background: var(--l-peach); color: #000; text-transform: uppercase; font-size: .78rem; text-align: left; }
+:root body th:first-child { border-radius: 999px 0 0 999px; padding-left: 1rem; }
+:root body th:last-child { border-radius: 0 999px 999px 0; }
+:root body tbody tr:nth-child(odd) td { background: rgba(255, 187, 136, .06); }
+:root body blockquote { border-left: .6rem solid var(--l-gold); border-radius: .8rem 0 0 .8rem; background: rgba(255, 204, 102, .07); color: var(--l-text); }
+
+/* Small parts are pills. */
+:root body :is(.tag, .mt-badge) { border: 0; border-radius: 999px; background: var(--l-blue); color: #000; font-weight: 700; text-transform: uppercase; font-size: .72rem; padding: .1rem .6rem; }
+:root body .mt-kbd { border: 0; border-radius: 999px; background: var(--l-peach); color: #000; box-shadow: none; padding: .05rem .55rem; }
+:root body .mt-method { color: #000; text-transform: uppercase; }
+:root body .mt-steps > li::before { background: var(--l-orange); color: #000; }
+:root body .mt-tab-label { text-transform: uppercase; }
+
+/* The wiki sidebar becomes a stack of console buttons. */
+:root body .wiki-nav-title { color: var(--l-orange); font-size: .85rem; }
+:root body .wiki-nav a {
+  margin: .2rem 0;
+  padding: .45rem .8rem .1rem;
+  border-radius: 999px 0 0 999px;
+  background: rgba(143, 184, 255, .18);
+  color: var(--l-text);
+  font-size: .82rem;
+  text-align: right;
+  text-transform: uppercase;
+}
+:root body .wiki-nav a:hover { background: var(--l-blue); color: #000; }
+:root body .wiki-nav a.current { background: var(--l-gold); color: #000; }
+:root body .wiki-nav ul ul { border-left: 0; margin-left: 1rem; padding-left: 0; }
+:root body .wiki-nav ul ul a { background: rgba(204, 153, 221, .16); }
+:root body .breadcrumbs, :root body .breadcrumbs a { color: var(--l-muted); text-transform: uppercase; font-size: .78rem; }
+:root body .breadcrumbs .here { color: var(--l-gold); }
+:root body .pager .prev, :root body .pager .next { border: 0; border-radius: 999px; background: var(--l-violet); color: #000; text-transform: uppercase; }
+:root body .pager .next { background: var(--l-orange); }
+:root body .pager small { color: #000; opacity: .7; }
+:root body .wiki-main .pager { border-top: 0; }
+:root body .posts li { padding: .3rem 0 .3rem 1rem; border-left: .45rem solid var(--l-blue); border-radius: .6rem 0 0 .6rem; }
+:root body .posts li:nth-child(2n) { border-left-color: var(--l-peach); }
+:root body .mt-api-nav a.mt-api-nav-op { border-radius: 999px 0 0 999px; }
+
+@media (max-width: 760px) {
+  :root body::before, :root body::after, :root body > header::before { display: none; }
+  :root body > header { padding: 4.2rem 0 1.5rem; }
+  :root body > header .brand { right: 0; width: auto; bottom: auto; height: 3.4rem; border-radius: 2rem 999px 999px 0; }
+  :root body > header::after { left: 0; }
+  :root body > main, :root body > footer { margin-left: 1rem; margin-right: 1rem; }
+}
+@media (prefers-reduced-motion: reduce) {
+  :root body *, :root body *::before, :root body *::after { animation: none !important; transition: none !important; }
+}
+@media (max-width: 760px) { :root body .toc-box { float: none; margin: 0 0 1rem; } }
+:root body mark { background: var(--l-gold); color: #000; border-radius: .3rem; padding: 0 .25rem; }

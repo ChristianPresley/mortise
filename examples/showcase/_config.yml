@@ -4,3 +4,5 @@ title: Mortise Showcase
 description: Every Mortise feature on one small site
 author: The Mortise authors
 url: https://example.com
+# Optional built-in theme: visor (helmet HUD) or lcars (starship console).
+theme: visor

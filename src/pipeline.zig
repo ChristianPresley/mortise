@@ -26,6 +26,7 @@ const template = @import("template.zig");
 const feeds = @import("feeds.zig");
 const data_files = @import("data.zig");
 const openapi = @import("openapi.zig");
+const themes = @import("themes.zig");
 const Value = template.Value;
 const Entry = template.Entry;
 
@@ -457,6 +458,18 @@ fn addComponentsCss(b: *Builder, outputs: *std.ArrayList(Output), config_fields:
     try outputs.append(b.arena, .{ .path = components_css_path, .source = config_path, .data = .{ .bytes = markdown.components_css } });
 }
 
+/// Writes the stylesheet of the theme named by `theme:` in the config,
+/// unless the site has its own file at that path.
+fn addThemeCss(b: *Builder, outputs: *std.ArrayList(Output), config_fields: frontmatter.Map) Error!void {
+    const v = config_fields.get("theme") orelse return;
+    const line = fieldLine(try b.read(config_path), "theme");
+    if (v != .string) return b.fail(config_path, line, "'theme' must be the name of a theme: {s}", .{themes.names});
+    const theme = themes.find(v.string) orelse
+        return b.fail(config_path, line, "unknown theme '{s}'; the themes are: {s}", .{ v.string, themes.names });
+    if (hasOutput(outputs.items, themes.css_path)) return;
+    try outputs.append(b.arena, .{ .path = themes.css_path, .source = config_path, .data = .{ .bytes = theme.css } });
+}
+
 /// Adds the Atom feed and the sitemap, unless the config turns them off or
 /// the site already has a file at that path.
 fn addGenerated(b: *Builder, outputs: *std.ArrayList(Output), config_fields: frontmatter.Map, pages: []const Page, url: []const u8) Error!void {
@@ -556,6 +569,7 @@ fn finish(b: *Builder, config_fields: frontmatter.Map, pages: []Page, statics: [
 
     if (tag_pages) try addTagPages(b, &outputs, tags.list);
     try addComponentsCss(b, &outputs, config_fields, pages);
+    try addThemeCss(b, &outputs, config_fields);
     if (b.site_url) |url| try addGenerated(b, &outputs, config_fields, pages, url);
 
     std.mem.sortUnstable(Output, outputs.items, {}, outputOrder);
@@ -1394,6 +1408,25 @@ fn expectBuildError(files: []const struct { []const u8, []const u8 }, path: []co
         std.debug.print("expected '{s}' in '{s}'\n", .{ part, diag.message });
         return error.TestUnexpectedResult;
     }
+}
+
+test "a theme writes its stylesheet and is visible to templates" {
+    var t: TestSite = try .init(&.{
+        .{ "_config.yml", "title: T\ntheme: lcars\n" },
+        .{ "index.html", "---\n---\n{% if site.theme %}<link href=\"/theme.css\" data-theme=\"{{ site.theme }}\">{% endif %}" },
+    });
+    defer t.deinit();
+    var diag: Diagnostic = .{};
+    const site = try t.build(&diag);
+    try testing.expectEqualStrings("<link href=\"/theme.css\" data-theme=\"lcars\">", site.find("index.html").?.data.bytes);
+    try testing.expectEqualStrings(themes.find("lcars").?.css, site.find(themes.css_path).?.data.bytes);
+}
+
+test "an unknown theme names the config line and the themes" {
+    try expectBuildError(&.{
+        .{ "_config.yml", "title: T\ntheme: borg\n" },
+        .{ "index.md", "hi\n" },
+    }, "_config.yml", 2, "unknown theme 'borg'; the themes are: visor, lcars");
 }
 
 test "pages, posts, layouts, and static files" {

@@ -115,6 +115,10 @@ my-site/
   `page.breadcrumbs`, `page.previous`/`page.next`, and `site.nav` for
   wiki-style navigation. See [components](docs/components.md) and
   [templates](docs/templates.md#navigation).
+- Two built-in [themes](docs/themes.md), picked with `theme:` in
+  `_config.yml`: `visor`, a helmet heads-up display with a shield meter
+  and motion tracker, and `lcars`, a starship console frame. Both are
+  plain CSS with no images, fonts, or scripts.
 - Built-in [components](docs/components.md): callouts (`> [!NOTE]`),
   cards, grids, details, figures, buttons, and steps (`:::card Title` ...
   `:::`), plus `:badge[New]` and `:kbd[Ctrl]`, styled by a `mortise.css`
@@ -167,5 +171,6 @@ See the [Markdown subset](docs/markdown.md),
 | `src/server.zig`      | Dev server and Server-Sent Events live reload     |
 | `src/main.zig`        | Command-line entry point                          |
 | `src/restart.zig`     | `serve --restart-on-rebuild` supervisor           |
+| `src/themes/`         | Built-in themes (`theme:` in `_config.yml`)       |
 | `test/`               | Fixture and end-to-end tests and their inputs     |
 | `bench/`              | Save-to-reload latency benchmark and results      |
