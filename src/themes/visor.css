@@ -66,20 +66,6 @@ html { background: var(--v-bg); scrollbar-color: var(--v-cyan-dim) transparent; 
     repeating-linear-gradient(to bottom, rgba(255, 255, 255, .022) 0 1px, transparent 1px 3px),
     radial-gradient(ellipse 120% 100% at 50% 50%, transparent 62%, rgba(0, 0, 0, .55) 100%);
 }
-/* A slow sweep of light down the visor. */
-:root body::after {
-  content: "";
-  position: fixed;
-  left: 0;
-  right: 0;
-  top: -30vh;
-  height: 30vh;
-  z-index: 2147483000;
-  pointer-events: none;
-  background: linear-gradient(to bottom, transparent, rgba(92, 225, 255, .045) 70%, rgba(92, 225, 255, .09) 98%, transparent);
-  animation: v-sweep 9s linear infinite;
-}
-@keyframes v-sweep { to { transform: translateY(160vh); } }
 
 ::selection { background: var(--v-cyan); color: #00121a; }
 
@@ -88,36 +74,26 @@ html { background: var(--v-bg); scrollbar-color: var(--v-cyan-dim) transparent; 
   position: sticky;
   top: 0;
   z-index: 10;
-  max-width: none;
-  margin: 0;
-  padding: 1.35rem max(1rem, calc(50% - 33rem)) .7rem;
-  border-bottom: 1px solid var(--v-line);
-  background: linear-gradient(to bottom, rgba(4, 7, 11, .96), rgba(4, 7, 11, .82));
+  padding-top: 1.1rem;
+  padding-bottom: 1.1rem;
+  border-bottom: 0;
+  /* The bar spans the window while its content lines up with the page. */
+  border-image: linear-gradient(to bottom, rgba(4, 7, 11, .97), rgba(4, 7, 11, .86) calc(100% - 1px), rgba(92, 225, 255, .3) calc(100% - 1px)) fill 0 / / 0 100vw;
   backdrop-filter: blur(6px);
-  box-shadow: 0 1px 0 rgba(92, 225, 255, .08), 0 10px 30px -18px rgba(92, 225, 255, .5);
 }
-/* Shield meter: segments that charge when the page loads. */
+/* Shield meter: segments along the bottom edge that charge on load. */
 :root body > header::before {
   content: "";
   position: absolute;
-  top: .45rem;
-  left: calc(50% - 10rem);
-  width: 20rem;
-  height: .45rem;
+  bottom: -.2rem;
+  left: calc(50% - 9rem);
+  width: 18rem;
+  height: .4rem;
   background: repeating-linear-gradient(90deg, var(--v-cyan) 0 .62rem, transparent .62rem .75rem);
-  clip-path: polygon(0 0, 100% 0, calc(100% - .45rem) 100%, .45rem 100%);
+  clip-path: polygon(0 0, 100% 0, calc(100% - .4rem) 100%, .4rem 100%);
   filter: drop-shadow(0 0 4px var(--v-cyan));
   transform-origin: left;
-  animation: v-charge 1.4s steps(26) .2s both;
-}
-:root body > header::after {
-  content: "SHIELD";
-  position: absolute;
-  top: .3rem;
-  left: calc(50% + 10.6rem);
-  color: var(--v-cyan-dim);
-  font: 600 .58rem/1 var(--v-display);
-  letter-spacing: .3em;
+  animation: v-charge 1.4s steps(24) .2s both;
 }
 @keyframes v-charge { from { transform: scaleX(0); opacity: .4; } to { transform: scaleX(1); opacity: 1; } }
 
@@ -155,7 +131,7 @@ html { background: var(--v-bg); scrollbar-color: var(--v-cyan-dim) transparent; 
 :root body > main::after {
   content: "";
   position: fixed;
-  left: 1.25rem;
+  right: 1.25rem;
   bottom: 1.25rem;
   width: 7.5rem;
   height: 7.5rem;
@@ -239,15 +215,14 @@ html { background: var(--v-bg); scrollbar-color: var(--v-cyan-dim) transparent; 
 :root body .toc-box { color: var(--v-muted); }
 :root body .toc-box strong { color: var(--v-amber); font-size: .7rem; letter-spacing: .25em; text-transform: uppercase; }
 
-/* Callouts: incoming transmissions. */
+/* Callouts: transmissions in their tone. */
 :root body .mt-callout { --v-tone: var(--mt-tone); background: var(--v-brackets), linear-gradient(90deg, color-mix(in srgb, var(--mt-tone) 16%, transparent), var(--v-panel) 55%); border: 1px solid color-mix(in srgb, var(--mt-tone) 40%, transparent); border-left: 3px solid var(--mt-tone); border-radius: 2px; }
 :root body .mt-callout-title { text-transform: uppercase; letter-spacing: .18em; font-size: .78rem; }
-:root body .mt-callout-title::after { content: "  ·  incoming"; color: var(--v-muted); font-weight: 400; letter-spacing: .1em; }
 
 /* Tables: telemetry. */
 :root body table { border-collapse: collapse; }
 :root body :is(th, td) { border: 0; border-bottom: 1px solid rgba(92, 225, 255, .14); }
-:root body th { background: rgba(92, 225, 255, .08); color: var(--v-cyan); font-size: .75rem; letter-spacing: .14em; text-transform: uppercase; text-align: left; }
+:root body th { background: rgba(92, 225, 255, .08); color: var(--v-cyan); font-size: .75rem; letter-spacing: .14em; text-transform: uppercase; }
 :root body tbody tr:hover { background: rgba(92, 225, 255, .05); }
 :root body blockquote { border-left: 3px solid var(--v-amber); background: rgba(255, 179, 71, .06); color: #e8d6bd; }
 
@@ -276,22 +251,20 @@ html { background: var(--v-bg); scrollbar-color: var(--v-cyan-dim) transparent; 
 :root body .posts li:hover { border-left-color: var(--v-cyan); }
 
 :root body > footer {
-  max-width: none;
   margin-top: 3rem;
-  padding: .9rem max(1rem, calc(50% - 33rem));
-  border-top: 1px solid var(--v-line);
+  border-top: 0;
+  border-image: linear-gradient(to bottom, rgba(92, 225, 255, .3) 1px, rgba(4, 7, 11, .9) 1px) fill 0 / / 0 100vw;
   color: var(--v-muted);
   font-size: .78rem;
   letter-spacing: .08em;
-  background: rgba(4, 7, 11, .9);
 }
 :root body > footer p::before { content: "SYS ▸ NOMINAL  ·  "; color: var(--v-green); letter-spacing: .2em; }
 
-@media (max-width: 1100px) {
-  :root body > main::before, :root body > main::after { width: 4.5rem; height: 4.5rem; }
+@media (max-width: 1250px) {
+  :root body > main::before, :root body > main::after { display: none; }
 }
 @media (max-width: 760px) {
-  :root body > main::before, :root body > main::after, :root body > header::after { display: none; }
+  :root body > main::before, :root body > main::after { display: none; }
   :root body > header::before { left: 1rem; width: calc(100% - 2rem); }
 }
 @media (prefers-reduced-motion: reduce) {
@@ -303,3 +276,18 @@ html { background: var(--v-bg); scrollbar-color: var(--v-cyan-dim) transparent; 
 :root body [id] { scroll-margin-top: 5.5rem; }
 @media (max-width: 760px) { :root body .toc-box { float: none; margin: 0 0 1rem; } }
 :root body mark { background: rgba(255, 179, 71, .22); color: #ffe2b8; box-shadow: inset 0 -2px 0 var(--v-amber); padding: 0 .2rem; }
+/* Objective tags and waypoints belong to prose, not to API references or
+   component titles. */
+:root body .mt-api > h2::before { content: none; }
+:root body :is(.mt-api, .mt-card, .mt-details, .mt-callout, .mt-tabs) h3::before { content: none; }
+/* Sidebars stay clear of the sticky HUD bar. */
+:root body .wiki-nav { top: 5rem; max-height: calc(100vh - 6rem); overflow-y: auto; scrollbar-width: thin; }
+/* The HUD bar and footer keep a wide track even on narrow pages. */
+:root body > :is(header, footer) { max-width: 66rem; }
+:root body:has(.mt-api-nav) > :is(header, footer) { max-width: 84rem; }
+:root body > header .brand { white-space: nowrap; }
+@media (max-width: 760px) {
+  :root body > header { position: static; flex-direction: column; align-items: flex-start; gap: .7rem; }
+  :root body > header nav { gap: .3rem; }
+  :root body .wiki-nav { max-height: none; }
+}

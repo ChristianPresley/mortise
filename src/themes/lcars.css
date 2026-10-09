@@ -34,7 +34,11 @@
 html { background: #000; }
 :root body {
   position: relative;
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
   min-height: 100vh;
+  padding-bottom: 1rem;
   color: var(--l-text);
   background: #000;
   font-family: var(--l-display);
@@ -143,7 +147,7 @@ html { background: #000; }
 }
 :root body::after {
   box-sizing: border-box;
-  content: "LCARS 47-1173\A ACCESS 22\A\A\A\A 03-918 \A\A\A\A\A\A\A\A SUB 117";
+  content: "LCARS 47-1173\A ACCESS 22\A\A\A 03-918 \A\A\A\A\A\A\A\A SUB 117";
   position: absolute;
   left: 1rem;
   top: 6.65rem;
@@ -157,16 +161,21 @@ html { background: #000; }
 }
 
 :root body > main {
+  flex: 1 0 auto;
+  width: calc(100% - var(--l-col) - 4rem);
   margin-left: calc(var(--l-col) + 3rem);
   margin-right: auto;
   padding-top: 1.6rem;
 }
+/* The footer closes the frame: its bar meets the bottom of the column
+   in a second elbow. */
 :root body > footer {
   position: relative;
   max-width: none;
-  margin: 2.5rem 1rem 1rem calc(var(--l-col) + 2.1rem);
-  padding: 1.6rem 0 0;
+  margin: 2.5rem 1rem 0 calc(var(--l-col) + 1rem);
+  padding: 0 0 1.8rem 2.4rem;
   border: 0;
+  background: radial-gradient(circle at 100% 0, transparent 1.8rem, var(--l-orange) 1.8rem) left 0 bottom .8rem / 1.8rem 1.8rem no-repeat;
   color: var(--l-muted);
   font-size: .82rem;
   text-transform: uppercase;
@@ -177,7 +186,7 @@ html { background: #000; }
   position: absolute;
   left: 0;
   right: 0;
-  top: 0;
+  bottom: 0;
   height: .8rem;
   background: linear-gradient(90deg, var(--l-orange) 0 30%, #000 30% calc(30% + .3rem), var(--l-violet) calc(30% + .3rem));
   border-radius: 0 999px 999px 0;
@@ -238,10 +247,20 @@ html { background: #000; }
 :root body :is(pre, .toc-box, .mt-card, .mt-details, .mt-figure, .mt-code, .mt-api-op, .mt-api-schema, .mt-api-card, .mt-callout) {
   --l-tone: var(--l-lilac);
   border: .5rem solid var(--l-tone);
-  border-right: 0;
-  border-radius: 1.4rem 0 0 1.4rem;
+  border-right-width: .25rem;
+  border-radius: 1.4rem .6rem .6rem 1.4rem;
   background: #0b0907;
 }
+/* Code groups and tabs get the same frame, with console tab buttons. */
+:root body :is(.mt-code-group, .mt-tabs) { border: .5rem solid var(--l-violet); border-right-width: .25rem; border-radius: 1.4rem .6rem .6rem 1.4rem; background: #0b0907; }
+:root body :is(.mt-code-group, .mt-tabs) .mt-code { border: 0; border-radius: 0; }
+:root body .mt-tab-label { color: var(--l-muted); font-weight: 700; }
+:root body .mt-tab-input:checked + .mt-tab-label { color: #000; background: var(--l-violet); border-radius: 999px; }
+/* Buttons are console pills. */
+:root body .mt-actions a { border: 0; border-radius: 999px; background: var(--l-blue); color: #000; text-transform: uppercase; font-size: .82rem; padding: .55rem 1.2rem .3rem; }
+:root body .mt-actions a:first-of-type { background: var(--l-orange); }
+:root body .mt-actions a:nth-of-type(3n) { background: var(--l-lilac); }
+:root body .mt-actions a:hover { filter: brightness(1.15); }
 :root body .mt-card:nth-child(3n+2) { --l-tone: var(--l-peach); }
 :root body .mt-card:nth-child(3n+3) { --l-tone: var(--l-blue); }
 :root body pre { --l-tone: var(--l-violet); padding: 1rem 1.2rem; color: #f8eedd; }
@@ -265,7 +284,7 @@ html { background: #000; }
 /* Tables: headers are colored blocks. */
 :root body table { border-collapse: separate; border-spacing: 0 .2rem; }
 :root body :is(th, td) { border: 0; }
-:root body th { background: var(--l-peach); color: #000; text-transform: uppercase; font-size: .78rem; text-align: left; }
+:root body th { background: var(--l-peach); color: #000; text-transform: uppercase; font-size: .78rem; }
 :root body th:first-child { border-radius: 999px 0 0 999px; padding-left: 1rem; }
 :root body th:last-child { border-radius: 0 999px 999px 0; }
 :root body tbody tr:nth-child(odd) td { background: rgba(255, 187, 136, .06); }
@@ -310,9 +329,15 @@ html { background: #000; }
   :root body > header .brand { right: 0; width: auto; bottom: auto; height: 3.4rem; border-radius: 2rem 999px 999px 0; }
   :root body > header::after { left: 0; }
   :root body > main, :root body > footer { margin-left: 1rem; margin-right: 1rem; }
+  :root body > main { width: auto; }
+  :root body > footer { background: none; padding-left: 0; }
 }
 @media (prefers-reduced-motion: reduce) {
   :root body *, :root body *::before, :root body *::after { animation: none !important; transition: none !important; }
 }
 @media (max-width: 760px) { :root body .toc-box { float: none; margin: 0 0 1rem; } }
 :root body mark { background: var(--l-gold); color: #000; border-radius: .3rem; padding: 0 .25rem; }
+@media (max-width: 760px) {
+  :root body h1 { display: block; }
+  :root body h1::after { display: block; height: .6rem; margin-top: .5rem; }
+}
