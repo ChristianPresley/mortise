@@ -67,6 +67,13 @@ my-site/
 - `baseurl: /blog` in `_config.yml` serves the site under a path prefix:
   page URLs start with it, `serve` serves under it, and templates can link
   to static files with `{{ site.baseurl }}/css/site.css`.
+- Markdown pages get `page.excerpt`: frontmatter `excerpt` if set,
+  otherwise the first paragraph of the rendered content.
+- Posts can set `tags: [zig, web]` (or one tag as a string). `site.tags`
+  lists every tag, sorted by name, each with `name` and its `posts`, newest
+  first.
+- Headings get anchor ids from their text, so `## Getting started` can be
+  linked as `#getting-started`.
 - `paginate: 10` in a page's frontmatter splits it across pages of 10 posts
   (`/`, `/page/2/`, ...) with a `paginator` variable; see the
   [template syntax](docs/templates.md#pagination).
