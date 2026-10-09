@@ -6,7 +6,7 @@ weight: 4
 # Wiki elements
 
 Elements that reference sites and wikis lean on, written in plain
-Markdown.
+Markdown. Wrap a phrase in double equals signs to ==highlight== it.
 
 ## Task lists
 
