@@ -90,6 +90,10 @@ my-site/
 - Posts can set `tags: [zig, web]` (or one tag as a string). `site.tags`
   lists every tag, sorted by name, each with `name` and its `posts`, newest
   first.
+- Built-in [components](docs/components.md): callouts (`> [!NOTE]`),
+  cards, grids, details, figures, buttons, and steps (`:::card Title` ...
+  `:::`), plus `:badge[New]` and `:kbd[Ctrl]`, styled by a `mortise.css`
+  the build writes when a page uses them.
 - Fenced code in Zig, C/C++, Rust, Go, JavaScript/TypeScript, Python,
   shell, JSON, and YAML is syntax-highlighted at build time with
   `hl-*` classes for your stylesheet; see the
