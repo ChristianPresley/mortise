@@ -1,0 +1,8 @@
+kind: planet
+type: terran
+size: 192
+seed: 7
+tilt: 18
+rotation: 40
+atmosphere: "#8fb8ff"
+samples: 3

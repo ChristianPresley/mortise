@@ -1,0 +1,13 @@
+kind: starfield
+width: 1024
+height: 1024
+seed: 11
+density: 3
+brightness: 0.5
+background: "#04070b"
+nebula_color: "#1b7f95"
+nebula_color2: "#2b3a86"
+nebula_scale: 3
+nebula_intensity: 0.5
+nebula_coverage: 0.5
+spikes: 0

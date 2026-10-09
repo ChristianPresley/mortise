@@ -30,8 +30,16 @@ pub const Asset = struct {
 pub const assets_dir = "theme";
 
 pub const all = [_]Theme{
-    .{ .name = "visor", .css = @embedFile("themes/visor.css") },
-    .{ .name = "lcars", .css = @embedFile("themes/lcars.css") },
+    .{ .name = "visor", .css = @embedFile("themes/visor.css"), .assets = &.{
+        .{ .name = "stars", .spec = @embedFile("themes/visor/stars.yml") },
+        .{ .name = "radar", .spec = @embedFile("themes/visor/radar.yml") },
+        .{ .name = "reticle", .spec = @embedFile("themes/visor/reticle.yml") },
+        .{ .name = "panel", .spec = @embedFile("themes/visor/panel.yml") },
+    } },
+    .{ .name = "lcars", .css = @embedFile("themes/lcars.css"), .assets = &.{
+        .{ .name = "planet", .spec = @embedFile("themes/lcars/planet.yml") },
+        .{ .name = "hologram", .spec = @embedFile("themes/lcars/hologram.yml") },
+    } },
 };
 
 pub fn find(name: []const u8) ?Theme {

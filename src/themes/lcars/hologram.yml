@@ -1,0 +1,11 @@
+kind: hologram
+shape: icosphere
+size: 128
+color: "#cc99dd"
+ring: true
+ring_color: "#ff9c3c"
+wire: 1.2
+hidden: 0.2
+frames: 24
+seconds: 4
+columns: 8

@@ -1,7 +1,9 @@
 /* Mortise theme "lcars": a starship computer console.
    Written to /theme.css by `theme: lcars` in _config.yml. Link it after
-   the site's own stylesheet. Plain CSS; no images, fonts, or scripts.
-   Motion stops under prefers-reduced-motion. */
+   the site's own stylesheet. The images in theme/ (a planet and a turning
+   hologram) are drawn by Mortise's renderer during the build; there are
+   no fonts or scripts. Motion stops under prefers-reduced-motion. */
+@import url("theme/hologram.css");
 
 :root {
   color-scheme: dark;
@@ -40,7 +42,7 @@ html { background: #000; }
   min-height: 100vh;
   padding-bottom: 1rem;
   color: var(--l-text);
-  background: #000;
+  background: transparent;
   font-family: var(--l-display);
   font-stretch: 87.5%;
   font-size: 18px;
@@ -137,7 +139,11 @@ html { background: #000; }
   top: 6.65rem;
   bottom: 1rem;
   width: var(--l-col);
-  background: linear-gradient(to bottom,
+  /* A viewscreen in the column shows a rendered planet (theme/planet.png). */
+  background:
+    url("theme/planet.png") center 20.6rem / 8.4rem no-repeat,
+    linear-gradient(#000, #000) center 19.9rem / calc(100% - 1.4rem) 9.8rem no-repeat,
+    linear-gradient(to bottom,
     var(--l-lilac) 0 7rem, #000 7rem 7.3rem,
     var(--l-peach) 7.3rem 10rem, #000 10rem 10.3rem,
     var(--l-blue) 10.3rem 17rem, #000 17rem 17.3rem,
@@ -341,3 +347,20 @@ html { background: #000; }
   :root body h1 { display: block; }
   :root body h1::after { display: block; height: .6rem; margin-top: .5rem; }
 }
+/* A sensor display: a rendered hologram turning in the corner, behind the
+   content (theme/hologram.png; keyframes from theme/hologram.css). */
+:root body > main::after {
+  content: "";
+  position: fixed;
+  right: 1.5rem;
+  bottom: 2.75rem;
+  width: 128px;
+  height: 128px;
+  z-index: -1;
+  pointer-events: none;
+  background: url("theme/hologram.png") 0 0 no-repeat;
+  animation: hologram-frames 4s step-end infinite;
+  transform: scale(.75);
+  transform-origin: bottom right;
+}
+@media (max-width: 1350px) { :root body > main::after { display: none; } }

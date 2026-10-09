@@ -1,0 +1,9 @@
+kind: panel
+width: 192
+height: 192
+color: "#5ce1ff"
+chamfer: 16
+stroke: 1.5
+fill: 0.08
+glow: 4
+margin: 10
