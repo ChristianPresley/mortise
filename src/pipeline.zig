@@ -24,6 +24,7 @@ const markdown = @import("markdown.zig");
 const frontmatter = @import("frontmatter.zig");
 const template = @import("template.zig");
 const feeds = @import("feeds.zig");
+const data_files = @import("data.zig");
 const Value = template.Value;
 const Entry = template.Entry;
 
@@ -113,6 +114,7 @@ const State = struct {
     config_fields: frontmatter.Map,
     baseurl: []const u8,
     site_url: ?[]const u8,
+    data: Value,
     /// Every page and post, in `pageOrder`.
     pages: []const Page,
     /// Files copied unchanged.
@@ -164,6 +166,8 @@ const Builder = struct {
     /// Absolute site URL from `url` in the config, needed for the feed and
     /// sitemap; null when unset.
     site_url: ?[]const u8 = null,
+    /// `site.data`, from the files in `_data/`.
+    data: Value = .{ .object = .{} },
 
     fn fail(b: *Builder, path: []const u8, line: usize, comptime fmt: []const u8, args: anytype) Error {
         b.diag.* = .{
@@ -223,6 +227,7 @@ pub fn build(arena: Allocator, src: SiteDir, diag: *Diagnostic) Error!Site {
     }
     b.baseurl = try baseUrl(&b, config_fields);
     b.site_url = try siteUrl(&b, config_fields);
+    b.data = try loadData(&b, listing.files);
 
     for (listing.files) |path| {
         if (std.mem.eql(u8, path, config_path)) continue;
@@ -261,12 +266,14 @@ pub fn build(arena: Allocator, src: SiteDir, diag: *Diagnostic) Error!Site {
 /// overflow. The result shares memory with `prev`.
 pub fn rebuild(arena: Allocator, src: SiteDir, prev: *const Site, changed: []const []const u8, diag: *Diagnostic) Error!Site {
     const st = prev.state;
-    var b: Builder = .{ .arena = arena, .src = src, .diag = diag, .baseurl = st.baseurl, .site_url = st.site_url };
+    var b: Builder = .{ .arena = arena, .src = src, .diag = diag, .baseurl = st.baseurl, .site_url = st.site_url, .data = st.data };
 
     var dirty_templates: std.ArrayList([]const u8) = .empty;
     var dirty_pages: std.ArrayList(usize) = .empty;
     for (changed) |path| {
-        if (std.mem.eql(u8, path, config_path) or std.mem.eql(u8, path, "*")) return build(arena, src, diag);
+        // The config and data files feed `site`, which any page may read.
+        if (std.mem.eql(u8, path, config_path) or std.mem.eql(u8, path, "*") or
+            std.mem.startsWith(u8, path, data_files.dir_prefix)) return build(arena, src, diag);
         if (std.mem.startsWith(u8, path, "_layouts/") or std.mem.startsWith(u8, path, "_includes/")) {
             try dirty_templates.append(arena, path);
             continue;
@@ -359,6 +366,23 @@ fn baseUrl(b: *Builder, config_fields: frontmatter.Map) Error![]const u8 {
     return raw;
 }
 
+/// Loads every data file into the value of `site.data`.
+fn loadData(b: *Builder, files: []const []const u8) Error!Value {
+    var tree: data_files.Tree = .{ .arena = b.arena };
+    for (files) |path| {
+        if (!data_files.isDataFile(path)) continue;
+        var dd: data_files.Diagnostic = .{};
+        const value = data_files.parse(b.arena, path, try b.read(path), &dd) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.InvalidData => return b.fail(path, dd.line, "{s}", .{dd.message}),
+        };
+        if (!try tree.add(path, value)) {
+            return b.fail(path, 0, "its name clashes with another data file or directory", .{});
+        }
+    }
+    return tree.toObject();
+}
+
 /// Reads and normalizes `url` from the config, or null when unset.
 fn siteUrl(b: *Builder, config_fields: frontmatter.Map) Error!?[]const u8 {
     const v = config_fields.get("url") orelse return null;
@@ -437,7 +461,7 @@ fn finish(b: *Builder, config_fields: frontmatter.Map, pages: []Page, statics: [
 
     var site_entries: std.ArrayList(Entry) = .empty;
     for (config_fields.entries) |e| {
-        if (std.mem.eql(u8, e.key, "posts") or std.mem.eql(u8, e.key, "pages")) {
+        if (std.mem.eql(u8, e.key, "posts") or std.mem.eql(u8, e.key, "pages") or std.mem.eql(u8, e.key, "data")) {
             return b.fail(config_path, 0, "'{s}' is set by Mortise; use another key", .{e.key});
         }
         if (std.mem.eql(u8, e.key, "baseurl")) {
@@ -448,6 +472,7 @@ fn finish(b: *Builder, config_fields: frontmatter.Map, pages: []Page, statics: [
     }
     try site_entries.append(arena, .{ .key = "posts", .value = .{ .list = post_values.items } });
     try site_entries.append(arena, .{ .key = "pages", .value = .{ .list = page_values.items } });
+    try site_entries.append(arena, .{ .key = "data", .value = b.data });
     b.site = .{ .entries = site_entries.items };
 
     var rendered: usize = 0;
@@ -486,7 +511,7 @@ fn finish(b: *Builder, config_fields: frontmatter.Map, pages: []Page, statics: [
         .rendered = rendered,
         .full = render == null,
         .baseurl = b.baseurl,
-        .state = .{ .config_fields = config_fields, .baseurl = b.baseurl, .site_url = b.site_url, .pages = pages, .statics = statics },
+        .state = .{ .config_fields = config_fields, .baseurl = b.baseurl, .site_url = b.site_url, .data = b.data, .pages = pages, .statics = statics },
     };
 }
 
@@ -634,24 +659,7 @@ fn isComputedKey(key: []const u8) bool {
     return false;
 }
 
-fn convert(arena: Allocator, v: frontmatter.Value) Allocator.Error!Value {
-    return switch (v) {
-        .string => |s| .{ .string = s },
-        .int => |i| .{ .int = i },
-        .float => |f| .{ .float = f },
-        .boolean => |x| .{ .boolean = x },
-        .list => |l| blk: {
-            const out = try arena.alloc(Value, l.len);
-            for (l, out) |item, *o| o.* = try convert(arena, item);
-            break :blk .{ .list = out };
-        },
-        .map => |m| blk: {
-            const out = try arena.alloc(Entry, m.entries.len);
-            for (m.entries, out) |e, *o| o.* = .{ .key = e.key, .value = try convert(arena, e.value) };
-            break :blk .{ .object = .{ .entries = out } };
-        },
-    };
-}
+const convert = data_files.fromFrontmatter;
 
 fn renderPage(b: *Builder, p: *const Page) Error![]const u8 {
     const arena = b.arena;
@@ -1064,6 +1072,29 @@ test "baseurl prefixes page URLs but not output paths" {
 
     try expectBuildError(&.{.{ "_config.yml", "baseurl: blog\n" }}, "_config.yml", 0, "'baseurl' must be a path");
     try expectBuildError(&.{.{ "_config.yml", "baseurl: /../x\n" }}, "_config.yml", 0, "'baseurl' must be a path");
+}
+
+test "data files are available as site.data" {
+    var t: TestSite = try .init(&.{
+        .{ "_data/nav.json", "[{\"title\": \"Home\", \"url\": \"/\"}, {\"title\": \"About\", \"url\": \"/about/\"}]" },
+        .{ "_data/team/lead.yml", "name: Ada\n" },
+        .{ "index.html", "---\nx: 1\n---\n{% for n in site.data.nav %}<a href=\"{{ n.url }}\">{{ n.title }}</a>{% endfor %} {{ site.data.team.lead.name }}" },
+    });
+    defer t.deinit();
+    const src = SiteDir.borrow(testing.io, t.tmp.dir);
+    var diag: Diagnostic = .{};
+    var site = try t.build(&diag);
+    try testing.expectEqualStrings("<a href=\"/\">Home</a><a href=\"/about/\">About</a> Ada", site.find("index.html").?.data.bytes);
+
+    // Editing a data file rebuilds everything that might read it.
+    try src.writeFile("_data/team/lead.yml", "name: Grace\n");
+    site = try rebuild(t.arena.allocator(), src, &site, &.{"_data/team/lead.yml"}, &diag);
+    try testing.expect(site.full);
+    try testing.expect(std.mem.endsWith(u8, site.find("index.html").?.data.bytes, " Grace"));
+
+    try expectBuildError(&.{.{ "_data/a.json", "{\n\"a\": 1,\n}" }}, "_data/a.json", 3, "invalid JSON");
+    try expectBuildError(&.{ .{ "_data/a.json", "1" }, .{ "_data/a.yml", "b: 1\n" } }, "_data/a.yml", 0, "clashes");
+    try expectBuildError(&.{.{ "_config.yml", "data: 1\n" }}, "_config.yml", 0, "set by Mortise");
 }
 
 test "feed and sitemap are generated when the site has a url" {
