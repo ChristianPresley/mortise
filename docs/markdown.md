@@ -74,6 +74,15 @@ that is at least as long as the opening one, or at the end of the document.
 Each content line loses up to as many leading spaces as the opening fence had.
 Content is HTML-escaped and never parsed for inlines.
 
+When the info string names a supported language, tokens are wrapped in
+`<span class="hl-...">` at build time, with the classes `hl-keyword`,
+`hl-literal`, `hl-string`, `hl-number`, `hl-comment`, and `hl-builtin`.
+Supported: `zig`, `c`/`h`/`cpp`/`c++`/`cc`, `rust`/`rs`, `go`,
+`js`/`javascript`/`ts`/`typescript`/`jsx`/`tsx`, `python`/`py`,
+`sh`/`bash`/`shell`/`zsh`, `json`, and `yaml`/`yml`. Mortise ships no
+stylesheet; style the classes in your site's CSS. Other languages are
+escaped without spans.
+
 ````markdown
 ```zig
 const x = 1;

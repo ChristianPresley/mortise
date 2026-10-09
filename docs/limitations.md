@@ -74,6 +74,15 @@ job:
 - The sitemap has no `changefreq` or `priority`, and `lastmod` only for
   posts.
 
+## Syntax highlighting
+
+- Highlighting is lexical: keywords, literals, strings, numbers, comments,
+  and Zig builtins. It does not know about types, function names, or
+  string interpolation, and nested constructs such as JavaScript template
+  literals are marked as one string.
+- Only the listed languages are highlighted; HTML and CSS are not.
+- There is no bundled stylesheet or theme.
+
 ## Templates
 
 - Five built-in filters and no custom filters.

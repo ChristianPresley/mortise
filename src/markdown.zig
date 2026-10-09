@@ -7,6 +7,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const Writer = std.Io.Writer;
+const highlight = @import("highlight.zig");
 
 pub const Error = Allocator.Error || Writer.Error;
 
@@ -556,14 +557,15 @@ fn renderBlock(r: *Renderer, b: Block, tight: bool, w: *Writer) Error!void {
             }
         },
         .code => |c| {
+            const info = try unescapeBackslashes(arena, c.info);
             try w.writeAll("<pre><code");
-            if (c.info.len > 0) {
+            if (info.len > 0) {
                 try w.writeAll(" class=\"language-");
-                try escapeHtml(w, try unescapeBackslashes(arena, c.info));
+                try escapeHtml(w, info);
                 try w.writeAll("\"");
             }
             try w.writeAll(">");
-            try escapeHtml(w, c.text);
+            try highlight.write(w, info, c.text);
             try w.writeAll("</code></pre>\n");
         },
         .list => |l| {
@@ -1145,7 +1147,8 @@ test "paragraphs and soft breaks" {
 }
 
 test "fenced code" {
-    try expectHtml("<pre><code class=\"language-zig\">const a = 1 &lt; 2;\n</code></pre>\n", "```zig\nconst a = 1 < 2;\n```");
+    try expectHtml("<pre><code class=\"language-text\">const a = 1 &lt; 2;\n</code></pre>\n", "```text\nconst a = 1 < 2;\n```");
+    try expectHtml("<pre><code class=\"language-zig\"><span class=\"hl-keyword\">const</span> a = <span class=\"hl-number\">1</span>;\n</code></pre>\n", "```zig\nconst a = 1;\n```");
     try expectHtml("<pre><code>x\n\ny\n</code></pre>\n", "~~~~\nx\n\ny\n~~~~~");
     try expectHtml("<pre><code>a\n```\n</code></pre>\n", "````\na\n```\n````");
     // An unclosed fence runs to the end of the document.
