@@ -206,5 +206,5 @@ These render as plain paragraph text:
 - Reference-style links and link reference definitions.
 - HTML entities and numeric character references (`&amp;` renders as
   `&amp;amp;`).
-- Task lists, footnotes, and other extensions besides tables and
-  strikethrough.
+- Extensions other than tables, strikethrough, task lists, footnotes,
+  definition lists, and the [components](components.md).
