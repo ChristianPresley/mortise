@@ -3,6 +3,21 @@
 This list grows with each milestone. Anything Mortise does not handle, or
 handles differently from what a user might expect, belongs here.
 
+## Languages
+
+Mortise, its build script, its tests, and its benchmark are written only in
+Zig. Two pieces of non-Zig code remain because nothing else can do their
+job:
+
+- **The dev server's browser script.** Reloading a page and drawing the
+  error overlay has to happen inside the browser, which runs JavaScript. The
+  script is a string in `src/server.zig`, sent only by `serve`, and never
+  appears in `build` output.
+- **The CI bootstrap step.** CI has to download Zig before any Zig code can
+  run, so one workflow step uses the runner's shell (`curl`, a checksum
+  check, and `tar` or `unzip`). Every other check (the exact Zig version,
+  the empty dependency table) is enforced by `build.zig`.
+
 ## Paths and files
 
 - **Both `/` and `\` are path separators on every platform.** A file on Linux

@@ -34,7 +34,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Download the official release directly so CI has no third-party actions.
+      # Bootstrap: the only non-Zig step in the repository. Zig has to be
+      # downloaded before any Zig code can run, so this fetches the official
+      # release with the runner's built-in tools and verifies its checksum,
+      # without third-party actions.
       - name: Install Zig ${{ env.ZIG_VERSION }}
         run: |
           name="zig-${{ matrix.zig_target }}-${ZIG_VERSION}"
@@ -44,12 +47,8 @@ jobs:
           if [ "${{ matrix.archive }}" = zip ]; then unzip -q "$file"; else tar -xf "$file"; fi
           echo "$PWD/$name" >> "$GITHUB_PATH"
 
-      - name: Check Zig version
-        run: test "$(zig version)" = "$ZIG_VERSION"
-
-      - name: Check build.zig.zon has no dependencies
-        run: grep -Eq '^[[:space:]]*\.dependencies = \.\{\},' build.zig.zon
-
+      # build.zig itself rejects any Zig other than the pinned version and
+      # any dependency in build.zig.zon, so no separate checks are needed.
       - name: Build
         run: zig build
 

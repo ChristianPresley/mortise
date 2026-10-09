@@ -5,9 +5,24 @@ const builtin = @import("builtin");
 /// `minimum_zig_version` in build.zig.zon and ZIG_VERSION in CI.
 const required_zig = "0.16.0";
 
+/// The package manifest, read at compile time. Its `dependencies` field is
+/// typed as an empty struct, so adding any dependency to build.zig.zon
+/// makes the build fail: Mortise has no third-party dependencies.
+const manifest: struct {
+    name: @EnumLiteral(),
+    version: []const u8,
+    fingerprint: u64,
+    minimum_zig_version: []const u8,
+    dependencies: struct {},
+    paths: []const []const u8,
+} = @import("build.zig.zon");
+
 comptime {
     if (!std.mem.eql(u8, builtin.zig_version_string, required_zig)) {
         @compileError("Mortise requires Zig " ++ required_zig ++ " exactly; found " ++ builtin.zig_version_string);
+    }
+    if (!std.mem.eql(u8, manifest.minimum_zig_version, required_zig)) {
+        @compileError("build.zig.zon must pin minimum_zig_version to " ++ required_zig);
     }
 }
 
