@@ -2,11 +2,7 @@
 
 <div>raw html is escaped</div>
 
-- [ ] task lists are plain list items
-
-Footnotes[^1] are literal.
-
-[^1]: Like this one.
+A footnote reference with no definition[^missing] stays literal.
 
 Entities like &copy; are escaped.
 

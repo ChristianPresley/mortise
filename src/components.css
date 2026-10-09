@@ -239,3 +239,43 @@
 .mt-tab-input:nth-of-type(6):checked ~ .mt-tab-panel:nth-of-type(6),
 .mt-tab-input:nth-of-type(7):checked ~ .mt-tab-panel:nth-of-type(7),
 .mt-tab-input:nth-of-type(8):checked ~ .mt-tab-panel:nth-of-type(8) { display: block; }
+
+/* Task lists: - [ ] and - [x] */
+li.mt-task { list-style: none; margin-left: -1.4rem; }
+li.mt-task > input[type="checkbox"] {
+  appearance: none;
+  width: 1.05em;
+  height: 1.05em;
+  margin: 0 .5rem 0 0;
+  vertical-align: -.15em;
+  border: 1.5px solid color-mix(in srgb, currentColor 35%, transparent);
+  border-radius: 4px;
+  background: transparent center / 80% no-repeat;
+  opacity: 1;
+}
+li.mt-task > input[type="checkbox"]:checked {
+  border-color: var(--mt-tip);
+  background-color: var(--mt-tip);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M3 8.5l3 3 7-7' fill='none' stroke='white' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+}
+
+/* Footnotes: [^label] and [^label]: text */
+.mt-fnref { font-size: .75em; line-height: 0; }
+.mt-fnref a { text-decoration: none; padding: 0 .1em; }
+.mt-fnref a::before { content: "["; }
+.mt-fnref a::after { content: "]"; }
+.mt-footnotes {
+  margin-top: 2.5rem;
+  padding-top: .75rem;
+  border-top: 1px solid var(--mt-border);
+  font-size: .9rem;
+  color: var(--mt-muted);
+}
+.mt-footnotes ol { padding-left: 1.4rem; }
+.mt-footnotes li:target { background: color-mix(in srgb, var(--mt-accent) 10%, transparent); border-radius: 4px; }
+.mt-fnback { text-decoration: none; }
+
+/* Definition lists: Term then : Definition */
+.mt-dl { margin: 1.25rem 0; }
+.mt-dl dt { font-weight: 700; margin-top: .75rem; }
+.mt-dl dd { margin: .2rem 0 0 1.25rem; padding-left: .75rem; border-left: 2px solid var(--mt-border); }

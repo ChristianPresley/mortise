@@ -57,7 +57,76 @@ pub fn render(arena: Allocator, src: []const u8, w: *Writer) Error!void {
 fn renderWith(r: *Renderer, src: []const u8, w: *Writer) Error!void {
     const lines = try splitLines(r.arena, src);
     const doc = try parseBlocks(r.arena, lines);
-    try renderBlocks(r, doc.blocks, false, w);
+    var aw: Writer.Allocating = .init(r.arena);
+    renderBlocks(r, doc.blocks, false, &aw.writer) catch return error.OutOfMemory;
+    try finishFootnotes(r, aw.written(), w);
+}
+
+/// Surrounds a footnote label in rendered HTML until it is numbered.
+const fn_marker = "\x01mt-fn\x01";
+
+/// `[^label]` at the start of `s`: the label, or null.
+fn footnoteRef(s: []const u8) ?[]const u8 {
+    if (s.len < 4 or s[1] != '^') return null;
+    const close = std.mem.indexOfScalarPos(u8, s, 2, ']') orelse return null;
+    const label = s[2..close];
+    if (label.len == 0) return null;
+    for (label) |c| if (c <= ' ' or c == '[') return null;
+    return label;
+}
+
+/// Replaces footnote placeholders in `html` with numbered references, in
+/// order of first use, and appends the footnotes. References to labels
+/// with no definition are written back as literal text.
+fn finishFootnotes(r: *Renderer, html: []const u8, w: *Writer) Error!void {
+    var order: std.ArrayList([]const u8) = .empty;
+    var refs: std.StringHashMapUnmanaged(usize) = .empty;
+    var i: usize = 0;
+    while (std.mem.indexOfPos(u8, html, i, fn_marker)) |start| {
+        try w.writeAll(html[i..start]);
+        const label_start = start + fn_marker.len;
+        const end = std.mem.indexOfPos(u8, html, label_start, fn_marker) orelse html.len;
+        const label = html[label_start..end];
+        i = @min(end + fn_marker.len, html.len);
+        if (!r.footnotes.contains(label)) {
+            try w.print("[^{s}]", .{label});
+            continue;
+        }
+        const n = for (order.items, 0..) |l, k| {
+            if (std.mem.eql(u8, l, label)) break k + 1;
+        } else blk: {
+            try order.append(r.arena, label);
+            break :blk order.items.len;
+        };
+        const gop = try refs.getOrPut(r.arena, label);
+        const use = if (gop.found_existing) gop.value_ptr.* + 1 else 1;
+        gop.value_ptr.* = use;
+        const id_suffix = if (use > 1) try std.fmt.allocPrint(r.arena, "-{d}", .{use}) else "";
+        try w.writeAll("<sup class=\"mt-fnref\" id=\"fnref-");
+        try escapeHtml(w, label);
+        try w.writeAll(id_suffix);
+        try w.writeAll("\"><a href=\"#fn-");
+        try escapeHtml(w, label);
+        try w.print("\">{d}</a></sup>", .{n});
+    }
+    try w.writeAll(html[i..]);
+    if (order.items.len == 0) return;
+    try w.writeAll("<section class=\"mt-footnotes\">\n<ol>\n");
+    for (order.items) |label| {
+        try w.writeAll("<li id=\"fn-");
+        try escapeHtml(w, label);
+        try w.writeAll("\">\n");
+        // The back link goes inside the last paragraph when there is one.
+        const content = r.footnotes.get(label).?;
+        const in_para = std.mem.endsWith(u8, content, "</p>\n");
+        try w.writeAll(if (in_para) content[0 .. content.len - "</p>\n".len] else content);
+        try w.writeAll(if (in_para) " " else "");
+        try w.writeAll("<a class=\"mt-fnback\" href=\"#fnref-");
+        try escapeHtml(w, label);
+        try w.writeAll("\" aria-label=\"Back to the text\">↩</a>");
+        try w.writeAll(if (in_para) "</p>\n</li>\n" else "\n</li>\n");
+    }
+    try w.writeAll("</ol>\n</section>\n");
 }
 
 /// A URL-friendly slug of `text`, as used for heading ids: lowercase ASCII
@@ -86,10 +155,16 @@ const Block = union(enum) {
     thematic_break,
     table: Table,
     callout: struct { kind: CalloutKind, children: []const Block },
+    /// `[^label]: text`; rendered at the end of the document.
+    footnote_def: struct { label: []const u8, children: []const Block },
+    /// `Term` followed by `: Definition` lines.
+    definitions: []const Definition,
     container: struct { kind: ContainerKind, title: []const u8, children: []const Block },
 };
 
 const Code = struct { info: []const u8, meta: []const u8 = "", text: []const u8 };
+
+const Definition = struct { term: []const u8, defs: []const []const u8 };
 
 /// Options from a code fence's info string after the language:
 ///
@@ -275,6 +350,10 @@ fn parseBlocks(arena: Allocator, lines: []const []const u8) Allocator.Error!Pars
             i += 1;
         } else if (quoteContent(line) != null) {
             i = try parseQuote(arena, lines, i, &blocks);
+        } else if (footnoteDefStart(line)) |fd| {
+            i = try parseFootnoteDef(arena, lines, i, fd, &blocks);
+        } else if (isDefinitionStart(lines, i)) {
+            i = try parseDefinitions(arena, lines, i, &blocks);
         } else if (containerStart(line)) |c| {
             i = try parseContainer(arena, lines, i, c, &blocks);
         } else if (try tableStart(arena, lines, i)) |t| {
@@ -413,6 +492,7 @@ fn listMarker(line: []const u8) ?Marker {
 fn interruptsParagraph(line: []const u8) bool {
     if (fenceStart(line) != null or atxHeading(line) != null) return true;
     if (isThematicBreak(line) or quoteContent(line) != null or containerStart(line) != null) return true;
+    if (footnoteDefStart(line) != null) return true;
     if (listMarker(line)) |m| return !m.empty and (!m.ordered or m.start == 1);
     return false;
 }
@@ -635,6 +715,82 @@ fn parseQuote(arena: Allocator, lines: []const []const u8, start: usize, out: *s
     return j;
 }
 
+const FootnoteDefStart = struct { label: []const u8, first: []const u8 };
+
+/// `[^label]: text` with at most three spaces of indentation.
+fn footnoteDefStart(line: []const u8) ?FootnoteDefStart {
+    const ind = indentOf(line);
+    if (ind > 3) return null;
+    const rest = line[ind..];
+    const label = footnoteRef(rest) orelse return null;
+    const after = rest[label.len + 3 ..];
+    if (after.len == 0 or after[0] != ':') return null;
+    return .{ .label = label, .first = trimLeft(after[1..]) };
+}
+
+/// A footnote's content is its first line plus following lines indented
+/// four spaces (blank lines allowed between them), parsed as blocks.
+fn parseFootnoteDef(arena: Allocator, lines: []const []const u8, start: usize, fd: FootnoteDefStart, out: *std.ArrayList(Block)) Allocator.Error!usize {
+    var inner: std.ArrayList([]const u8) = .empty;
+    try inner.append(arena, fd.first);
+    var j = start + 1;
+    var end = j;
+    while (j < lines.len) : (j += 1) {
+        const l = lines[j];
+        if (isBlank(l)) {
+            try inner.append(arena, "");
+            continue;
+        }
+        if (indentOf(l) >= 4) {
+            try inner.append(arena, l[4..]);
+            end = j + 1;
+            continue;
+        }
+        // Lazy continuation of the first paragraph.
+        if (end == j and !interruptsParagraph(l)) {
+            try inner.append(arena, trimLeft(l));
+            end = j + 1;
+            continue;
+        }
+        break;
+    }
+    const used = inner.items.len - (j - end);
+    const parsed = try parseBlocks(arena, inner.items[0..used]);
+    try out.append(arena, .{ .footnote_def = .{ .label = fd.label, .children = parsed.blocks } });
+    return end;
+}
+
+/// A definition list starts with a term line followed by a `: ` line.
+fn isDefinitionStart(lines: []const []const u8, i: usize) bool {
+    if (i + 1 >= lines.len or isBlank(lines[i]) or indentOf(lines[i]) > 3 or interruptsParagraph(lines[i])) return false;
+    return definitionText(lines[i + 1]) != null;
+}
+
+fn definitionText(line: []const u8) ?[]const u8 {
+    const ind = indentOf(line);
+    if (ind > 3 or ind + 1 >= line.len or line[ind] != ':' or (line[ind + 1] != ' ' and line[ind + 1] != '\t')) return null;
+    return trimLeft(line[ind + 1 ..]);
+}
+
+fn parseDefinitions(arena: Allocator, lines: []const []const u8, start: usize, out: *std.ArrayList(Block)) Allocator.Error!usize {
+    var items: std.ArrayList(Definition) = .empty;
+    var j = start;
+    while (isDefinitionStart(lines, j)) {
+        const term = std.mem.trim(u8, lines[j], " \t");
+        j += 1;
+        var defs: std.ArrayList([]const u8) = .empty;
+        while (j < lines.len) : (j += 1) {
+            const d = definitionText(lines[j]) orelse break;
+            try defs.append(arena, d);
+        }
+        try items.append(arena, .{ .term = term, .defs = defs.items });
+        // A blank line may separate entries.
+        if (j < lines.len and isBlank(lines[j]) and isDefinitionStart(lines, j + 1)) j += 1;
+    }
+    try out.append(arena, .{ .definitions = items.items });
+    return j;
+}
+
 fn calloutMarker(line: []const u8) ?CalloutKind {
     const t = std.mem.trim(u8, line, " \t");
     if (t.len < 4 or !std.mem.startsWith(u8, t, "[!") or t[t.len - 1] != ']') return null;
@@ -685,6 +841,8 @@ const Renderer = struct {
     headings: std.ArrayList(Heading) = .empty,
     /// Tab groups rendered so far, for unique radio names and ids.
     tab_groups: usize = 0,
+    /// Rendered footnote content by label.
+    footnotes: std.StringHashMapUnmanaged([]const u8) = .empty,
 
     /// A unique id for a heading whose plain text is `text` (see
     /// `slugify`). Repeats get `-1`, `-2`, and so on.
@@ -699,6 +857,17 @@ const Renderer = struct {
         return id;
     }
 };
+
+/// Whether paragraph text starts a task list item: `[ ] ` (false) or
+/// `[x] ` / `[X] ` (true).
+fn taskMarker(text: []const u8) ?bool {
+    if (text.len < 4 or text[0] != '[' or text[2] != ']' or text[3] != ' ') return null;
+    return switch (text[1]) {
+        ' ' => false,
+        'x', 'X' => true,
+        else => null,
+    };
+}
 
 /// Renders tabs without JavaScript: one radio input and label per tab,
 /// then one panel per tab; CSS shows the panel whose input is checked.
@@ -835,6 +1004,28 @@ fn renderBlock(r: *Renderer, b: Block, tight: bool, w: *Writer) Error!void {
     const arena = r.arena;
     switch (b) {
         .thematic_break => try w.writeAll("<hr />\n"),
+        .footnote_def => |f| {
+            // Collected now, written at the end by `finishFootnotes`. The
+            // first definition of a label wins.
+            if (r.footnotes.contains(f.label)) return;
+            var aw: Writer.Allocating = .init(arena);
+            renderBlocks(r, f.children, false, &aw.writer) catch return error.OutOfMemory;
+            try r.footnotes.put(arena, f.label, try aw.toOwnedSlice());
+        },
+        .definitions => |items| {
+            try w.writeAll("<dl class=\"mt-dl\">\n");
+            for (items) |item| {
+                try w.writeAll("<dt>");
+                try renderInline(arena, item.term, w);
+                try w.writeAll("</dt>\n");
+                for (item.defs) |d| {
+                    try w.writeAll("<dd>");
+                    try renderInline(arena, d, w);
+                    try w.writeAll("</dd>\n");
+                }
+            }
+            try w.writeAll("</dl>\n");
+        },
         .callout => |c| {
             try w.print("<div class=\"mt-callout mt-callout-{s}\" role=\"note\">\n<p class=\"mt-callout-title\">{s}</p>\n", .{ @tagName(c.kind), c.kind.label() });
             try renderBlocks(r, c.children, false, w);
@@ -920,14 +1111,19 @@ fn renderBlock(r: *Renderer, b: Block, tight: bool, w: *Writer) Error!void {
                 try w.writeAll("<ol>\n");
             }
             for (l.items) |children| {
-                try w.writeAll("<li>");
+                // Task list item: `- [ ] text` or `- [x] text`.
+                const task = if (children.len > 0 and children[0] == .paragraph) taskMarker(children[0].paragraph) else null;
+                if (task) |done| {
+                    try w.print("<li class=\"mt-task\"><input type=\"checkbox\" disabled{s}> ", .{if (done) " checked" else ""});
+                } else try w.writeAll("<li>");
                 for (children, 0..) |child, idx| {
                     if (l.tight and child == .paragraph) {
-                        try renderInline(arena, child.paragraph, w);
+                        try renderInline(arena, if (idx == 0 and task != null) child.paragraph[4..] else child.paragraph, w);
                         if (idx + 1 < children.len) try w.writeAll("\n");
                     } else {
                         if (idx == 0) try w.writeAll("\n");
-                        try renderBlock(r, child, l.tight, w);
+                        const block: Block = if (idx == 0 and task != null) .{ .paragraph = child.paragraph[4..] } else child;
+                        try renderBlock(r, block, l.tight, w);
                     }
                 }
                 try w.writeAll("</li>\n");
@@ -1049,6 +1245,14 @@ fn parseInlines(arena: Allocator, s: []const u8) Allocator.Error![]const Inline 
             },
             '[' => {
                 try p.addText(s[text_start..i]);
+                if (footnoteRef(s[i..])) |label| {
+                    // A placeholder that `finishFootnotes` numbers once the
+                    // whole document is rendered.
+                    try p.add(.{ .raw = .{ .html = try std.mem.concat(arena, u8, &.{ fn_marker, label, fn_marker }) } });
+                    i += label.len + 3;
+                    text_start = i;
+                    continue;
+                }
                 try addBracket(&p, false);
                 i += 1;
                 text_start = i;
