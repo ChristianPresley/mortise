@@ -139,6 +139,8 @@ const Page = struct {
     object: template.Object = .{},
     /// Set once rendered: the output and what it depended on.
     output: []const u8 = "",
+    /// Pages 2 and up of a paginated page.
+    extra_outputs: []const Output = &.{},
     sources: []const []const u8 = &.{},
     reads_collections: bool = false,
 };
@@ -168,6 +170,9 @@ const Builder = struct {
     site_url: ?[]const u8 = null,
     /// `site.data`, from the files in `_data/`.
     data: Value = .{ .object = .{} },
+    /// The `paginator` variable while rendering one page of a paginated
+    /// page, or null.
+    paginator: ?template.Object = null,
 
     fn fail(b: *Builder, path: []const u8, line: usize, comptime fmt: []const u8, args: anytype) Error {
         b.diag.* = .{
@@ -484,12 +489,13 @@ fn finish(b: *Builder, config_fields: frontmatter.Map, pages: []Page, statics: [
             b.deps = .empty;
             b.reads_collections = false;
             try b.addDep(p.source);
-            p.output = try renderPage(b, p);
+            try renderPaginated(b, p, post_values.items);
             p.sources = b.deps.items;
             p.reads_collections = b.reads_collections;
             rendered += 1;
         }
         try outputs.append(arena, .{ .path = p.out_path, .source = p.source, .data = .{ .bytes = p.output } });
+        try outputs.appendSlice(arena, p.extra_outputs);
         d.* = .{ .output = p.out_path, .sources = p.sources, .reads_collections = p.reads_collections };
     }
 
@@ -661,6 +667,57 @@ fn isComputedKey(key: []const u8) bool {
 
 const convert = data_files.fromFrontmatter;
 
+/// Renders `p` into `p.output`. A page with `paginate: N` in its
+/// frontmatter is rendered once per N posts: page 1 at its own URL and page
+/// k at `<url>page/k/`, each with a `paginator` variable.
+fn renderPaginated(b: *Builder, p: *Page, posts: []const Value) Error!void {
+    p.extra_outputs = &.{};
+    const field = p.fields.get("paginate") orelse {
+        p.output = try renderPage(b, p);
+        return;
+    };
+    if (field != .int or field.int < 1) return b.fail(p.source, 0, "'paginate' must be a positive number of posts per page", .{});
+    if (!std.mem.endsWith(u8, p.out_path, "index.html") or !std.mem.endsWith(u8, p.url, "/")) {
+        return b.fail(p.source, 0, "a paginated page must have a URL ending in '/'", .{});
+    }
+    const arena = b.arena;
+    const per: usize = @intCast(field.int);
+    const total_pages = @max(1, (posts.len + per - 1) / per);
+    const dir_out = p.out_path[0 .. p.out_path.len - "index.html".len];
+
+    var extra: std.ArrayList(Output) = .empty;
+    defer b.paginator = null;
+    for (1..total_pages + 1) |k| {
+        const first = (k - 1) * per;
+        const slice = posts[@min(first, posts.len)..@min(first + per, posts.len)];
+        const entries = try arena.alloc(Entry, 7);
+        entries[0] = .{ .key = "posts", .value = .{ .list = slice } };
+        entries[1] = .{ .key = "page", .value = .{ .int = @intCast(k) } };
+        entries[2] = .{ .key = "per_page", .value = .{ .int = @intCast(per) } };
+        entries[3] = .{ .key = "total_pages", .value = .{ .int = @intCast(total_pages) } };
+        entries[4] = .{ .key = "total_posts", .value = .{ .int = @intCast(posts.len) } };
+        entries[5] = .{ .key = "previous_url", .value = .{ .string = if (k > 1) try pageUrl(arena, p.url, k - 1) else "" } };
+        entries[6] = .{ .key = "next_url", .value = .{ .string = if (k < total_pages) try pageUrl(arena, p.url, k + 1) else "" } };
+        b.paginator = .{ .entries = entries };
+        // The paginator lists posts, so this page changes when any post does.
+        b.reads_collections = true;
+        const html = try renderPage(b, p);
+        if (k == 1) {
+            p.output = html;
+        } else {
+            const path = try std.fmt.allocPrint(arena, "{s}page/{d}/index.html", .{ dir_out, k });
+            try extra.append(arena, .{ .path = path, .source = p.source, .data = .{ .bytes = html } });
+        }
+    }
+    p.extra_outputs = extra.items;
+}
+
+/// URL of page `k` of a paginated page at `base` (which ends in `/`).
+fn pageUrl(arena: Allocator, base: []const u8, k: usize) Allocator.Error![]const u8 {
+    if (k == 1) return base;
+    return std.fmt.allocPrint(arena, "{s}page/{d}/", .{ base, k });
+}
+
 fn renderPage(b: *Builder, p: *const Page) Error![]const u8 {
     const arena = b.arena;
     var content: []const u8 = undefined;
@@ -697,12 +754,21 @@ fn renderPage(b: *Builder, p: *const Page) Error![]const u8 {
 }
 
 fn renderTemplate(b: *Builder, tpl: *const template.Template, p: *const Page, content: ?[]const u8) Error![]const u8 {
-    var entries: [3]Entry = .{
-        .{ .key = "site", .value = .{ .object = b.site } },
-        .{ .key = "page", .value = .{ .object = p.object } },
-        .{ .key = "content", .value = .{ .html = content orelse "" } },
-    };
-    const root: template.Object = .{ .entries = entries[0..if (content != null) 3 else 2] };
+    var entries: [4]Entry = undefined;
+    var n: usize = 0;
+    entries[n] = .{ .key = "site", .value = .{ .object = b.site } };
+    n += 1;
+    entries[n] = .{ .key = "page", .value = .{ .object = p.object } };
+    n += 1;
+    if (content) |c| {
+        entries[n] = .{ .key = "content", .value = .{ .html = c } };
+        n += 1;
+    }
+    if (b.paginator) |pg| {
+        entries[n] = .{ .key = "paginator", .value = .{ .object = pg } };
+        n += 1;
+    }
+    const root: template.Object = .{ .entries = entries[0..n] };
     b.useTemplate(tpl);
     var td: template.Diagnostic = .{};
     return template.renderAlloc(b.arena, tpl, root, .{ .ctx = b, .loadFn = loadInclude }, &td) catch |err| switch (err) {
@@ -1072,6 +1138,33 @@ test "baseurl prefixes page URLs but not output paths" {
 
     try expectBuildError(&.{.{ "_config.yml", "baseurl: blog\n" }}, "_config.yml", 0, "'baseurl' must be a path");
     try expectBuildError(&.{.{ "_config.yml", "baseurl: /../x\n" }}, "_config.yml", 0, "'baseurl' must be a path");
+}
+
+test "a page with paginate is split across pages of posts" {
+    var t: TestSite = try .init(&.{
+        .{ "index.html", "---\npaginate: 2\n---\n{{ paginator.page }}/{{ paginator.total_pages }}:{% for p in paginator.posts %}{{ p.slug }}{% endfor %} <{{ paginator.previous_url }}|{{ paginator.next_url }}>" },
+        .{ "_posts/2024-01-01-a.md", "A\n" },
+        .{ "_posts/2024-01-02-b.md", "B\n" },
+        .{ "_posts/2024-01-03-c.md", "C\n" },
+        .{ "_posts/2024-01-04-d.md", "D\n" },
+        .{ "_posts/2024-01-05-e.md", "E\n" },
+    });
+    defer t.deinit();
+    const src = SiteDir.borrow(testing.io, t.tmp.dir);
+    var diag: Diagnostic = .{};
+    var site = try t.build(&diag);
+    try testing.expectEqualStrings("1/3:ed <|/page/2/>", site.find("index.html").?.data.bytes);
+    try testing.expectEqualStrings("2/3:cb </|/page/3/>", site.find("page/2/index.html").?.data.bytes);
+    try testing.expectEqualStrings("3/3:a </page/2/|>", site.find("page/3/index.html").?.data.bytes);
+
+    // Editing a post re-renders every page of the paginated page.
+    try src.writeFile("_posts/2024-01-01-a.md", "A2\n");
+    site = try rebuild(t.arena.allocator(), src, &site, &.{"_posts/2024-01-01-a.md"}, &diag);
+    try testing.expect(!site.full);
+    try testing.expect(site.find("page/3/index.html") != null);
+
+    try expectBuildError(&.{.{ "x.html", "---\npaginate: 0\n---\n" }}, "x.html", 0, "'paginate' must be");
+    try expectBuildError(&.{.{ "feed.html", "---\npaginate: 2\npermalink: /feed.xml\n---\n" }}, "feed.html", 0, "URL ending in '/'");
 }
 
 test "data files are available as site.data" {
