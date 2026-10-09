@@ -74,6 +74,20 @@ job:
 - The sitemap has no `changefreq` or `priority`, and `lastmod` only for
   posts.
 
+## Rendered graphics
+
+- `mortise build` renders every `_render/` spec and theme asset from scratch
+  each time; a large planet animation can take a few seconds. Only
+  `mortise serve` keeps rendered images between builds.
+- The dev server keeps every version of a spec it has rendered until it
+  exits, so editing a large spec many times grows its memory.
+- Editing a spec rebuilds the whole site (cheaply, since unchanged images
+  come from the cache) rather than only that spec's outputs.
+- Templates cannot read a rendered image's size or a panel's border slice;
+  use the generated stylesheet instead.
+- Specs choose from a fixed set of kinds and fields. Anything else means
+  writing Zig against the `render` module (see render/README.md).
+
 ## Syntax highlighting
 
 - Highlighting is lexical: keywords, literals, strings, numbers, comments,

@@ -30,9 +30,22 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
+    // Mortise draws `_render/` assets with the renderer. That copy is always
+    // optimized: unoptimized rendering is tens of times slower, which would
+    // make Debug builds, `zig build dev` and the tests crawl on any site
+    // with rendered assets.
+    const render_fast = b.createModule(.{
+        .root_source_file = b.path("render/root.zig"),
+        .target = target,
+        .optimize = .ReleaseFast,
+    });
+
     const mod = b.addModule("mortise", .{
         .root_source_file = b.path("src/root.zig"),
         .target = target,
+        .imports = &.{
+            .{ .name = "render", .module = render_fast },
+        },
     });
 
     const exe = b.addExecutable(.{
@@ -95,6 +108,9 @@ pub fn build(b: *std.Build) void {
                     .root_source_file = b.path("src/root.zig"),
                     .target = target,
                     .optimize = .ReleaseFast,
+                    .imports = &.{
+                        .{ .name = "render", .module = render_fast },
+                    },
                 }) },
             },
         }),
@@ -157,11 +173,7 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = .ReleaseFast,
             .imports = &.{
-                .{ .name = "render", .module = b.createModule(.{
-                    .root_source_file = b.path("render/root.zig"),
-                    .target = target,
-                    .optimize = .ReleaseFast,
-                }) },
+                .{ .name = "render", .module = render_fast },
             },
         }),
     });

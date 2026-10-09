@@ -1,0 +1,8 @@
+# A radar sweep as a 24-frame sprite sheet; radar.css animates .radar.
+kind: radar
+size: 128
+frames: 24
+seconds: 3
+blips: 5
+seed: 4
+color: "#ffb03a"

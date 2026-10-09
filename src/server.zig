@@ -19,6 +19,7 @@ const http = std.http;
 const SiteDir = @import("SiteDir.zig");
 const BuildArena = @import("BuildArena.zig");
 const pipeline = @import("pipeline.zig");
+const assets = @import("assets.zig");
 const sitepath = @import("path.zig");
 const Watcher = @import("watch.zig").Watcher;
 
@@ -100,6 +101,10 @@ pub const Server = struct {
     tasks: Io.Group = .init,
     /// Duration of the most recent build, successful or not.
     last_build_ns: i96 = 0,
+    /// Rendered `_render/` and theme assets, kept so a rebuild only
+    /// renders specs that changed. Builds run one at a time, so it needs
+    /// no lock.
+    render_cache: assets.Cache,
 
     pub const InitError = Io.Dir.OpenError || Io.net.IpAddress.ListenError || Allocator.Error;
 
@@ -123,7 +128,9 @@ pub const Server = struct {
             .incremental = options.incremental,
             .build_options = options.build,
             .generation = options.first_generation,
+            .render_cache = .init(gpa),
         };
+        s.build_options.render_cache = &s.render_cache;
         s.rebuild();
         return s;
     }
@@ -157,6 +164,7 @@ pub const Server = struct {
         s.clearFailure();
         s.clearPending();
         s.pending.deinit(s.gpa);
+        s.render_cache.deinit();
         s.src.close();
         s.gpa.destroy(s);
     }

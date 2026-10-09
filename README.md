@@ -116,6 +116,10 @@ my-site/
   `page.breadcrumbs`, `page.previous`/`page.next`, and `site.nav` for
   wiki-style navigation. See [components](docs/components.md) and
   [templates](docs/templates.md#navigation).
+- [Rendered graphics](docs/rendering.md): each `_render/PATH.yml` spec
+  draws an image at `/PATH.png` during the build: starfields, HUD panel
+  frames for CSS `border-image`, radar scopes, planets, and hologram
+  wireframes, with sprite-sheet CSS animations for the animated ones.
 - Two built-in [themes](docs/themes.md), picked with `theme:` in
   `_config.yml`: `visor`, a helmet heads-up display with a shield meter
   and motion tracker, and `lcars`, a starship console frame. Both are

@@ -1,0 +1,6 @@
+# A hologram wireframe with a ring; hologram.css animates .hologram.
+kind: hologram
+shape: icosphere
+size: 128
+frames: 24
+seconds: 2.4

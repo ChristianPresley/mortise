@@ -27,6 +27,7 @@ const feeds = @import("feeds.zig");
 const data_files = @import("data.zig");
 const openapi = @import("openapi.zig");
 const themes = @import("themes.zig");
+const assets = @import("assets.zig");
 const Value = template.Value;
 const Entry = template.Entry;
 
@@ -235,6 +236,9 @@ pub fn build(arena: Allocator, src: SiteDir, diag: *Diagnostic) Error!Site {
 pub const Options = struct {
     /// Publish pages and posts marked `draft: true`.
     drafts: bool = false,
+    /// Keeps rendered assets between builds. Without one, every build
+    /// renders them again, which suits one-off builds.
+    render_cache: ?*assets.Cache = null,
 };
 
 /// `build` with options.
@@ -268,6 +272,10 @@ pub fn buildWith(arena: Allocator, src: SiteDir, options: Options, diag: *Diagno
         }
         if (openapi.isSpec(path)) {
             try pages.append(arena, try loadApiPage(&b, path));
+            continue;
+        }
+        if (assets.isSpec(path)) {
+            try addRendered(&b, &statics, path, assets.outputStem(path), try b.read(path));
             continue;
         }
         if (sitepath.hasHiddenComponent(path)) continue;
@@ -306,8 +314,11 @@ pub fn rebuild(arena: Allocator, src: SiteDir, prev: *const Site, changed: []con
     var dirty_pages: std.ArrayList(usize) = .empty;
     for (changed) |path| {
         // The config and data files feed `site`, which any page may read.
+        // Render specs are cheap to rebuild from scratch thanks to the
+        // render cache, which keeps every unchanged asset.
         if (std.mem.eql(u8, path, config_path) or std.mem.eql(u8, path, "*") or
-            std.mem.startsWith(u8, path, data_files.dir_prefix)) return buildWith(arena, src, st.options, diag);
+            std.mem.startsWith(u8, path, data_files.dir_prefix) or
+            std.mem.startsWith(u8, path, assets.dir_prefix)) return buildWith(arena, src, st.options, diag);
         if (std.mem.startsWith(u8, path, "_layouts/") or std.mem.startsWith(u8, path, "_includes/")) {
             try dirty_templates.append(arena, path);
             continue;
@@ -466,8 +477,45 @@ fn addThemeCss(b: *Builder, outputs: *std.ArrayList(Output), config_fields: fron
     if (v != .string) return b.fail(config_path, line, "'theme' must be the name of a theme: {s}", .{themes.names});
     const theme = themes.find(v.string) orelse
         return b.fail(config_path, line, "unknown theme '{s}'; the themes are: {s}", .{ v.string, themes.names });
+    try addThemeAssets(b, outputs, theme, line);
     if (hasOutput(outputs.items, themes.css_path)) return;
     try outputs.append(b.arena, .{ .path = themes.css_path, .source = config_path, .data = .{ .bytes = theme.css } });
+}
+
+/// Renders a theme's images into `/theme/`, except those the site
+/// replaces with its own file.
+fn addThemeAssets(b: *Builder, outputs: *std.ArrayList(Output), theme: themes.Theme, line: usize) Error!void {
+    for (theme.assets) |a| {
+        const name = try std.fmt.allocPrint(b.arena, "{s}/{s}", .{ themes.assets_dir, a.name });
+        const png = try std.fmt.allocPrint(b.arena, "{s}.png", .{name});
+        if (hasOutput(outputs.items, png)) continue;
+        var d: assets.Diagnostic = .{};
+        const out = assets.renderCached(b.options.render_cache, b.arena, b.src.io, name, a.spec, &d) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.InvalidSpec => return b.fail(config_path, line, "theme '{s}', asset '{s}', line {d}: {s}", .{ theme.name, a.name, d.line, d.message }),
+        };
+        try appendRendered(b, outputs, config_path, name, out);
+    }
+}
+
+/// Renders the spec `spec` read from `source` into `NAME.png`, plus
+/// `NAME.css` for kinds that need it.
+fn addRendered(b: *Builder, outputs: *std.ArrayList(Output), source: []const u8, name: []const u8, spec: []const u8) Error!void {
+    var d: assets.Diagnostic = .{};
+    const out = assets.renderCached(b.options.render_cache, b.arena, b.src.io, name, spec, &d) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.InvalidSpec => return b.fail(source, d.line, "{s}", .{d.message}),
+    };
+    try appendRendered(b, outputs, source, name, out);
+}
+
+fn appendRendered(b: *Builder, outputs: *std.ArrayList(Output), source: []const u8, name: []const u8, out: assets.Rendered) Error!void {
+    const png = try std.fmt.allocPrint(b.arena, "{s}.png", .{name});
+    try outputs.append(b.arena, .{ .path = png, .source = source, .data = .{ .bytes = out.png } });
+    if (out.css) |css| {
+        const css_path = try std.fmt.allocPrint(b.arena, "{s}.css", .{name});
+        try outputs.append(b.arena, .{ .path = css_path, .source = source, .data = .{ .bytes = css } });
+    }
 }
 
 /// Adds the Atom feed and the sitemap, unless the config turns them off or
@@ -1427,6 +1475,83 @@ test "an unknown theme names the config line and the themes" {
         .{ "_config.yml", "title: T\ntheme: borg\n" },
         .{ "index.md", "hi\n" },
     }, "_config.yml", 2, "unknown theme 'borg'; the themes are: visor, lcars");
+}
+
+test "render specs become images, with CSS for animated kinds" {
+    var t: TestSite = try .init(&.{
+        .{ "_render/img/stars.yml", "kind: starfield\nwidth: 32\nheight: 16\n" },
+        .{ "_render/radar.yml", "kind: radar\nsize: 24\nframes: 2\n" },
+    });
+    defer t.deinit();
+    var diag: Diagnostic = .{};
+    const site = try t.build(&diag);
+    const stars = site.find("img/stars.png").?;
+    try testing.expectEqualStrings("_render/img/stars.yml", stars.source);
+    try testing.expect(std.mem.startsWith(u8, stars.data.bytes, "\x89PNG"));
+    try testing.expect(site.find("img/stars.css") == null);
+    try testing.expect(site.find("radar.png") != null);
+    try testing.expect(std.mem.indexOf(u8, site.find("radar.css").?.data.bytes, "url(\"radar.png\")") != null);
+    // The specs themselves are not published.
+    try testing.expect(site.find("_render/radar.yml") == null);
+}
+
+test "a bad render spec names its file and line" {
+    try expectBuildError(&.{
+        .{ "_render/stars.yml", "kind: starfield\nwidth: 2\n" },
+    }, "_render/stars.yml", 2, "'width' must be a whole number from 8 to 4096");
+    try expectBuildError(&.{
+        .{ "_render/stars.yml", "kind: starfield\n" },
+        .{ "stars.png", "not really" },
+    }, "stars.png", 0, "writes to 'stars.png', which '_render/stars.yml' also writes to");
+}
+
+test "the render cache keeps unchanged assets across rebuilds" {
+    var t: TestSite = try .init(&.{
+        .{ "_render/a.yml", "kind: reticle\nsize: 16\n" },
+        .{ "_render/b.yml", "kind: reticle\nsize: 24\n" },
+        .{ "index.md", "hi\n" },
+    });
+    defer t.deinit();
+    var cache: assets.Cache = .init(testing.allocator);
+    defer cache.deinit();
+    const src = SiteDir.borrow(testing.io, t.tmp.dir);
+    var diag: Diagnostic = .{};
+    const first = try buildWith(t.arena.allocator(), src, .{ .render_cache = &cache }, &diag);
+    try src.writeFile("_render/b.yml", "kind: reticle\nsize: 32\n");
+    const second = try rebuild(t.arena.allocator(), src, &first, &.{"_render/b.yml"}, &diag);
+    try testing.expectEqual(first.find("a.png").?.data.bytes.ptr, second.find("a.png").?.data.bytes.ptr);
+    try testing.expect(first.find("b.png").?.data.bytes.ptr != second.find("b.png").?.data.bytes.ptr);
+    // Editing a page does not touch the assets at all.
+    try src.writeFile("index.md", "hello\n");
+    const third = try rebuild(t.arena.allocator(), src, &second, &.{"index.md"}, &diag);
+    try testing.expect(!third.full);
+    try testing.expectEqual(second.find("b.png").?.data.bytes.ptr, third.find("b.png").?.data.bytes.ptr);
+}
+
+test "theme assets render into /theme/ unless the site overrides them" {
+    var t: TestSite = try .init(&.{
+        .{ "theme/dot.png", "mine" },
+    });
+    defer t.deinit();
+    var b: Builder = .{ .arena = t.arena.allocator(), .src = SiteDir.borrow(testing.io, t.tmp.dir), .diag = undefined };
+    var diag: Diagnostic = .{};
+    b.diag = &diag;
+    const theme: themes.Theme = .{ .name = "test", .css = "", .assets = &.{
+        .{ .name = "dot", .spec = "kind: reticle\nsize: 16\n" },
+        .{ .name = "scope", .spec = "kind: radar\nsize: 16\nframes: 2\n" },
+    } };
+    var outputs: std.ArrayList(Output) = .empty;
+    try outputs.append(b.arena, .{ .path = "theme/dot.png", .source = "theme/dot.png", .data = .copy });
+    try addThemeAssets(&b, &outputs, theme, 3);
+    try testing.expectEqual(@as(usize, 3), outputs.items.len);
+    try testing.expectEqualStrings("theme/scope.png", outputs.items[1].path);
+    try testing.expectEqualStrings("theme/scope.css", outputs.items[2].path);
+    try testing.expect(std.mem.indexOf(u8, outputs.items[2].data.bytes, ".scope {") != null);
+
+    const bad: themes.Theme = .{ .name = "test", .css = "", .assets = &.{.{ .name = "x", .spec = "kind: radar\nsize: 1\n" }} };
+    try testing.expectError(error.BuildFailed, addThemeAssets(&b, &outputs, bad, 3));
+    try testing.expectEqual(@as(usize, 3), diag.line);
+    try testing.expect(std.mem.indexOf(u8, diag.message, "theme 'test', asset 'x', line 2: 'size' must be") != null);
 }
 
 test "pages, posts, layouts, and static files" {
