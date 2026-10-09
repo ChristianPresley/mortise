@@ -48,6 +48,16 @@ is unclear. With 1,000 pages a save reaches the browser in about 11 ms on
 Linux and 16 ms on Windows; see [bench/](bench/README.md). The reload script is added to HTML responses by the server
 only; it never appears in `build` output.
 
+## Example
+
+[`examples/showcase/`](examples/showcase) is a small site that uses every
+feature: data-driven navigation, pagination, excerpts, tags, a feed and
+sitemap, tables, highlighted code, a 404 page, and a draft. Try it with:
+
+```sh
+zig build run -- serve examples/showcase
+```
+
 ## Site layout
 
 ```

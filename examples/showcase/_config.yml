@@ -1,0 +1,6 @@
+# A site that exercises every Mortise feature. Build it with:
+#   zig build run -- build examples/showcase
+title: Mortise Showcase
+description: Every Mortise feature on one small site
+author: The Mortise authors
+url: https://example.com
