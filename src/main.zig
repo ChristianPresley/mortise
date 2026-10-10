@@ -6,6 +6,14 @@ const SiteDir = mortise.SiteDir;
 const pipeline = mortise.pipeline;
 const restart = @import("restart.zig");
 
+pub const std_options: std.Options = .{
+    // A browser closing a page ends its connection, which Windows reports
+    // with statuses the standard library calls unexpected. The server
+    // handles those errors; a stack trace for each one only makes the log
+    // look like a crash.
+    .unexpected_error_tracing = false,
+};
+
 const usage =
     \\Usage: mortise <command> [SITE_DIR] [options]
     \\
