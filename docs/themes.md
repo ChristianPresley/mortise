@@ -31,20 +31,18 @@ the specs are in `src/themes/visor/` and `src/themes/lcars/`.
 
 A helmet heads-up display, inspired by first-person sci-fi shooters.
 
-- A rendered starfield with a teal nebula, under a faint hexagon grid,
+- A dark gradient background with a soft cyan glow at the top, faint
   scanlines, and the curve of a visor at the edges.
 - A sticky HUD bar: the site name with a blinking cursor, angled nav
   buttons, and a segmented shield meter along its bottom edge that charges
   as the page loads.
-- A rendered motion tracker in the bottom-right corner, with a sweep and
-  blips, behind the content. It hides on narrower windows.
 - Headings read like mission objectives: `OBJ-01 //` above each `h2`, and
   a diamond waypoint before each `h3` (not in API references or
   component titles).
 - Cards and the contents box sit in a rendered HUD frame with chamfered
   corners; code blocks, callouts, and API operations are panels with
   corner brackets.
-- A rendered targeting-reticle cursor that turns amber over links.
+- The visitor's normal mouse pointer.
 
 ## lcars
 

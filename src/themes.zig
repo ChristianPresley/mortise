@@ -31,9 +31,6 @@ pub const assets_dir = "theme";
 
 pub const all = [_]Theme{
     .{ .name = "visor", .css = @embedFile("themes/visor.css"), .assets = &.{
-        .{ .name = "stars", .spec = @embedFile("themes/visor/stars.yml") },
-        .{ .name = "radar", .spec = @embedFile("themes/visor/radar.yml") },
-        .{ .name = "reticle", .spec = @embedFile("themes/visor/reticle.yml") },
         .{ .name = "panel", .spec = @embedFile("themes/visor/panel.yml") },
     } },
     .{ .name = "lcars", .css = @embedFile("themes/lcars.css"), .assets = &.{

@@ -1,9 +1,0 @@
-kind: radar
-size: 128
-color: "#5ce1ff"
-blips: 3
-seed: 4
-glow: 3
-frames: 24
-seconds: 2.6
-columns: 8
