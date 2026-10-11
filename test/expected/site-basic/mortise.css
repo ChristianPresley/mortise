@@ -1,0 +1,414 @@
+/* Mortise components: styles for callouts, containers, badges, and keys.
+   Written to /mortise.css when a page uses a component. Link it from a
+   layout:  <link rel="stylesheet" href="{{ site.baseurl }}/mortise.css">
+   Override the --mt-* variables in your own stylesheet to theme them. */
+
+/* Neutral colors are mixed from the surrounding text color (currentColor),
+   so components fit light and dark sites without a separate theme. */
+:root {
+  --mt-radius: 10px;
+  --mt-border: color-mix(in srgb, currentColor 16%, transparent);
+  --mt-surface: color-mix(in srgb, currentColor 3%, transparent);
+  --mt-subtle: color-mix(in srgb, currentColor 7%, transparent);
+  --mt-muted: color-mix(in srgb, currentColor 62%, transparent);
+  --mt-accent: #c2410c;
+  --mt-accent-text: #ffffff;
+  --mt-shadow: 0 1px 2px rgba(0, 0, 0, .05);
+  --mt-note: #2563eb;
+  --mt-tip: #16a34a;
+  --mt-important: #7c3aed;
+  --mt-warning: #b45309;
+  --mt-caution: #dc2626;
+}
+
+/* Callouts: > [!NOTE], [!TIP], [!IMPORTANT], [!WARNING], [!CAUTION] */
+.mt-callout {
+  --mt-tone: var(--mt-note);
+  margin: 1.25rem 0;
+  padding: .75rem 1rem;
+  border: 1px solid color-mix(in srgb, var(--mt-tone) 30%, transparent);
+  border-left: 4px solid var(--mt-tone);
+  border-radius: var(--mt-radius);
+  background: color-mix(in srgb, var(--mt-tone) 7%, transparent);
+}
+.mt-callout > :last-child { margin-bottom: 0; }
+.mt-callout-title + * { margin-top: 0; }
+.mt-callout-title { margin: 0 0 .35rem; font-weight: 700; color: var(--mt-tone); }
+.mt-callout-title::before { margin-right: .4rem; }
+.mt-callout-note { --mt-tone: var(--mt-note); }
+.mt-callout-note .mt-callout-title::before { content: "ℹ"; }
+.mt-callout-tip { --mt-tone: var(--mt-tip); }
+.mt-callout-tip .mt-callout-title::before { content: "✓"; }
+.mt-callout-important { --mt-tone: var(--mt-important); }
+.mt-callout-important .mt-callout-title::before { content: "★"; }
+.mt-callout-warning { --mt-tone: var(--mt-warning); }
+.mt-callout-warning .mt-callout-title::before { content: "⚠"; }
+.mt-callout-caution { --mt-tone: var(--mt-caution); }
+.mt-callout-caution .mt-callout-title::before { content: "⛔"; }
+
+/* :::card Title */
+.mt-card {
+  margin: 1rem 0;
+  padding: 1rem 1.25rem;
+  border: 1px solid var(--mt-border);
+  border-radius: var(--mt-radius);
+  background: var(--mt-surface);
+  box-shadow: var(--mt-shadow);
+}
+.mt-card > :last-child { margin-bottom: 0; }
+.mt-card-title { margin: 0 0 .5rem; font-weight: 700; font-size: 1.05rem; }
+
+/* ::::grid holding :::card blocks */
+.mt-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr));
+  gap: 1rem;
+  margin: 1.25rem 0;
+}
+.mt-grid > .mt-card { margin: 0; }
+.mt-grid-title { grid-column: 1 / -1; margin: 0; font-weight: 700; }
+
+/* :::details Summary */
+.mt-details {
+  margin: 1rem 0;
+  border: 1px solid var(--mt-border);
+  border-radius: var(--mt-radius);
+  background: var(--mt-surface);
+}
+.mt-details > summary {
+  cursor: pointer;
+  padding: .7rem 1rem;
+  font-weight: 600;
+  list-style: none;
+}
+.mt-details > summary::-webkit-details-marker { display: none; }
+.mt-details > summary::before {
+  content: "▸";
+  display: inline-block;
+  margin-right: .5rem;
+  transition: transform .15s ease;
+}
+.mt-details[open] > summary::before { transform: rotate(90deg); }
+.mt-details[open] > summary { border-bottom: 1px solid var(--mt-border); }
+.mt-details > :not(summary) { margin-left: 1rem; margin-right: 1rem; }
+
+/* :::figure Caption */
+.mt-figure { margin: 1.5rem 0; text-align: center; }
+.mt-figure p { margin: 0; }
+.mt-figure img { max-width: 100%; height: auto; border-radius: var(--mt-radius); }
+.mt-figure figcaption { margin-top: .5rem; color: var(--mt-muted); font-size: .9rem; }
+
+/* :::actions with links, shown as buttons; the first is the primary one */
+.mt-actions { display: flex; flex-wrap: wrap; gap: .75rem; margin: 1.25rem 0; }
+.mt-actions p { display: contents; }
+.mt-actions a {
+  display: inline-block;
+  padding: .55rem 1.1rem;
+  border: 1px solid var(--mt-border);
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
+  font-weight: 600;
+  text-decoration: none;
+}
+.mt-actions a:first-of-type {
+  border-color: var(--mt-accent);
+  background: var(--mt-accent);
+  color: var(--mt-accent-text);
+}
+.mt-actions a:hover { filter: brightness(.95); }
+
+/* :::steps holding an ordered list */
+.mt-steps ol { list-style: none; counter-reset: mt-step; padding-left: 0; }
+.mt-steps li {
+  counter-increment: mt-step;
+  position: relative;
+  padding: 0 0 1.1rem 2.75rem;
+  border-left: 2px solid var(--mt-border);
+  margin-left: .9rem;
+}
+.mt-steps li:last-child { border-left-color: transparent; }
+.mt-steps li::before {
+  content: counter(mt-step);
+  position: absolute;
+  left: -.95rem;
+  top: -.1rem;
+  width: 1.8rem;
+  height: 1.8rem;
+  border-radius: 50%;
+  background: var(--mt-accent);
+  color: var(--mt-accent-text);
+  font-weight: 700;
+  font-size: .9rem;
+  line-height: 1.8rem;
+  text-align: center;
+}
+
+/* :badge[text] */
+.mt-badge {
+  display: inline-block;
+  padding: .05rem .5rem;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--mt-accent) 14%, transparent);
+  color: var(--mt-accent);
+  font-size: .78em;
+  font-weight: 700;
+  vertical-align: .1em;
+}
+
+/* :kbd[Ctrl] */
+.mt-kbd {
+  display: inline-block;
+  padding: .05rem .4rem;
+  border: 1px solid var(--mt-border);
+  border-bottom-width: 2px;
+  border-radius: 5px;
+  background: var(--mt-subtle);
+  font: .85em ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+
+/* Code blocks with options: ```zig title="x" {2-3} lineNumbers, and diff */
+.mt-code {
+  margin: 1.25rem 0;
+  border: 1px solid var(--mt-border);
+  border-radius: var(--mt-radius);
+  overflow: hidden;
+}
+.mt-code pre { margin: 0; border-radius: 0; padding: .75rem 0; overflow-x: auto; }
+.mt-code-title {
+  padding: .45rem 1rem;
+  border-bottom: 1px solid var(--mt-border);
+  background: var(--mt-subtle);
+  font: 600 .82rem ui-monospace, SFMono-Regular, Consolas, monospace;
+  color: var(--mt-muted);
+}
+.mt-code-title::before { content: "▤"; margin-right: .5rem; opacity: .7; }
+.mt-line { display: inline-block; min-width: 100%; box-sizing: border-box; padding: 0 1rem; }
+/* An empty line still takes a line's height. */
+.mt-line:empty::after { content: "\200b"; }
+.mt-line-marked { background: color-mix(in srgb, var(--mt-accent) 13%, transparent); box-shadow: inset 3px 0 0 var(--mt-accent); }
+.mt-line-add { background: color-mix(in srgb, var(--mt-tip) 14%, transparent); box-shadow: inset 3px 0 0 var(--mt-tip); }
+.mt-line-del { background: color-mix(in srgb, var(--mt-caution) 12%, transparent); box-shadow: inset 3px 0 0 var(--mt-caution); }
+.mt-line-hunk { color: var(--mt-note); }
+.mt-code-numbered code { counter-reset: mt-line; }
+.mt-code-numbered .mt-line { padding-left: 3.5rem; position: relative; }
+.mt-code-numbered .mt-line::before {
+  counter-increment: mt-line;
+  content: counter(mt-line);
+  position: absolute;
+  left: 0;
+  width: 2.5rem;
+  text-align: right;
+  color: var(--mt-muted);
+  opacity: .6;
+  user-select: none;
+}
+
+/* Tabs and code groups: radio inputs and labels, then panels.
+   Works without JavaScript; up to 8 tabs per group. */
+.mt-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  margin: 1.25rem 0;
+  border: 1px solid var(--mt-border);
+  border-radius: var(--mt-radius);
+  overflow: hidden;
+}
+.mt-tab-input { position: absolute; opacity: 0; pointer-events: none; }
+.mt-tab-label {
+  order: 0;
+  padding: .55rem 1rem;
+  border-bottom: 2px solid transparent;
+  background: var(--mt-subtle);
+  color: var(--mt-muted);
+  font-weight: 600;
+  font-size: .9rem;
+  cursor: pointer;
+}
+.mt-tab-input:checked + .mt-tab-label { color: var(--mt-accent); border-bottom-color: var(--mt-accent); background: transparent; }
+.mt-tab-input:focus-visible + .mt-tab-label { outline: 2px solid var(--mt-accent); outline-offset: -2px; }
+.mt-tab-panel { order: 1; width: 100%; display: none; padding: 0 1rem; border-top: 1px solid var(--mt-border); }
+.mt-code-group .mt-tab-panel { padding: 0; }
+.mt-code-group .mt-tab-panel .mt-code, .mt-code-group .mt-tab-panel pre { margin: 0; border: 0; border-radius: 0; }
+.mt-code-group .mt-code-title { display: none; }
+.mt-tab-input:nth-of-type(1):checked ~ .mt-tab-panel:nth-of-type(1),
+.mt-tab-input:nth-of-type(2):checked ~ .mt-tab-panel:nth-of-type(2),
+.mt-tab-input:nth-of-type(3):checked ~ .mt-tab-panel:nth-of-type(3),
+.mt-tab-input:nth-of-type(4):checked ~ .mt-tab-panel:nth-of-type(4),
+.mt-tab-input:nth-of-type(5):checked ~ .mt-tab-panel:nth-of-type(5),
+.mt-tab-input:nth-of-type(6):checked ~ .mt-tab-panel:nth-of-type(6),
+.mt-tab-input:nth-of-type(7):checked ~ .mt-tab-panel:nth-of-type(7),
+.mt-tab-input:nth-of-type(8):checked ~ .mt-tab-panel:nth-of-type(8) { display: block; }
+
+/* Task lists: - [ ] and - [x] */
+li.mt-task { list-style: none; margin-left: -1.4rem; }
+li.mt-task > input[type="checkbox"] {
+  appearance: none;
+  width: 1.05em;
+  height: 1.05em;
+  margin: 0 .5rem 0 0;
+  vertical-align: -.15em;
+  border: 1.5px solid color-mix(in srgb, currentColor 35%, transparent);
+  border-radius: 4px;
+  background: transparent center / 80% no-repeat;
+  opacity: 1;
+}
+li.mt-task > input[type="checkbox"]:checked {
+  border-color: var(--mt-tip);
+  background-color: var(--mt-tip);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M3 8.5l3 3 7-7' fill='none' stroke='white' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+}
+
+/* Footnotes: [^label] and [^label]: text */
+.mt-fnref { font-size: .75em; line-height: 0; }
+.mt-fnref a { text-decoration: none; padding: 0 .1em; }
+.mt-fnref a::before { content: "["; }
+.mt-fnref a::after { content: "]"; }
+.mt-footnotes {
+  margin-top: 2.5rem;
+  padding-top: .75rem;
+  border-top: 1px solid var(--mt-border);
+  font-size: .9rem;
+  color: var(--mt-muted);
+}
+.mt-footnotes ol { padding-left: 1.4rem; }
+.mt-footnotes li:target { background: color-mix(in srgb, var(--mt-accent) 10%, transparent); border-radius: 4px; }
+.mt-fnback { text-decoration: none; }
+
+/* Definition lists: Term then : Definition */
+.mt-dl { margin: 1.25rem 0; }
+.mt-dl dt { font-weight: 700; margin-top: .75rem; }
+.mt-dl dd { margin: .2rem 0 0 1.25rem; padding-left: .75rem; border-left: 2px solid var(--mt-border); }
+
+/* OpenAPI reference pages from _api/NAME.json */
+.mt-api-meta { display: flex; align-items: center; gap: .5rem; color: var(--mt-muted); font-size: .9rem; }
+.mt-api-servers { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem; margin: 1rem 0 1.5rem; font-size: .88rem; }
+.mt-api-servers > span { font-weight: 700; margin-right: .2rem; }
+.mt-api > h2 { margin-top: 2.5rem; padding-bottom: .35rem; border-bottom: 1px solid var(--mt-border); scroll-margin-top: 1rem; }
+
+/* Method pills: GET, POST, PUT, PATCH, DELETE */
+.mt-method {
+  display: inline-block;
+  flex: none;
+  min-width: 3.6rem;
+  padding: .2rem .45rem;
+  border-radius: 999px;
+  color: #fff;
+  font: 700 .7rem/1.2 ui-monospace, SFMono-Regular, Consolas, monospace;
+  letter-spacing: .03em;
+  text-align: center;
+  text-transform: uppercase;
+  background: var(--mt-muted);
+}
+.mt-method-get { background: #16a34a; }
+.mt-method-post { background: #2563eb; }
+.mt-method-put { background: #d97706; }
+.mt-method-patch { background: #7c3aed; }
+.mt-method-delete { background: #dc2626; }
+.toc .mt-method { min-width: 3rem; font-size: .6rem; padding: .1rem .3rem; margin-right: .3rem; }
+
+/* One operation: a header bar, then details beside examples. */
+.mt-api-op {
+  margin: 1.25rem 0 2rem;
+  border: 1px solid var(--mt-border);
+  border-radius: var(--mt-radius);
+  background: var(--mt-surface);
+  overflow: hidden;
+  scroll-margin-top: 1rem;
+}
+.mt-api-op-head {
+  justify-content: flex-start;
+  display: flex;
+  align-items: center;
+  gap: .75rem;
+  padding: .65rem 1rem;
+  border-bottom: 1px solid var(--mt-border);
+  background: var(--mt-subtle);
+}
+.mt-api-path { font-size: .95rem; font-weight: 600; background: none; padding: 0; overflow-wrap: anywhere; }
+.mt-api-op-head .mt-badge { margin-left: auto; }
+.mt-api-param { color: var(--mt-accent); }
+.mt-api-deprecated .mt-api-path { text-decoration: line-through; opacity: .7; }
+.mt-api-op-body { display: grid; grid-template-columns: minmax(0, 1fr); }
+.mt-api-op-main { padding: .25rem 1.25rem 1rem; min-width: 0; }
+.mt-api-op-title { margin: .9rem 0 .4rem; font-size: 1.15rem; }
+.mt-api-op h4 { margin: 1.25rem 0 .45rem; font-size: .72rem; letter-spacing: .08em; text-transform: uppercase; color: var(--mt-muted); }
+.mt-api-op-examples { padding: 1rem; background: #0f172a; color: #e2e8f0; min-width: 0; }
+.mt-api-op-examples .mt-code { margin: 0 0 1rem; border-color: #334155; }
+.mt-api-op-examples .mt-code:last-child { margin-bottom: 0; }
+.mt-api-op-examples .mt-code-title { background: #1e293b; border-color: #334155; color: #94a3b8; }
+.mt-api-op-examples .mt-code-title::before { content: none; }
+.mt-api-op-examples pre { background: #0b1220; color: #e2e8f0; font-size: .8rem; }
+.mt-api-op-examples .hl-string { color: #86efac; }
+.mt-api-op-examples :is(.hl-number, .hl-literal) { color: #fbbf24; }
+.mt-api-op-examples .hl-keyword { color: #c4b5fd; }
+@media (min-width: 900px) {
+  .mt-api-op-body:has(.mt-api-op-examples) { grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); }
+}
+
+.mt-api-table { width: 100%; border-collapse: collapse; font-size: .88rem; }
+.mt-api-table th, .mt-api-table td { padding: .45rem .6rem; border-bottom: 1px solid var(--mt-border); text-align: left; vertical-align: top; }
+.mt-api-table th { font-size: .7rem; letter-spacing: .06em; text-transform: uppercase; color: var(--mt-muted); }
+.mt-api-table td:first-child { white-space: nowrap; }
+.mt-api-type { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: .85em; color: var(--mt-important); }
+.mt-api-required { color: var(--mt-caution); font-size: .66rem; font-weight: 700; text-transform: uppercase; }
+.mt-api-ref { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: .85em; }
+.mt-api-media { font-size: .82rem; color: var(--mt-muted); }
+
+/* Responses: one row per status code. */
+.mt-api-responses { list-style: none; margin: 0; padding: 0; border: 1px solid var(--mt-border); border-radius: 8px; overflow: hidden; }
+.mt-api-responses li { display: flex; flex-wrap: wrap; align-items: baseline; gap: .3rem .7rem; padding: .5rem .75rem; border-left: 3px solid var(--mt-muted); font-size: .9rem; }
+.mt-api-responses li + li { border-top: 1px solid var(--mt-border); }
+.mt-api-responses .mt-api-media { margin-left: auto; }
+.mt-api-status { font: 700 .85rem ui-monospace, SFMono-Regular, Consolas, monospace; }
+.mt-status-2xx { border-left-color: var(--mt-tip) !important; }
+.mt-status-2xx .mt-api-status { color: var(--mt-tip); }
+.mt-status-3xx { border-left-color: var(--mt-note) !important; }
+.mt-status-4xx { border-left-color: var(--mt-warning) !important; }
+.mt-status-4xx .mt-api-status { color: var(--mt-warning); }
+.mt-status-5xx { border-left-color: var(--mt-caution) !important; }
+.mt-status-5xx .mt-api-status { color: var(--mt-caution); }
+
+.mt-api-schema { margin: 1rem 0; padding: .25rem 1.25rem .75rem; border: 1px solid var(--mt-border); border-radius: var(--mt-radius); scroll-margin-top: 1rem; }
+.mt-api-schema h3 { margin: .75rem 0 .4rem; font: 700 1rem ui-monospace, SFMono-Regular, Consolas, monospace; }
+
+/* A sidebar of every API and its operations, from site.apis:
+   <nav class="mt-api-nav"><p class="mt-api-nav-api">..</p>
+   <a class="mt-api-nav-op"><span class="mt-method ..">get</span> Summary</a> */
+.mt-api-nav { font-size: .88rem; }
+.mt-api-nav-api { display: flex; align-items: baseline; justify-content: space-between; gap: .5rem; margin: 1rem 0 .3rem; font-weight: 700; }
+.mt-api-nav-api:first-child { margin-top: 0; }
+.mt-api-nav-api a { color: inherit; text-decoration: none; }
+.mt-api-nav-api.current a { color: var(--mt-accent); }
+.mt-api-nav-api small { color: var(--mt-muted); font-weight: 400; font-size: .75rem; }
+.mt-api-nav-tag { margin: .6rem 0 .15rem .5rem; font-size: .68rem; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--mt-muted); }
+.mt-api-nav a.mt-api-nav-op, a.mt-api-nav-op { display: flex; align-items: center; gap: .5rem; padding: .25rem .5rem; border-radius: 6px; color: inherit; text-decoration: none; line-height: 1.3; }
+.mt-api-nav a.mt-api-nav-op:hover, a.mt-api-nav-op:hover { background: var(--mt-subtle); }
+.mt-api-nav-op .mt-method { min-width: 3.1rem; font-size: .6rem; padding: .12rem .3rem; }
+.mt-api-nav-op.mt-api-nav-deprecated { opacity: .55; }
+.mt-api-nav a.mt-api-nav-op.current { background: var(--mt-subtle); font-weight: 600; }
+
+/* An overview of every API: cards listing their operations. */
+.mt-api-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(18rem, 1fr)); gap: 1rem; margin: 1.5rem 0; }
+.mt-api-card { padding: 1rem 1.15rem; border: 1px solid var(--mt-border); border-radius: var(--mt-radius); background: var(--mt-surface); }
+.mt-api-card h3 { display: flex; justify-content: space-between; align-items: baseline; gap: .5rem; margin: 0 0 .35rem; font-size: 1.05rem; }
+.mt-api-card h3 a { color: inherit; text-decoration: none; }
+.mt-api-card-text { margin: 0 0 .75rem; color: var(--mt-muted); font-size: .9rem; }
+.mt-api-card .mt-api-nav-op { padding: .2rem .25rem; }
+.mt-api-card-text p { margin: 0; }
+.mt-api-card code { font-size: .8rem; background: none; padding: 0; }
+
+
+/* Heading anchors: a "#" link after each Markdown heading, shown on hover
+   or keyboard focus. */
+.mt-anchor { margin-left: .35em; color: var(--mt-muted); font-weight: 400; text-decoration: none; opacity: 0; transition: opacity .15s; }
+:is(h1, h2, h3, h4, h5, h6):hover > .mt-anchor, .mt-anchor:focus-visible { opacity: 1; }
+.mt-anchor:hover { color: var(--mt-accent); }
+@media (hover: none) { .mt-anchor { opacity: .5; } }
+
+/* Copy buttons in code blocks, shown by the page's copy script. */
+pre:has(> .mt-copy) { position: relative; }
+.mt-copy { position: absolute; top: .4rem; right: .4rem; padding: .15rem .55rem; border: 1px solid var(--mt-border); border-radius: 6px; background: var(--mt-surface); color: var(--mt-muted); font: 600 .72rem/1.4 system-ui, sans-serif; cursor: pointer; opacity: 0; transition: opacity .15s; }
+pre:hover > .mt-copy, .mt-copy:focus-visible { opacity: 1; }
+.mt-copy:hover { color: inherit; }
+@media (hover: none) { .mt-copy { opacity: 1; } }

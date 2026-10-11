@@ -19,7 +19,7 @@
 </li>
 <li>
 <p>Run the build:</p>
-<pre><code class="language-sh">zig build
+<pre><button type="button" class="mt-copy" hidden>Copy</button><code class="language-sh">zig build
 </code></pre>
 </li>
 </ol>
@@ -30,5 +30,10 @@
 </article>
 
 </main>
+<script>(function(){if(!navigator.clipboard)return;
+document.querySelectorAll("button.mt-copy").forEach(function(b){b.hidden=false;
+b.addEventListener("click",function(){var c=b.parentNode.querySelector("code");
+navigator.clipboard.writeText(c.innerText).then(function(){b.textContent="Copied";
+setTimeout(function(){b.textContent="Copy";},1500);});});});})();</script>
 </body>
 </html>

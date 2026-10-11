@@ -398,3 +398,17 @@ li.mt-task > input[type="checkbox"]:checked {
 .mt-api-card-text p { margin: 0; }
 .mt-api-card code { font-size: .8rem; background: none; padding: 0; }
 
+
+/* Heading anchors: a "#" link after each Markdown heading, shown on hover
+   or keyboard focus. */
+.mt-anchor { margin-left: .35em; color: var(--mt-muted); font-weight: 400; text-decoration: none; opacity: 0; transition: opacity .15s; }
+:is(h1, h2, h3, h4, h5, h6):hover > .mt-anchor, .mt-anchor:focus-visible { opacity: 1; }
+.mt-anchor:hover { color: var(--mt-accent); }
+@media (hover: none) { .mt-anchor { opacity: .5; } }
+
+/* Copy buttons in code blocks, shown by the page's copy script. */
+pre:has(> .mt-copy) { position: relative; }
+.mt-copy { position: absolute; top: .4rem; right: .4rem; padding: .15rem .55rem; border: 1px solid var(--mt-border); border-radius: 6px; background: var(--mt-surface); color: var(--mt-muted); font: 600 .72rem/1.4 system-ui, sans-serif; cursor: pointer; opacity: 0; transition: opacity .15s; }
+pre:hover > .mt-copy, .mt-copy:focus-visible { opacity: 1; }
+.mt-copy:hover { color: inherit; }
+@media (hover: none) { .mt-copy { opacity: 1; } }

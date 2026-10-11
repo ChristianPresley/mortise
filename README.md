@@ -149,7 +149,10 @@ my-site/
 - Markdown pages get `page.toc`, a nested list linking to their level 2
   and 3 headings.
 - Headings get anchor ids from their text, so `## Getting started` can be
-  linked as `#getting-started`.
+  linked as `#getting-started`, and a `#` link that appears on hover.
+  Code blocks get a Copy button. See
+  [components](docs/components.md#heading-anchors-and-copy-buttons);
+  `heading_anchors: false` and `copy_code: false` turn them off.
 - `paginate: 10` in a page's frontmatter splits it across pages of 10 posts
   (`/`, `/page/2/`, ...) with a `paginator` variable; see the
   [template syntax](docs/templates.md#pagination).

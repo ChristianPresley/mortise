@@ -151,6 +151,30 @@ with options is wrapped in `<div class="mt-code">`, and each line is a
 `<span class="mt-line">` with `mt-line-marked`, `mt-line-add`,
 `mt-line-del`, or `mt-line-hunk` as needed.
 
+## Heading anchors and copy buttons
+
+Every Markdown heading ends with a `#` link to itself
+(`<a class="mt-anchor" href="#id">#</a>`), shown when the heading is
+hovered or the link has keyboard focus, so readers can copy a link to the
+section.
+
+Every fenced code block gets a Copy button
+(`<button class="mt-copy" hidden>` inside its `<pre>`). The build adds a
+small inline script before `</body>` on pages that have code blocks; it
+shows the buttons and copies the code, without line numbers or diff
+markers, to the clipboard. Where the browser refuses clipboard access, the
+button selects the code instead so the reader can press Ctrl+C. Without
+JavaScript the buttons stay hidden.
+
+Both are on by default. Turn them off in `_config.yml`:
+
+```yaml
+heading_anchors: false
+copy_code: false
+```
+
+Feeds leave both out.
+
 ## Inline components
 
 | Syntax         | Renders as                                   |

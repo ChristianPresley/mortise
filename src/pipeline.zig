@@ -203,6 +203,8 @@ const Builder = struct {
     /// sitemap; null when unset.
     site_url: ?[]const u8 = null,
     options: Options = .{},
+    /// Heading anchors and copy buttons, from `_config.yml`.
+    markdown_options: markdown.Options = .{},
     /// `site.data`, from the files in `_data/`.
     data: Value = .{ .object = .{} },
     /// The `paginator` variable while rendering one page of a paginated
@@ -288,6 +290,7 @@ pub fn buildWith(arena: Allocator, src: SiteDir, options: Options, diag: *Diagno
     }
     b.baseurl = try baseUrl(&b, config_fields);
     b.site_url = try siteUrl(&b, config_fields);
+    b.markdown_options = try markdownOptions(&b, config_fields);
     b.data = try loadData(&b, listing.files);
 
     for (listing.files) |path| {
@@ -336,6 +339,7 @@ pub fn buildWith(arena: Allocator, src: SiteDir, options: Options, diag: *Diagno
 pub fn rebuild(arena: Allocator, src: SiteDir, prev: *const Site, changed: []const []const u8, diag: *Diagnostic) Error!Site {
     const st = prev.state;
     var b: Builder = .{ .arena = arena, .src = src, .diag = diag, .baseurl = st.baseurl, .site_url = st.site_url, .data = st.data, .options = st.options };
+    b.markdown_options = try markdownOptions(&b, st.config_fields);
 
     var dirty_templates: std.ArrayList([]const u8) = .empty;
     var dirty_pages: std.ArrayList(usize) = .empty;
@@ -565,7 +569,11 @@ fn addGenerated(b: *Builder, outputs: *std.ArrayList(Output), config_fields: fro
             .date = p.date,
             .html = p.html orelse "",
         };
-        if (p.is_post) try posts.append(arena, entry);
+        if (p.is_post) {
+            var feed_entry = entry;
+            feed_entry.html = try withoutPageControls(arena, entry.html);
+            try posts.append(arena, feed_entry);
+        }
         const opted_out = if (p.fields.get("sitemap")) |v| v == .boolean and !v.boolean else false;
         if (!opted_out and !std.mem.eql(u8, p.out_path, "404.html")) {
             var listed_entry = entry;
@@ -720,7 +728,7 @@ fn loadPage(b: *Builder, path: []const u8, is_post: bool) Error!?Page {
         .html = null,
     };
     if (is_markdown) {
-        const rendered = try markdown.toDocument(arena, doc.body);
+        const rendered = try markdown.toDocumentWith(arena, doc.body, b.markdown_options);
         page.html = rendered.html;
         page.toc = try tocHtml(arena, rendered.headings);
         page.uses_components = rendered.uses_components;
@@ -1357,7 +1365,47 @@ fn renderPage(b: *Builder, p: *const Page) Error![]const u8 {
         name_from = layout.tpl.name;
         layout_name = layout.parent;
     }
+    if (b.markdown_options.copy_buttons and std.mem.indexOf(u8, content, "class=\"mt-copy\"") != null) {
+        content = try insertBeforeBodyEnd(b.arena, content, markdown.copy_script);
+    }
     return content;
+}
+
+/// `html` with `snippet` inserted before its last `</body>`, or appended
+/// when it has none.
+fn insertBeforeBodyEnd(arena: Allocator, html: []const u8, snippet: []const u8) Allocator.Error![]const u8 {
+    const at = std.mem.lastIndexOf(u8, html, "</body>") orelse html.len;
+    return std.mem.concat(arena, u8, &.{ html[0..at], snippet, html[at..] });
+}
+
+/// `html` without heading anchors and copy buttons, which mean nothing
+/// in a feed reader.
+fn withoutPageControls(arena: Allocator, html: []const u8) Allocator.Error![]const u8 {
+    const button = "<button type=\"button\" class=\"mt-copy\" hidden>Copy</button>";
+    const anchor = " <a class=\"mt-anchor\" href=\"";
+    if (std.mem.indexOf(u8, html, button) == null and std.mem.indexOf(u8, html, anchor) == null) return html;
+    var out: std.ArrayList(u8) = .empty;
+    var i: usize = 0;
+    while (i < html.len) {
+        if (std.mem.startsWith(u8, html[i..], button)) {
+            i += button.len;
+        } else if (std.mem.startsWith(u8, html[i..], anchor)) {
+            const end = std.mem.indexOfPos(u8, html, i, "</a>") orelse html.len;
+            i = @min(html.len, end + "</a>".len);
+        } else {
+            try out.append(arena, html[i]);
+            i += 1;
+        }
+    }
+    return out.items;
+}
+
+/// Reads `heading_anchors` and `copy_code` (both on by default).
+fn markdownOptions(b: *Builder, config_fields: frontmatter.Map) Error!markdown.Options {
+    return .{
+        .heading_anchors = try enabled(b, config_fields, "heading_anchors"),
+        .copy_buttons = try enabled(b, config_fields, "copy_code"),
+    };
 }
 
 fn renderTemplate(b: *Builder, tpl: *const template.Template, p: *const Page, content: ?[]const u8) Error![]const u8 {
@@ -1682,6 +1730,8 @@ test "pages, posts, layouts, and static files" {
         "css/site.css",
         "docs/index.html",
         "index.html",
+        // For the heading anchor on the about page.
+        "mortise.css",
         "plain.html",
     };
     try testing.expectEqual(paths.len, site.outputs.len);
@@ -1698,7 +1748,7 @@ test "pages, posts, layouts, and static files" {
         "<title>Hello | Test Site</title><article><p>First post.</p>\n</article>",
         site.find("2024/01/05/hello/index.html").?.data.bytes,
     );
-    try testing.expectEqualStrings("<h1 id=\"about-me\">About <em>me</em></h1>\n", site.find("about/index.html").?.data.bytes);
+    try testing.expectEqualStrings("<h1 id=\"about-me\">About <em>me</em> <a class=\"mt-anchor\" href=\"#about-me\" aria-label=\"Link to this section\">#</a></h1>\n", site.find("about/index.html").?.data.bytes);
     try testing.expect(site.find("plain.html").?.data == .copy);
 
     // The home page depends on itself, its layout, and the include it used.
@@ -2167,4 +2217,30 @@ test "aliases write redirect pages and a _redirects file" {
         .{ "a.md", "---\naliases: [/b/]\n---\n" },
         .{ "b.md", "B\n" },
     }, "b.md", 0, "also writes to");
+}
+
+test "heading anchors and copy buttons, on by default" {
+    var t: TestSite = try .init(&.{
+        .{ "_layouts/base.html", "<html><body>{{ content }}</body></html>" },
+        .{ "a.md", "---\nlayout: base\n---\n## Install\n\n```sh\nzig build\n```\n" },
+        .{ "b.md", "---\nlayout: base\n---\nNo code.\n" },
+    });
+    defer t.deinit();
+    const a = try t.output("a/index.html");
+    try testing.expect(std.mem.indexOf(u8, a, "<h2 id=\"install\">Install <a class=\"mt-anchor\" href=\"#install\"") != null);
+    try testing.expect(std.mem.indexOf(u8, a, "<pre><button type=\"button\" class=\"mt-copy\" hidden>Copy</button><code class=\"language-sh\">") != null);
+    // The copy script goes before </body>, once, and only where needed.
+    try testing.expect(std.mem.endsWith(u8, a, "</script>\n</body></html>"));
+    try testing.expectEqual(@as(usize, 1), std.mem.count(u8, a, "<script>"));
+    try testing.expect(std.mem.indexOf(u8, try t.output("b/index.html"), "<script>") == null);
+
+    var t2: TestSite = try .init(&.{
+        .{ "_config.yml", "heading_anchors: false\ncopy_code: false\n" },
+        .{ "a.md", "## Install\n\n```sh\nzig build\n```\n" },
+    });
+    defer t2.deinit();
+    try testing.expectEqualStrings(
+        "<h2 id=\"install\">Install</h2>\n<pre><code class=\"language-sh\">zig build\n</code></pre>\n",
+        try t2.output("a/index.html"),
+    );
 }

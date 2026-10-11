@@ -53,6 +53,12 @@ job:
 - Content is trusted. Link and image destinations are not filtered, so a
   `javascript:` URL in a source file is written to the output unchanged.
 - Emphasis rules treat non-ASCII whitespace and punctuation as letters.
+- Heading anchors and copy buttons apply to Markdown pages only, not to
+  HTML templates or OpenAPI pages. The copy script is inline, so a Content
+  Security Policy without `'unsafe-inline'` blocks it; set
+  `copy_code: false` on such sites.
+- Heading anchors add a `#` to the heading's text content, which `strip_html`
+  and `word_count` see.
 
 ## Data files
 

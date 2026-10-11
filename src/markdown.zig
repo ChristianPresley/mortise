@@ -36,10 +36,39 @@ pub const Document = struct {
 /// The stylesheet for components, written to the site as `mortise.css`.
 pub const components_css = @embedFile("components.css");
 
+pub const Options = struct {
+    /// Add a `#` link to each heading (`<a class="mt-anchor">`), so readers
+    /// can copy a link to the section.
+    heading_anchors: bool = false,
+    /// Add a hidden copy button (`<button class="mt-copy" hidden>`) to each
+    /// fenced code block. `copy_script` shows the buttons and copies.
+    copy_buttons: bool = false,
+};
+
+/// Shows the copy buttons of `Options.copy_buttons` and copies a block's
+/// code when its button is pressed. Without the Clipboard API (or
+/// without JavaScript) the buttons stay hidden. When the browser refuses
+/// to write the clipboard, the code is selected for the reader to copy.
+pub const copy_script =
+    \\<script>(function(){if(!navigator.clipboard)return;
+    \\function say(b,t){b.textContent=t;setTimeout(function(){b.textContent="Copy";},1500);}
+    \\document.querySelectorAll("button.mt-copy").forEach(function(b){b.hidden=false;
+    \\b.addEventListener("click",function(){var c=b.parentNode.querySelector("code");
+    \\navigator.clipboard.writeText(c.innerText).then(function(){say(b,"Copied");},function(){
+    \\var r=document.createRange();r.selectNodeContents(c);var s=getSelection();s.removeAllRanges();s.addRange(r);
+    \\say(b,"Selected");});});});})();</script>
+    \\
+;
+
 /// Renders `src` and also returns its headings, for tables of contents.
 pub fn toDocument(arena: Allocator, src: []const u8) Allocator.Error!Document {
+    return toDocumentWith(arena, src, .{});
+}
+
+/// `toDocument` with options.
+pub fn toDocumentWith(arena: Allocator, src: []const u8, options: Options) Allocator.Error!Document {
     var aw: Writer.Allocating = .init(arena);
-    var r: Renderer = .{ .arena = arena };
+    var r: Renderer = .{ .arena = arena, .options = options };
     // An allocating writer only fails when it runs out of memory.
     renderWith(&r, src, &aw.writer) catch return error.OutOfMemory;
     const html = try aw.toOwnedSlice();
@@ -836,6 +865,7 @@ fn parseContainer(arena: Allocator, lines: []const []const u8, start: usize, c: 
 /// State for rendering one document.
 const Renderer = struct {
     arena: Allocator,
+    options: Options = .{},
     /// Heading ids already used, so each id in the document is unique.
     ids: std.StringHashMapUnmanaged(void) = .empty,
     headings: std.ArrayList(Heading) = .empty,
@@ -911,7 +941,7 @@ fn renderTabs(r: *Renderer, kind: ContainerKind, children: []const Block, w: *Wr
 /// `<pre><code>`. With a title, marked lines, line numbers, or the `diff`
 /// language, it is wrapped in `<div class="mt-code">` and every line is a
 /// `<span class="mt-line">` so lines can be numbered and styled by CSS.
-fn renderCode(arena: Allocator, c: Code, w: *Writer) Error!void {
+fn renderCode(arena: Allocator, c: Code, copy_button: bool, w: *Writer) Error!void {
     const info = try unescapeBackslashes(arena, c.info);
     const meta = try CodeMeta.parse(arena, c.meta);
     const is_diff = std.mem.eql(u8, info, "diff");
@@ -925,7 +955,9 @@ fn renderCode(arena: Allocator, c: Code, w: *Writer) Error!void {
             try w.writeAll("</div>\n");
         }
     }
-    try w.writeAll("<pre><code");
+    try w.writeAll("<pre>");
+    if (copy_button) try w.writeAll("<button type=\"button\" class=\"mt-copy\" hidden>Copy</button>");
+    try w.writeAll("<code");
     if (info.len > 0) {
         try w.writeAll(" class=\"language-");
         try escapeHtml(w, info);
@@ -1090,6 +1122,11 @@ fn renderBlock(r: *Renderer, b: Block, tight: bool, w: *Writer) Error!void {
             try escapeHtml(w, id);
             try w.writeAll("\">");
             for (nodes) |n| try renderNode(n, w);
+            if (r.options.heading_anchors) {
+                try w.writeAll(" <a class=\"mt-anchor\" href=\"#");
+                try escapeUrl(w, id);
+                try w.writeAll("\" aria-label=\"Link to this section\">#</a>");
+            }
             try w.print("</h{d}>\n", .{h.level});
         },
         .paragraph => |p| {
@@ -1101,7 +1138,7 @@ fn renderBlock(r: *Renderer, b: Block, tight: bool, w: *Writer) Error!void {
                 try w.writeAll("</p>\n");
             }
         },
-        .code => |c| try renderCode(arena, c, w),
+        .code => |c| try renderCode(arena, c, r.options.copy_buttons, w),
         .list => |l| {
             if (!l.ordered) {
                 try w.writeAll("<ul>\n");
@@ -1809,4 +1846,16 @@ test "escaping" {
 test "CRLF and tabs" {
     try expectHtml("<p>a\nb</p>\n", "a\r\nb\r\n");
     try expectHtml("<ul>\n<li>a\n<ul>\n<li>b</li>\n</ul>\n</li>\n</ul>\n", "- a\n\t- b");
+}
+
+test "heading anchors and copy buttons are options" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const doc = try toDocumentWith(arena.allocator(), "# A b\n\n```\nx\n```\n", .{ .heading_anchors = true, .copy_buttons = true });
+    try std.testing.expectEqualStrings(
+        "<h1 id=\"a-b\">A b <a class=\"mt-anchor\" href=\"#a-b\" aria-label=\"Link to this section\">#</a></h1>\n" ++
+            "<pre><button type=\"button\" class=\"mt-copy\" hidden>Copy</button><code>x\n</code></pre>\n",
+        doc.html,
+    );
+    try std.testing.expect(doc.uses_components);
 }
