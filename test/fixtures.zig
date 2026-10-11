@@ -80,11 +80,12 @@ test "the showcase example builds" {
     var src = try mortise.SiteDir.open(testing.io, paths.showcase);
     defer src.close();
     var diag: mortise.pipeline.Diagnostic = .{};
-    const site = mortise.pipeline.build(arena_state.allocator(), src, &diag) catch |err| {
+    // Strict, as `serve` builds it: no template reads an undefined variable.
+    const site = mortise.pipeline.buildWith(arena_state.allocator(), src, .{ .strict = true }, &diag) catch |err| {
         std.debug.print("showcase failed to build: {f}\n", .{diag});
         return err;
     };
-    for ([_][]const u8{ "index.html", "page/2/index.html", "tags/index.html", "docs/index.html", "404.html", "feed.xml", "sitemap.xml", "tags/templates/index.html", "components/index.html", "mortise.css", "code/index.html", "wiki/index.html", "docs/install/index.html", "api/pets/index.html", "api/accounts/index.html", "api/index.html", "theme.css", "rendering.html", "images/rendered/stars.png", "images/rendered/hud-panel.css", "images/rendered/radar.css", "theme/panel.png" }) |p| {
+    for ([_][]const u8{ "index.html", "page/2/index.html", "tags/index.html", "docs/index.html", "404.html", "feed.xml", "sitemap.xml", "tags/templates/index.html", "components/index.html", "mortise.css", "code/index.html", "wiki/index.html", "docs/install/index.html", "api/pets/index.html", "api/accounts/index.html", "api/index.html", "theme.css", "rendering.html", "filters.html", "images/rendered/stars.png", "images/rendered/hud-panel.css", "images/rendered/radar.css", "theme/panel.png" }) |p| {
         if (site.find(p) == null) {
             std.debug.print("showcase is missing {s}\n", .{p});
             return error.TestExpectedOutput;

@@ -202,6 +202,8 @@ const Builder = struct {
     /// The `paginator` variable while rendering one page of a paginated
     /// page, or null.
     paginator: ?template.Object = null,
+    /// Whether templates fail on undefined variables.
+    strict: bool = false,
 
     fn fail(b: *Builder, path: []const u8, line: usize, comptime fmt: []const u8, args: anytype) Error {
         b.diag.* = .{
@@ -252,6 +254,12 @@ pub const Options = struct {
     /// Keeps rendered assets between builds. Without one, every build
     /// renders them again, which suits one-off builds.
     render_cache: ?*assets.Cache = null,
+    /// Fail on undefined template variables (`--strict`). Null leaves it
+    /// to `strict:` in `_config.yml`, then to `strict_by_default`.
+    strict: ?bool = null,
+    /// Strict mode when neither the options nor the config say: on in
+    /// `serve`, where a typo should show up at once, off in `build`.
+    strict_by_default: bool = false,
 };
 
 /// `build` with options.
@@ -567,6 +575,11 @@ fn addGenerated(b: *Builder, outputs: *std.ArrayList(Output), config_fields: fro
 /// site. `pages` must be in `pageOrder`.
 fn finish(b: *Builder, config_fields: frontmatter.Map, pages: []Page, statics: []const Output, render: ?[]const bool) Error!Site {
     const arena = b.arena;
+    b.strict = b.options.strict orelse blk: {
+        const v = config_fields.get("strict") orelse break :blk b.options.strict_by_default;
+        if (v != .boolean) return b.fail(config_path, 0, "'strict' must be true or false", .{});
+        break :blk v.boolean;
+    };
 
     // Pages and posts are visible to every template through `site`.
     var post_values: std.ArrayList(Value) = .empty;
@@ -599,6 +612,8 @@ fn finish(b: *Builder, config_fields: frontmatter.Map, pages: []Page, statics: [
         }
         try site_entries.append(arena, .{ .key = e.key, .value = try convert(arena, e.value) });
     }
+    // Always defined, so templates can use it in strict mode.
+    if (config_fields.get("baseurl") == null) try site_entries.append(arena, .{ .key = "baseurl", .value = .{ .string = "" } });
     try site_entries.append(arena, .{ .key = "posts", .value = .{ .list = post_values.items } });
     try site_entries.append(arena, .{ .key = "pages", .value = .{ .list = page_values.items } });
     try site_entries.append(arena, .{ .key = "data", .value = b.data });
@@ -1291,7 +1306,7 @@ fn renderTemplate(b: *Builder, tpl: *const template.Template, p: *const Page, co
     const root: template.Object = .{ .entries = entries[0..n] };
     b.useTemplate(tpl);
     var td: template.Diagnostic = .{};
-    return template.renderAlloc(b.arena, tpl, root, .{ .ctx = b, .loadFn = loadInclude }, &td) catch |err| switch (err) {
+    return template.renderAllocWith(b.arena, tpl, root, .{ .ctx = b, .loadFn = loadInclude }, .{ .strict = b.strict }, &td) catch |err| switch (err) {
         error.OutOfMemory => error.OutOfMemory,
         error.WriteFailed => error.OutOfMemory,
         error.TemplateRender, error.TemplateSyntax => b.templateFail(td),

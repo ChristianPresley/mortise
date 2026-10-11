@@ -1,0 +1,43 @@
+---
+title: Filters
+layout: base
+description: Template filters at work on this site's own posts.
+---
+<h1>Template filters</h1>
+<p class="lead">Every list on this page is computed at build time from <code>site.posts</code> with
+<a href="https://github.com/ChristianPresley/mortise/blob/main/docs/templates.md#filters">template filters</a>.</p>
+
+<h2 id="by-year">Posts by year</h2>
+<p><code>&#123;% for year in site.posts | group_by("date", "%Y") %&#125;</code></p>
+{%- for year in site.posts | group_by("date", "%Y") %}
+<h3>{{ year.name }} <small>({{ year.items | size }} posts)</small></h3>
+<ul>
+{%- for post in year.items %}
+<li><a href="{{ post.url }}">{{ post.title }}</a> <small>{{ post.date | date("%b %e") }} · {{ post.content | word_count }} words · {{ post.content | reading_time }} min read</small></li>
+{%- endfor %}
+</ul>
+{%- endfor %}
+
+<h2 id="tagged">Tagged “templates”</h2>
+<ul>
+{%- for post in site.posts | where("tags", "templates") | sort("title") %}
+<li><a href="{{ post.url }}">{{ post.title }}</a> → <code>{{ post.title | slugify }}</code></li>
+{%- endfor %}
+</ul>
+
+<h2 id="latest">Latest two, truncated</h2>
+<ul>
+{%- for post in site.posts | limit(2) %}
+<li><strong>{{ post.title }}</strong>: {{ post.excerpt | truncate(60) }}</li>
+{%- endfor %}
+</ul>
+
+<h2 id="markdown">Markdown from data</h2>
+{{ site.description | markdownify }}
+
+<h2 id="json">JSON for scripts</h2>
+<pre><code>{{ site.data.nav | limit(2) | json }}</code></pre>
+
+<h2 id="dump">Dump</h2>
+<p><code>&#123;{ page | dump }&#125;</code> shows everything a template can read:</p>
+{{ page | dump }}

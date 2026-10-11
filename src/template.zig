@@ -2,9 +2,9 @@
 //!
 //!   {{ page.title }}                 output, HTML-escaped by default
 //!   {{ content }}                    values marked as HTML are not escaped
-//!   {{ page.title | upper }}         filters (five built-ins)
+//!   {{ page.title | upper }}         filters (built-ins only)
 //!   {% if a and not b %}...{% elif c == "x" %}...{% else %}...{% endif %}
-//!   {% for post in site.posts %}...{{ loop.index }}...{% endfor %}
+//!   {% for post in site.posts | limit(5) %}...{{ loop.index }}...{% endfor %}
 //!   {% include "nav.html" %}
 //!   {# comment #}
 //!   {%- ... -%}                      `-` trims whitespace on that side
@@ -15,7 +15,8 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const Writer = std.Io.Writer;
-const escapeHtml = @import("markdown.zig").escapeHtml;
+const markdown = @import("markdown.zig");
+const escapeHtml = markdown.escapeHtml;
 
 // ---------------------------------------------------------------------------
 // Values
@@ -107,7 +108,7 @@ const Expr = union(enum) {
 
 const Filter = struct {
     kind: FilterKind,
-    arg: ?Expr = null,
+    args: []const Expr = &.{},
 };
 
 pub const FilterKind = enum {
@@ -117,8 +118,63 @@ pub const FilterKind = enum {
     lower,
     /// `default("x")`: the argument when the value is falsy.
     default,
-    /// Formats a `YYYY-MM-DD` date as `January 5, 2024`.
+    /// Formats a `YYYY-MM-DD` date as `January 5, 2024`, or with a format
+    /// such as `date("%Y-%m")`: `%Y` year, `%m` month (01), `%d` day (05),
+    /// `%e` day (5), `%B` month name, `%b` short month name, `%%` a `%`.
     date,
+    /// A URL-friendly slug: `Hello, World!` becomes `hello-world`.
+    slugify,
+    /// `truncate(n)` or `truncate(n, "...")`: at most n characters of text,
+    /// cut at a word boundary, with `…` (or the second argument) appended.
+    truncate,
+    /// Renders a Markdown string to HTML.
+    markdownify,
+    /// The value as JSON, safe inside `<script>`.
+    json,
+    /// `where("key")` keeps list items whose `key` is truthy;
+    /// `where("key", value)` keeps items whose `key` equals `value` or, for
+    /// a list field, contains it.
+    where,
+    /// `sort` sorts a list; `sort("key")` sorts objects by a field.
+    sort,
+    /// `group_by("key")`: a list of `{ name, items }`, in first-seen order.
+    /// `group_by("date", "%Y")` groups by a formatted date.
+    group_by,
+    /// `limit(n)`: the first n items of a list.
+    limit,
+    /// Reverses a list.
+    reverse,
+    /// Minutes to read the text at 200 words a minute, at least 1.
+    reading_time,
+    /// Words in the text, ignoring HTML tags.
+    word_count,
+    /// A readable dump of any value, for debugging templates.
+    dump,
+    /// Items in a list, fields in an object, or bytes in a string.
+    size,
+    /// `join` or `join(", ")`: list items as one string.
+    join,
+    first,
+    last,
+    /// Removes HTML tags, leaving the text.
+    strip_html,
+
+    /// The minimum and maximum number of arguments.
+    fn arity(k: FilterKind) [2]usize {
+        return switch (k) {
+            .default, .limit => .{ 1, 1 },
+            .truncate, .where, .group_by => .{ 1, 2 },
+            .sort, .join, .date => .{ 0, 1 },
+            else => .{ 0, 0 },
+        };
+    }
+};
+
+/// The built-in filter names, for error messages.
+const filter_names = blk: {
+    var s: []const u8 = "";
+    for (std.meta.fieldNames(FilterKind), 0..) |n, i| s = s ++ (if (i == 0) "" else ", ") ++ n;
+    break :blk s;
 };
 
 const Comparison = struct {
@@ -135,7 +191,7 @@ const Node = union(enum) {
     text: []const u8,
     output: struct { expr: Expr, filters: []const Filter, line: usize },
     @"if": struct { branches: []const Branch, line: usize },
-    @"for": struct { name: []const u8, iter: Expr, body: []const Node, line: usize },
+    @"for": struct { name: []const u8, iter: Expr, filters: []const Filter, body: []const Node, line: usize },
     include: struct { name: []const u8, line: usize },
 };
 
@@ -367,14 +423,14 @@ fn parseFor(p: *Parser, st: Stmt) ParseError!Node {
     const in_tok = try lx.next();
     if (in_tok != .ident or !std.mem.eql(u8, in_tok.ident, "in")) return p.fail(st.line, "expected 'in' after the loop variable", .{});
     const iter = try parseExpr(&lx);
-    if (try lx.next() != .end) return p.fail(st.line, "unexpected text after the loop expression", .{});
+    const filters = try parseFilters(p, &lx, st.line, "the loop expression");
 
     var end: ?Stmt = null;
     const body = try parseNodes(p, &end);
     const e = end orelse return p.fail(st.line, "'for' is not closed; add '{{% endfor %}}'", .{});
     if (!std.mem.eql(u8, e.keyword, "endfor")) return p.fail(e.line, "unexpected '{s}' inside 'for'", .{e.keyword});
     if (e.rest.len != 0) return p.fail(e.line, "'endfor' takes no arguments", .{});
-    return .{ .@"for" = .{ .name = name, .iter = iter, .body = body, .line = st.line } };
+    return .{ .@"for" = .{ .name = name, .iter = iter, .filters = filters, .body = body, .line = st.line } };
 }
 
 fn parseInclude(p: *Parser, st: Stmt) ParseError!Node {
@@ -390,30 +446,47 @@ fn parseOutput(p: *Parser, body: []const u8, line: usize) ParseError!Node {
     var lx: Lexer = .{ .p = p, .src = body, .line = line };
     if (body.len == 0) return p.fail(line, "empty output tag", .{});
     const expr = try parseExpr(&lx);
+    const filters = try parseFilters(p, &lx, line, "the tag");
+    return .{ .output = .{ .expr = expr, .filters = filters, .line = line } };
+}
+
+/// Parses `| name(args)` filters up to the end of `lx`.
+fn parseFilters(p: *Parser, lx: *Lexer, line: usize, what: []const u8) ParseError![]const Filter {
     var filters: std.ArrayList(Filter) = .empty;
     while (true) {
         const t = try lx.next();
         switch (t) {
             .end => break,
             .pipe => {},
-            else => return p.fail(line, "expected '|' or the end of the tag", .{}),
+            else => return p.fail(line, "expected '|' or the end of {s}", .{what}),
         }
         const name_tok = try lx.next();
         if (name_tok != .ident) return p.fail(line, "expected a filter name after '|'", .{});
         const kind = std.meta.stringToEnum(FilterKind, name_tok.ident) orelse
-            return p.fail(line, "unknown filter '{s}'; the built-in filters are raw, upper, lower, default, date", .{name_tok.ident});
-        var filter: Filter = .{ .kind = kind };
+            return p.fail(line, "unknown filter '{s}'; the built-in filters are " ++ filter_names, .{name_tok.ident});
+        var args: std.ArrayList(Expr) = .empty;
         if (lx.peekByte() == '(') {
             _ = try lx.next();
-            filter.arg = try parseExpr(&lx);
-            if (try lx.next() != .rparen) return p.fail(line, "expected ')' after the filter argument", .{});
+            while (true) {
+                try args.append(p.arena, try parseExpr(lx));
+                switch (try lx.next()) {
+                    .comma => continue,
+                    .rparen => break,
+                    else => return p.fail(line, "expected ',' or ')' after a filter argument", .{}),
+                }
+            }
         }
-        const wants_arg = kind == .default;
-        if (wants_arg and filter.arg == null) return p.fail(line, "filter 'default' needs an argument, as in default(\"x\")", .{});
-        if (!wants_arg and filter.arg != null) return p.fail(line, "filter '{s}' takes no argument", .{@tagName(kind)});
-        try filters.append(p.arena, filter);
+        const min, const max = kind.arity();
+        if (args.items.len < min) {
+            return p.fail(line, "filter '{s}' needs {s}", .{ @tagName(kind), if (min == 1 and max == 1) "an argument, as in default(\"x\")" else "an argument" });
+        }
+        if (args.items.len > max) {
+            if (max == 0) return p.fail(line, "filter '{s}' takes no argument", .{@tagName(kind)});
+            return p.fail(line, "filter '{s}' takes at most {d} argument{s}", .{ @tagName(kind), max, if (max == 1) "" else "s" });
+        }
+        try filters.append(p.arena, .{ .kind = kind, .args = args.items });
     }
-    return .{ .output = .{ .expr = expr, .filters = filters.items, .line = line } };
+    return filters.items;
 }
 
 fn parseCondition(p: *Parser, src: []const u8, line: usize) ParseError!Condition {
@@ -497,6 +570,7 @@ const Tok = union(enum) {
     pipe,
     lparen,
     rparen,
+    comma,
     eq,
     ne,
 };
@@ -540,6 +614,10 @@ const Lexer = struct {
             ')' => {
                 lx.i += 1;
                 return .rparen;
+            },
+            ',' => {
+                lx.i += 1;
+                return .comma;
             },
             '=', '!' => {
                 if (lx.i + 1 < s.len and s[lx.i + 1] == '=') {
@@ -612,6 +690,7 @@ const Renderer = struct {
     scope: std.ArrayList(Binding) = .empty,
     template: []const u8 = "",
     depth: usize = 0,
+    strict: bool = false,
 
     fn fail(r: *Renderer, line: usize, comptime fmt: []const u8, args: anytype) RenderError {
         r.diag.* = .{
@@ -623,16 +702,34 @@ const Renderer = struct {
     }
 };
 
+pub const RenderOptions = struct {
+    /// Fail on undefined variables instead of rendering nothing: an output
+    /// tag whose value is undefined (unless a `default` filter follows),
+    /// and a loop over a variable whose first name is unknown. Conditions
+    /// stay lenient, so `{% if page.subtitle %}` works on every page.
+    strict: bool = false,
+};
+
 /// Renders `tpl` with `root` as the top-level variables.
 pub fn render(arena: Allocator, tpl: *const Template, root: Object, loader: ?Loader, w: *Writer, diag: *Diagnostic) RenderError!void {
-    var r: Renderer = .{ .arena = arena, .loader = loader, .diag = diag, .root = root, .template = tpl.name };
+    return renderWith(arena, tpl, root, loader, .{}, w, diag);
+}
+
+/// `render` with options.
+pub fn renderWith(arena: Allocator, tpl: *const Template, root: Object, loader: ?Loader, options: RenderOptions, w: *Writer, diag: *Diagnostic) RenderError!void {
+    var r: Renderer = .{ .arena = arena, .loader = loader, .diag = diag, .root = root, .template = tpl.name, .strict = options.strict };
     try renderNodes(&r, tpl.nodes, w);
 }
 
 /// Renders to a newly allocated string.
 pub fn renderAlloc(arena: Allocator, tpl: *const Template, root: Object, loader: ?Loader, diag: *Diagnostic) RenderError![]u8 {
+    return renderAllocWith(arena, tpl, root, loader, .{}, diag);
+}
+
+/// `renderAlloc` with options.
+pub fn renderAllocWith(arena: Allocator, tpl: *const Template, root: Object, loader: ?Loader, options: RenderOptions, diag: *Diagnostic) RenderError![]u8 {
     var aw: Writer.Allocating = .init(arena);
-    try render(arena, tpl, root, loader, &aw.writer, diag);
+    try renderWith(arena, tpl, root, loader, options, &aw.writer, diag);
     return aw.toOwnedSlice();
 }
 
@@ -641,6 +738,9 @@ fn renderNodes(r: *Renderer, nodes: []const Node, w: *Writer) RenderError!void {
         .text => |t| try w.writeAll(t),
         .output => |o| {
             var v = try evalExpr(r, o.expr);
+            if (r.strict and o.expr == .path and !hasDefault(o.filters)) {
+                if (resolve(r, o.expr.path) == null) return undefinedVariable(r, o.expr.path, o.line);
+            }
             for (o.filters) |f| v = try applyFilter(r, f, v, o.line);
             try writeValue(r, v, w, o.line);
         },
@@ -654,7 +754,11 @@ fn renderNodes(r: *Renderer, nodes: []const Node, w: *Writer) RenderError!void {
             }
         },
         .@"for" => |n| {
-            const iter = try evalExpr(r, n.iter);
+            if (r.strict and n.iter == .path and !isBound(r, n.iter.path[0])) {
+                return undefinedVariable(r, n.iter.path[0..1], n.line);
+            }
+            var iter = try evalExpr(r, n.iter);
+            for (n.filters) |f| iter = try applyFilter(r, f, iter, n.line);
             const items: []const Value = switch (iter) {
                 .nil => &.{},
                 .list => |l| l,
@@ -698,6 +802,11 @@ fn renderNodes(r: *Renderer, nodes: []const Node, w: *Writer) RenderError!void {
 }
 
 fn lookup(r: *Renderer, path: []const []const u8) Value {
+    return resolve(r, path) orelse .nil;
+}
+
+/// The value at `path`, or null when it is undefined.
+fn resolve(r: *Renderer, path: []const []const u8) ?Value {
     const first = path[0];
     var v: Value = blk: {
         var k = r.scope.items.len;
@@ -705,15 +814,43 @@ fn lookup(r: *Renderer, path: []const []const u8) Value {
             k -= 1;
             if (std.mem.eql(u8, r.scope.items[k].name, first)) break :blk r.scope.items[k].value;
         }
-        break :blk r.root.get(first) orelse return .nil;
+        break :blk r.root.get(first) orelse return null;
     };
-    for (path[1..]) |seg| {
-        v = switch (v) {
-            .object => |o| o.get(seg) orelse return .nil,
-            else => return .nil,
-        };
-    }
+    for (path[1..]) |seg| v = field(v, seg) orelse return null;
     return v;
+}
+
+fn field(v: Value, key: []const u8) ?Value {
+    return switch (v) {
+        .object => |o| o.get(key),
+        else => null,
+    };
+}
+
+/// The value at a dotted `key` path inside `v`.
+fn fieldPath(v: Value, key: []const u8) ?Value {
+    var cur = v;
+    var it = std.mem.splitScalar(u8, key, '.');
+    while (it.next()) |seg| cur = field(cur, seg) orelse return null;
+    return cur;
+}
+
+fn isBound(r: *Renderer, name: []const u8) bool {
+    for (r.scope.items) |b| if (std.mem.eql(u8, b.name, name)) return true;
+    return r.root.get(name) != null;
+}
+
+fn hasDefault(filters: []const Filter) bool {
+    for (filters) |f| if (f.kind == .default) return true;
+    return false;
+}
+
+fn undefinedVariable(r: *Renderer, path: []const []const u8, line: usize) RenderError {
+    const name = try std.mem.join(r.arena, ".", path);
+    if (!isBound(r, path[0])) {
+        return r.fail(line, "undefined variable '{s}' (strict mode); add a default, as in {{{{ {s} | default(\"\") }}}}", .{ name, name });
+    }
+    return r.fail(line, "'{s}' is not defined (strict mode); guard it with {{% if {s} %}} or add | default(\"\")", .{ name, name });
 }
 
 fn evalExpr(r: *Renderer, e: Expr) RenderError!Value {
@@ -761,16 +898,413 @@ fn applyFilter(r: *Renderer, f: Filter, v: Value, line: usize) RenderError!Value
             if (f.kind == .upper) _ = std.ascii.upperString(out, s) else _ = std.ascii.lowerString(out, s);
             return if (v == .html) .{ .html = out } else .{ .string = out };
         },
-        .default => return if (v.truthy()) v else try evalExpr(r, f.arg.?),
+        .default => return if (v.truthy()) v else try evalExpr(r, f.args[0]),
         .date => {
             const s = v.text() orelse switch (v) {
                 .nil => return v,
                 else => return r.fail(line, "filter 'date' expects a date string, got {s}", .{v.typeName()}),
             };
             const d = parseDate(s) orelse return r.fail(line, "filter 'date' expects YYYY-MM-DD, got '{s}'", .{s});
-            return .{ .string = try std.fmt.allocPrint(r.arena, "{s} {d}, {d}", .{ month_names[d.month - 1], d.day, d.year }) };
+            if (f.args.len == 0) {
+                return .{ .string = try std.fmt.allocPrint(r.arena, "{s} {d}, {d}", .{ month_names[d.month - 1], d.day, d.year }) };
+            }
+            return .{ .string = try formatDate(r, d, try stringArg(r, f, 0, line), line) };
+        },
+        .slugify => {
+            const s = try textArg(r, f, v, line) orelse return v;
+            return .{ .string = try slug(r.arena, s) };
+        },
+        .truncate => {
+            const s = try plainText(r, try textArg(r, f, v, line) orelse return v, v == .html);
+            const n = try intArg(r, f, 0, line);
+            const suffix = if (f.args.len > 1) try stringArg(r, f, 1, line) else "…";
+            return .{ .string = try truncate(r.arena, s, n, suffix) };
+        },
+        .markdownify => {
+            const s = try textArg(r, f, v, line) orelse return v;
+            return .{ .html = try markdown.toHtml(r.arena, s) };
+        },
+        .json => {
+            var aw: Writer.Allocating = .init(r.arena);
+            try writeJson(&aw.writer, v, null, 0);
+            return .{ .html = try scriptSafe(r.arena, aw.written()) };
+        },
+        .dump => {
+            var json: Writer.Allocating = .init(r.arena);
+            try writeJson(&json.writer, v, 2, 0);
+            var aw: Writer.Allocating = .init(r.arena);
+            try aw.writer.writeAll("<pre class=\"mortise-dump\"><code>");
+            try escapeHtml(&aw.writer, json.written());
+            try aw.writer.writeAll("</code></pre>");
+            return .{ .html = aw.written() };
+        },
+        .where => {
+            const items = try listArg(r, f, v, line) orelse return v;
+            const key = try stringArg(r, f, 0, line);
+            const want: ?Value = if (f.args.len > 1) try evalExpr(r, f.args[1]) else null;
+            var out: std.ArrayList(Value) = .empty;
+            for (items) |item| {
+                const got = fieldPath(item, key) orelse continue;
+                const keep = if (want) |w| switch (got) {
+                    .list => |l| for (l) |x| {
+                        if (x.eql(w)) break true;
+                    } else false,
+                    else => got.eql(w),
+                } else got.truthy();
+                if (keep) try out.append(r.arena, item);
+            }
+            return .{ .list = out.items };
+        },
+        .sort => {
+            const items = try listArg(r, f, v, line) orelse return v;
+            const key: ?[]const u8 = if (f.args.len > 0) try stringArg(r, f, 0, line) else null;
+            const sorted = try r.arena.dupe(Value, items);
+            std.mem.sort(Value, sorted, key, sortLess);
+            return .{ .list = sorted };
+        },
+        .group_by => {
+            const items = try listArg(r, f, v, line) orelse return v;
+            const key = try stringArg(r, f, 0, line);
+            const date_fmt: ?[]const u8 = if (f.args.len > 1) try stringArg(r, f, 1, line) else null;
+            var names: std.ArrayList(Value) = .empty;
+            var groups: std.ArrayList(std.ArrayList(Value)) = .empty;
+            for (items) |item| {
+                var name = fieldPath(item, key) orelse Value.nil;
+                if (date_fmt) |df| {
+                    const d = parseDate(name.text() orelse "") orelse
+                        return r.fail(line, "filter 'group_by' with a date format needs '{s}' to be a YYYY-MM-DD date", .{key});
+                    name = .{ .string = try formatDate(r, d, df, line) };
+                }
+                const idx = for (names.items, 0..) |n, i| {
+                    if (n.eql(name)) break i;
+                } else blk: {
+                    try names.append(r.arena, name);
+                    try groups.append(r.arena, .empty);
+                    break :blk names.items.len - 1;
+                };
+                try groups.items[idx].append(r.arena, item);
+            }
+            const out = try r.arena.alloc(Value, names.items.len);
+            for (out, names.items, groups.items) |*o, n, g| {
+                const entries = try r.arena.alloc(Entry, 2);
+                entries[0] = .{ .key = "name", .value = n };
+                entries[1] = .{ .key = "items", .value = .{ .list = g.items } };
+                o.* = .{ .object = .{ .entries = entries } };
+            }
+            return .{ .list = out };
+        },
+        .limit => {
+            const items = try listArg(r, f, v, line) orelse return v;
+            const n = try intArg(r, f, 0, line);
+            return .{ .list = items[0..@min(items.len, n)] };
+        },
+        .reverse => {
+            const items = try listArg(r, f, v, line) orelse return v;
+            const out = try r.arena.dupe(Value, items);
+            std.mem.reverse(Value, out);
+            return .{ .list = out };
+        },
+        .first, .last => {
+            const items = try listArg(r, f, v, line) orelse return v;
+            if (items.len == 0) return .nil;
+            return if (f.kind == .first) items[0] else items[items.len - 1];
+        },
+        .size => return .{ .int = @intCast(switch (v) {
+            .nil => 0,
+            .string, .html => |s| s.len,
+            .list => |l| l.len,
+            .object => |o| o.entries.len,
+            else => return r.fail(line, "filter 'size' expects a list, object or string, got {s}", .{v.typeName()}),
+        }) },
+        .join => {
+            const items = try listArg(r, f, v, line) orelse return v;
+            const sep = if (f.args.len > 0) try stringArg(r, f, 0, line) else " ";
+            var aw: Writer.Allocating = .init(r.arena);
+            for (items, 0..) |item, i| {
+                if (i > 0) try aw.writer.writeAll(sep);
+                switch (item) {
+                    .nil => {},
+                    .boolean => |b| try aw.writer.writeAll(if (b) "true" else "false"),
+                    .int => |n| try aw.writer.print("{d}", .{n}),
+                    .float => |x| try aw.writer.print("{d}", .{x}),
+                    .string, .html => |s| try aw.writer.writeAll(s),
+                    .list, .object => return r.fail(line, "filter 'join' cannot join {s}", .{item.typeName()}),
+                }
+            }
+            return .{ .string = aw.written() };
+        },
+        .reading_time, .word_count => {
+            const s = try plainText(r, try textArg(r, f, v, line) orelse return .{ .int = 0 }, v == .html);
+            const words = countWords(s);
+            if (f.kind == .word_count) return .{ .int = @intCast(words) };
+            return .{ .int = @intCast(@max(1, (words + 199) / 200)) };
+        },
+        .strip_html => {
+            const s = try textArg(r, f, v, line) orelse return v;
+            return .{ .string = try plainText(r, s, true) };
         },
     }
+}
+
+fn formatDate(r: *Renderer, d: Date, fmt: []const u8, line: usize) RenderError![]const u8 {
+    var aw: Writer.Allocating = .init(r.arena);
+    var i: usize = 0;
+    while (i < fmt.len) : (i += 1) {
+        if (fmt[i] != '%' or i + 1 == fmt.len) {
+            try aw.writer.writeByte(fmt[i]);
+            continue;
+        }
+        i += 1;
+        switch (fmt[i]) {
+            'Y' => try aw.writer.print("{d:0>4}", .{d.year}),
+            'm' => try aw.writer.print("{d:0>2}", .{d.month}),
+            'd' => try aw.writer.print("{d:0>2}", .{d.day}),
+            'e' => try aw.writer.print("{d}", .{d.day}),
+            'B' => try aw.writer.writeAll(month_names[d.month - 1]),
+            'b' => try aw.writer.writeAll(month_names[d.month - 1][0..3]),
+            '%' => try aw.writer.writeByte('%'),
+            else => return r.fail(line, "date format does not know '%{c}'; use %Y, %m, %d, %e, %B, %b or %%", .{fmt[i]}),
+        }
+    }
+    return aw.written();
+}
+
+/// The text of `v`, null when it is missing, or an error for other types.
+fn textArg(r: *Renderer, f: Filter, v: Value, line: usize) RenderError!?[]const u8 {
+    return v.text() orelse switch (v) {
+        .nil => null,
+        else => r.fail(line, "filter '{s}' expects a string, got {s}", .{ @tagName(f.kind), v.typeName() }),
+    };
+}
+
+fn listArg(r: *Renderer, f: Filter, v: Value, line: usize) RenderError!?[]const Value {
+    return switch (v) {
+        .nil => null,
+        .list => |l| l,
+        else => r.fail(line, "filter '{s}' expects a list, got {s}", .{ @tagName(f.kind), v.typeName() }),
+    };
+}
+
+fn intArg(r: *Renderer, f: Filter, i: usize, line: usize) RenderError!usize {
+    const a = try evalExpr(r, f.args[i]);
+    if (a != .int or a.int < 0) return r.fail(line, "filter '{s}' expects a whole number, got {s}", .{ @tagName(f.kind), a.typeName() });
+    return @intCast(a.int);
+}
+
+fn stringArg(r: *Renderer, f: Filter, i: usize, line: usize) RenderError![]const u8 {
+    const a = try evalExpr(r, f.args[i]);
+    return a.text() orelse r.fail(line, "filter '{s}' expects a string argument, got {s}", .{ @tagName(f.kind), a.typeName() });
+}
+
+/// `s` without HTML tags and with common character references decoded,
+/// when `is_html`; otherwise `s` unchanged.
+fn plainText(r: *Renderer, s: []const u8, is_html: bool) Allocator.Error![]const u8 {
+    if (!is_html) return s;
+    var out: std.ArrayList(u8) = .empty;
+    var i: usize = 0;
+    outer: while (i < s.len) {
+        const c = s[i];
+        if (c == '<') {
+            const end = std.mem.indexOfScalarPos(u8, s, i, '>') orelse s.len;
+            // Block tags separate words; inline tags such as <code> do not.
+            if (isBlockTag(s[i + 1 .. end]) and out.items.len > 0 and out.items[out.items.len - 1] != ' ') {
+                try out.append(r.arena, ' ');
+            }
+            i = end + 1;
+            continue;
+        }
+        if (c == '&') {
+            for ([_][2][]const u8{ .{ "&amp;", "&" }, .{ "&lt;", "<" }, .{ "&gt;", ">" }, .{ "&quot;", "\"" }, .{ "&#39;", "'" } }) |e| {
+                if (std.mem.startsWith(u8, s[i..], e[0])) {
+                    try out.appendSlice(r.arena, e[1]);
+                    i += e[0].len;
+                    continue :outer;
+                }
+            }
+        }
+        try out.append(r.arena, if (c == '\n' or c == '\t' or c == '\r') ' ' else c);
+        i += 1;
+    }
+    // Collapse the runs of spaces that tags and newlines leave.
+    var w: usize = 0;
+    for (out.items) |c| {
+        if (c == ' ' and (w == 0 or out.items[w - 1] == ' ')) continue;
+        out.items[w] = c;
+        w += 1;
+    }
+    return std.mem.trimEnd(u8, out.items[0..w], " ");
+}
+
+/// Whether the tag body (`/p`, `li class="x"`, `br/`) names an element
+/// that starts a new line of text.
+fn isBlockTag(body: []const u8) bool {
+    const name_start: usize = if (body.len > 0 and body[0] == '/') 1 else 0;
+    var end = name_start;
+    while (end < body.len and std.ascii.isAlphanumeric(body[end])) end += 1;
+    const name = body[name_start..end];
+    const blocks = [_][]const u8{
+        "p",  "div", "br", "li", "ul", "ol", "h1",    "h2",         "h3",      "h4",     "h5",  "h6",      "tr",     "td",
+        "th", "pre", "hr", "dt", "dd", "dl", "table", "blockquote", "section", "header", "nav", "article", "figure",
+    };
+    for (blocks) |b| if (std.ascii.eqlIgnoreCase(name, b)) return true;
+    return false;
+}
+
+fn countWords(s: []const u8) usize {
+    var n: usize = 0;
+    var in_word = false;
+    for (s) |c| {
+        const space = std.ascii.isWhitespace(c);
+        if (!space and !in_word) n += 1;
+        in_word = !space;
+    }
+    return n;
+}
+
+/// Lowercase ASCII letters and digits joined by single `-`; other ASCII
+/// is a separator and non-ASCII bytes are kept.
+fn slug(arena: Allocator, s: []const u8) Allocator.Error![]const u8 {
+    var out: std.ArrayList(u8) = .empty;
+    var dash = false;
+    for (s) |c| switch (c) {
+        'A'...'Z', 'a'...'z', '0'...'9', 0x80...0xff => {
+            if (dash and out.items.len > 0) try out.append(arena, '-');
+            dash = false;
+            try out.append(arena, std.ascii.toLower(c));
+        },
+        '\'' => {},
+        else => dash = true,
+    };
+    return out.items;
+}
+
+/// At most `n` characters (code points) of `s`, cut back to a word boundary
+/// when one is near, with `suffix` appended when anything was removed.
+fn truncate(arena: Allocator, s: []const u8, n: usize, suffix: []const u8) Allocator.Error![]const u8 {
+    var count: usize = 0;
+    var i: usize = 0;
+    while (i < s.len and count < n) : (count += 1) {
+        i += std.unicode.utf8ByteSequenceLength(s[i]) catch 1;
+    }
+    if (i >= s.len) return s;
+    var cut = @min(i, s.len);
+    if (std.mem.lastIndexOfScalar(u8, s[0..cut], ' ')) |sp| {
+        // Prefer a word boundary unless it throws away most of the text.
+        if (sp * 2 >= cut) cut = sp;
+    }
+    const kept = std.mem.trimEnd(u8, s[0..cut], " ,;:.");
+    return std.mem.concat(arena, u8, &.{ kept, suffix });
+}
+
+/// Writes `v` as JSON, indented by `indent` spaces per level when set.
+fn writeJson(w: *Writer, v: Value, indent: ?usize, level: usize) Writer.Error!void {
+    switch (v) {
+        .nil => try w.writeAll("null"),
+        .boolean => |b| try w.writeAll(if (b) "true" else "false"),
+        .int => |n| try w.print("{d}", .{n}),
+        .float => |x| if (std.math.isFinite(x)) try w.print("{d}", .{x}) else try w.writeAll("null"),
+        .string, .html => |s| try writeJsonString(w, s),
+        .list => |l| {
+            if (l.len == 0) return w.writeAll("[]");
+            try w.writeByte('[');
+            for (l, 0..) |item, i| {
+                if (i > 0) try w.writeByte(',');
+                try newline(w, indent, level + 1);
+                try writeJson(w, item, indent, level + 1);
+            }
+            try newline(w, indent, level);
+            try w.writeByte(']');
+        },
+        .object => |o| {
+            if (o.entries.len == 0) return w.writeAll("{}");
+            try w.writeByte('{');
+            for (o.entries, 0..) |e, i| {
+                if (i > 0) try w.writeByte(',');
+                try newline(w, indent, level + 1);
+                try writeJsonString(w, e.key);
+                try w.writeAll(if (indent != null) ": " else ":");
+                try writeJson(w, e.value, indent, level + 1);
+            }
+            try newline(w, indent, level);
+            try w.writeByte('}');
+        },
+    }
+}
+
+fn newline(w: *Writer, indent: ?usize, level: usize) Writer.Error!void {
+    const n = indent orelse return;
+    try w.writeByte('\n');
+    try w.splatByteAll(' ', n * level);
+}
+
+fn writeJsonString(w: *Writer, s: []const u8) Writer.Error!void {
+    try w.writeByte('"');
+    for (s) |c| switch (c) {
+        '"' => try w.writeAll("\\\""),
+        '\\' => try w.writeAll("\\\\"),
+        '\n' => try w.writeAll("\\n"),
+        '\r' => try w.writeAll("\\r"),
+        '\t' => try w.writeAll("\\t"),
+        0...0x08, 0x0b, 0x0c, 0x0e...0x1f => try w.print("\\u{x:0>4}", .{c}),
+        else => try w.writeByte(c),
+    };
+    try w.writeByte('"');
+}
+
+/// Makes JSON safe to place inside `<script>`: `<`, `>` and `&` become
+/// `\u` escapes, so the text can never close the element, and so do the
+/// line separators U+2028 and U+2029.
+fn scriptSafe(arena: Allocator, json: []const u8) Allocator.Error![]const u8 {
+    var out: std.ArrayList(u8) = .empty;
+    var i: usize = 0;
+    while (i < json.len) : (i += 1) {
+        const c = json[i];
+        switch (c) {
+            '<' => try out.appendSlice(arena, "\\u003c"),
+            '>' => try out.appendSlice(arena, "\\u003e"),
+            '&' => try out.appendSlice(arena, "\\u0026"),
+            0xe2 => if (i + 2 < json.len and json[i + 1] == 0x80 and (json[i + 2] == 0xa8 or json[i + 2] == 0xa9)) {
+                try out.appendSlice(arena, if (json[i + 2] == 0xa8) "\\u2028" else "\\u2029");
+                i += 2;
+            } else try out.append(arena, c),
+            else => try out.append(arena, c),
+        }
+    }
+    return out.items;
+}
+
+/// Orders values for `sort`: numbers numerically, strings by bytes,
+/// booleans false first, missing values last.
+fn sortLess(key: ?[]const u8, a: Value, b: Value) bool {
+    const x = if (key) |k| fieldPath(a, k) orelse Value.nil else a;
+    const y = if (key) |k| fieldPath(b, k) orelse Value.nil else b;
+    const rx = rank(x);
+    const ry = rank(y);
+    if (rx != ry) return rx < ry;
+    return switch (x) {
+        .boolean => |p| !p and y.boolean,
+        .int, .float => number(x) < number(y),
+        .string, .html => |s| std.mem.order(u8, s, y.text().?) == .lt,
+        else => false,
+    };
+}
+
+fn rank(v: Value) u8 {
+    return switch (v) {
+        .boolean => 0,
+        .int, .float => 1,
+        .string, .html => 2,
+        .list, .object => 3,
+        .nil => 4,
+    };
+}
+
+fn number(v: Value) f64 {
+    return switch (v) {
+        .int => |n| @floatFromInt(n),
+        .float => |x| x,
+        else => 0,
+    };
 }
 
 const month_names = [_][]const u8{
@@ -858,6 +1392,11 @@ fn testRoot() Object {
             .{ .key = "content", .value = .{ .html = "<p>Body</p>" } },
             .{ .key = "posts", .value = .{ .list = &posts } },
             .{ .key = "empty", .value = .{ .list = &.{} } },
+            .{ .key = "pages", .value = .{ .list = &pages } },
+        };
+        const pages = [_]Value{
+            .{ .object = .{ .entries = &.{ .{ .key = "name", .value = .{ .string = "x" } }, .{ .key = "tags", .value = .{ .list = &.{.{ .string = "zig" }} } } } } },
+            .{ .object = .{ .entries = &.{ .{ .key = "name", .value = .{ .string = "y" } }, .{ .key = "tags", .value = .{ .list = &.{.{ .string = "go" }} } } } } },
         };
     };
     return .{ .entries = &S.root };
@@ -933,6 +1472,90 @@ test "filters" {
     try expectRender("&lt;Hello&gt;", "{{ page.title | default(\"x\") }}");
     try expectRender("January 5, 2024", "{{ page.date | date }}");
     try expectRender("<HELLO>", "{{ page.title | upper | raw }}");
+}
+
+test "text filters" {
+    try expectRender("hello-world-zig-0-16", "{{ \"Hello, World! Zig 0.16\" | slugify }}");
+    try expectRender("its-ok", "{{ \"  It's ok! \" | slugify }}");
+    try expectRender("2024/01/05 5 Jan January 100%", "{{ page.date | date(\"%Y/%m/%d %e %b %B 100%%\") }}");
+    try expectRender("The quick…", "{{ \"The quick brown fox\" | truncate(12) }}");
+    try expectRender("The quick brown fox", "{{ \"The quick brown fox\" | truncate(50) }}");
+    try expectRender("The...", "{{ \"The quick brown fox\" | truncate(6, \"...\") }}");
+    try expectRender("Body", "{{ content | strip_html }}");
+    try expectRender("Set url, then a b", "{{ \"<p>Set <code>url</code>, then</p><p>a<br>b</p>\" | raw | strip_html }}");
+    try expectRender("<p><em>hi</em> &amp; bye</p>\n", "{{ \"*hi* & bye\" | markdownify }}");
+    try expectRender("1", "{{ content | reading_time }}");
+    try expectRender("2 1", "{{ \"<p>one</p><p>two</p>\" | raw | word_count }} {{ content | word_count }}");
+    try expectRender("7", "{{ page.title | size }}");
+}
+
+test "list filters" {
+    try expectRender("web zig", "{{ page.tags | sort | join }}");
+    try expectRender("zig, web", "{{ page.tags | join(\", \") }}");
+    try expectRender("web", "{{ page.tags | reverse | first }}");
+    try expectRender("web 2", "{{ page.tags | last }} {{ page.tags | size }}");
+    try expectRender("Second &amp; more,First,", "{% for p in posts | sort(\"url\") | reverse %}{{ p.title }},{% endfor %}");
+    try expectRender("First", "{% for p in posts | where(\"url\", \"/a/\") %}{{ p.title }}{% endfor %}");
+    try expectRender("First", "{% for p in posts | limit(1) %}{{ p.title }}{% endfor %}");
+    try expectRender("2", "{{ posts | where(\"title\") | size }}");
+    try expectRender("/a/:First;/b/:Second &amp; more;", "{% for g in posts | group_by(\"url\") %}{{ g.name }}:{% for p in g.items %}{{ p.title }}{% endfor %};{% endfor %}");
+    try expectRender("a", "{% for p in grouped | sort %}{% endfor %}a");
+}
+
+test "where matches list fields by membership" {
+    try expectRender("x", "{% for p in pages | where(\"tags\", \"zig\") %}{{ p.name }}{% endfor %}");
+}
+
+test "json and dump" {
+    try expectRender("[\"zig\",\"web\"]", "{{ page.tags | json }}");
+    try expectRender("\"\\u003cHello\\u003e\"", "{{ page.title | json }}");
+    try expectRender("{\"title\":\"First\",\"url\":\"/a/\"}", "{{ posts | first | json }}");
+    try expectRender("<pre class=\"mortise-dump\"><code>[\n  &quot;zig&quot;,\n  &quot;web&quot;\n]</code></pre>", "{{ page.tags | dump }}");
+}
+
+test "filter argument errors" {
+    try expectParseError("{{ x | truncate }}", 1, "needs an argument");
+    try expectParseError("{{ x | limit(1, 2) }}", 1, "at most 1 argument");
+    try expectParseError("{{ x | where(\"a\" \"b\") }}", 1, "expected ',' or ')'");
+    try expectRenderError("{{ page.tags | truncate(3) }}", "main.html", 1, "expects a string");
+    try expectRenderError("{{ page.title | limit(2) }}", "main.html", 1, "expects a list");
+    try expectRenderError("{{ page.tags | limit(\"2\") }}", "main.html", 1, "whole number");
+}
+
+test "strict mode" {
+    try expectRenderStrict("Untitled|", "{{ page.subtitle | default(\"Untitled\") }}|{% if page.subtitle %}{{ page.subtitle }}{% endif %}");
+    try expectRenderStrict("", "{% for t in page.missing %}{{ t }}{% endfor %}");
+    try expectStrictError("\n{{ page.titel }}", 2, "'page.titel' is not defined");
+    try expectStrictError("{{ pgae.title }}", 1, "undefined variable 'pgae.title'");
+    try expectStrictError("{% for p in sit.posts %}{% endfor %}", 1, "undefined variable 'sit'");
+    try expectStrictError("{% for t in page.tags %}{{ t.name }}{% endfor %}", 1, "'t.name' is not defined");
+}
+
+fn expectRenderStrict(expected: []const u8, src: []const u8) !void {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    var diag: Diagnostic = .{};
+    const tpl = try parse(arena.allocator(), "s.html", src, &diag);
+    const out = renderAllocWith(arena.allocator(), &tpl, testRoot(), null, .{ .strict = true }, &diag) catch |err| {
+        std.debug.print("{s}:{d}: {s}\n", .{ diag.template, diag.line, diag.message });
+        return err;
+    };
+    try testing.expectEqualStrings(expected, out);
+}
+
+fn expectStrictError(src: []const u8, line: usize, part: []const u8) !void {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    var diag: Diagnostic = .{};
+    const tpl = try parse(arena.allocator(), "s.html", src, &diag);
+    // Lenient rendering of the same template succeeds.
+    _ = try renderAlloc(arena.allocator(), &tpl, testRoot(), null, &diag);
+    try testing.expectError(error.TemplateRender, renderAllocWith(arena.allocator(), &tpl, testRoot(), null, .{ .strict = true }, &diag));
+    try testing.expectEqual(line, diag.line);
+    if (std.mem.indexOf(u8, diag.message, part) == null) {
+        std.debug.print("expected '{s}' in '{s}'\n", .{ part, diag.message });
+        return error.TestUnexpectedResult;
+    }
 }
 
 test "conditionals" {

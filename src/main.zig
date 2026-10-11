@@ -27,6 +27,9 @@ const usage =
     \\
     \\Options for build, check and serve:
     \\  --drafts  Include pages and posts marked draft: true
+    \\  --strict, --no-strict
+    \\            Fail on undefined template variables, or don't. The default
+    \\            is strict: in _config.yml, else on for serve, off for build
     \\
     \\Options for serve:
     \\  --port N  Port to listen on (default: 4000)
@@ -142,7 +145,7 @@ fn cmdBuild(ctx: Ctx, rest: []const [:0]const u8) u8 {
 
     const start = Io.Clock.Timestamp.now(io, .awake);
     var diag: pipeline.Diagnostic = .{};
-    const site = pipeline.buildWith(arena, src, .{ .drafts = args.drafts }, &diag) catch |e| {
+    const site = pipeline.buildWith(arena, src, .{ .drafts = args.drafts, .strict = args.strict }, &diag) catch |e| {
         switch (e) {
             error.BuildFailed => ctx.err.print("error: {f}\n", .{diag}) catch {},
             error.OutOfMemory => ctx.err.writeAll("error: out of memory\n") catch {},
@@ -202,6 +205,7 @@ const Args = struct {
     dir: []const u8 = ".",
     port: u16 = 4000,
     drafts: bool = false,
+    strict: ?bool = null,
     restart_on_rebuild: bool = false,
     /// Set in a server started by the restart supervisor.
     restarted_from: ?[]const u8 = null,
@@ -218,6 +222,10 @@ fn parseArgs(ctx: Ctx, rest: []const [:0]const u8, serve: bool) ?Args {
         const arg = rest[i];
         if (std.mem.eql(u8, arg, "--drafts")) {
             result.drafts = true;
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--strict") or std.mem.eql(u8, arg, "--no-strict")) {
+            result.strict = arg[2] == 's';
             continue;
         }
         if (serve and std.mem.eql(u8, arg, "--restart-on-rebuild")) {
@@ -279,7 +287,7 @@ fn cmdServe(ctx: Ctx, argv: []const [:0]const u8) u8 {
     const server = mortise.server.Server.init(ctx.gpa, io, args.dir, .{
         .port = args.port,
         .log = ctx.out,
-        .build = .{ .drafts = args.drafts },
+        .build = .{ .drafts = args.drafts, .strict = args.strict, .strict_by_default = true },
         .first_generation = first_generation,
     }) catch |e| {
         switch (e) {
@@ -369,6 +377,9 @@ test "parseArgs" {
     try testing.expect(parseArgs(ctx, &.{ "a", "b" }, true) == null);
     // build takes --drafts but not --port.
     try testing.expect(parseArgs(ctx, &.{"--drafts"}, false).?.drafts);
+    try testing.expectEqual(@as(?bool, true), parseArgs(ctx, &.{"--strict"}, false).?.strict);
+    try testing.expectEqual(@as(?bool, false), parseArgs(ctx, &.{"--no-strict"}, true).?.strict);
+    try testing.expectEqual(@as(?bool, null), parseArgs(ctx, &.{}, false).?.strict);
     try testing.expect(parseArgs(ctx, &.{ "--port", "1" }, false) == null);
     // Restarting on rebuild is for serve only.
     const r = parseArgs(ctx, &.{ "site", "--restart-on-rebuild", "--restarted-from=bin/mortise" }, true).?;

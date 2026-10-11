@@ -30,15 +30,82 @@ Layouts live in `_layouts/` and includes in `_includes/`.
 ## Filters
 
 Filters follow a `|` and run left to right: `{{ page.title | upper | raw }}`.
-There are five built-ins and no way to add more.
+Arguments go in parentheses, separated by commas: `truncate(80, "...")`.
+Filters also work on a loop's list:
+`{% for post in site.posts | where("tags", "zig") | limit(5) %}`.
+The filters are built in; there is no way to add more.
 
-| Filter         | Effect                                                      |
-| -------------- | ----------------------------------------------------------- |
-| `raw`          | Mark a string as HTML so it is not escaped                  |
-| `upper`        | ASCII uppercase                                              |
-| `lower`        | ASCII lowercase                                              |
-| `default("x")` | Use `"x"` when the value is missing, `false`, `0`, empty    |
-| `date`         | Format `YYYY-MM-DD` (time part ignored) as `January 5, 2024` |
+Text:
+
+| Filter                | Effect                                                         |
+| --------------------- | -------------------------------------------------------------- |
+| `raw`                 | Mark a string as HTML so it is not escaped                     |
+| `upper`, `lower`      | ASCII uppercase or lowercase                                   |
+| `default("x")`        | Use `"x"` when the value is missing, `false`, `0`, empty       |
+| `date`                | Format `YYYY-MM-DD` (time part ignored) as `January 5, 2024`   |
+| `date("%Y-%m")`       | Format with `%Y` year, `%m` month (`01`), `%d` day (`05`), `%e` day (`5`), `%B` month name, `%b` short month name, `%%` |
+| `slugify`             | `Hello, World!` → `hello-world`                                |
+| `truncate(n)`         | At most `n` characters, cut at a word when one is near, then `…`; `truncate(n, "...")` picks the ending. HTML is stripped first |
+| `strip_html`          | Remove tags, keeping the text                                  |
+| `markdownify`         | Render a Markdown string to HTML                               |
+| `word_count`          | Words in the text (HTML tags ignored)                          |
+| `reading_time`        | Minutes to read at 200 words a minute, at least 1              |
+
+Lists:
+
+| Filter                     | Effect                                                    |
+| -------------------------- | --------------------------------------------------------- |
+| `where("key")`             | Items whose `key` is true (not missing, empty, `false`, `0`) |
+| `where("key", value)`      | Items whose `key` equals `value`, or contains it when `key` is a list such as `tags` |
+| `sort`, `sort("key")`      | Sort values, or objects by a field: numbers by value, strings by bytes, missing last |
+| `group_by("key")`          | A list of `{ name, items }` groups, in the order first seen |
+| `group_by("date", "%Y")`   | Group by a date formatted as in `date(...)`, such as by year |
+| `limit(n)`                 | The first `n` items                                       |
+| `reverse`                  | Reverse the list                                          |
+| `first`, `last`            | One item                                                  |
+| `join`, `join(", ")`       | Items as one string, separated by a space or the argument |
+| `size`                     | Items in a list, fields in an object, or bytes in a string |
+
+`key` may be a dotted path such as `"author.name"`.
+
+Debugging and data:
+
+| Filter  | Effect                                                                   |
+| ------- | ------------------------------------------------------------------------ |
+| `json`  | The value as compact JSON, with `<`, `>` and `&` escaped as `<` and so on, so it is safe inside `<script>`. Not for HTML attributes |
+| `dump`  | The value as indented JSON in `<pre class="mortise-dump">`, to see what a template can read: `{{ page | dump }}` |
+
+```html
+{% for year in site.posts | group_by("date", "%Y") %}
+<h2>{{ year.name }}</h2>
+{% for post in year.items %}
+<p><a href="{{ post.url }}">{{ post.title }}</a> · {{ post.content | reading_time }} min</p>
+{% endfor %}
+{% endfor %}
+```
+
+## Strict mode
+
+In strict mode an undefined variable is an error instead of empty output,
+so a typo such as `{{ page.titel }}` stops the build with its file and line:
+
+```
+_layouts/post.html:7: 'page.titel' is not defined (strict mode); guard it with {% if page.titel %} or add | default("")
+```
+
+- An output tag fails when its value is undefined, unless a `default`
+  filter follows. Fields that only some pages set are written
+  `{% if page.subtitle %}{{ page.subtitle }}{% endif %}` or
+  `{{ page.subtitle | default("") }}`.
+- A loop fails when its first name is unknown (`site` misspelled), but a
+  loop over a missing field such as `page.tags` renders nothing.
+- Conditions never fail.
+
+`mortise serve` is strict by default, so mistakes show in the browser's
+error overlay as you type; `mortise build` is not. Set `strict: true` or
+`strict: false` in `_config.yml` to choose for both, or pass `--strict` or
+`--no-strict` to one command. `site.baseurl` is always defined (as `""`
+when unset).
 
 ## Conditionals
 
@@ -75,6 +142,7 @@ There are five built-ins and no way to add more.
   `loop.last` are available inside the loop.
 - Looping over a missing value renders nothing. Looping over anything other
   than a list is an error.
+- List filters apply before looping: `{% for p in site.pages | sort("title") %}`.
 
 ## Pagination
 
@@ -155,5 +223,5 @@ and render errors (outputting a list, a missing include) stop the build and
 name the template and line:
 
 ```
-_layouts/post.html:12: unknown filter 'shout'; the built-in filters are raw, upper, lower, default, date
+_layouts/post.html:12: unknown filter 'shout'; the built-in filters are raw, upper, lower, default, date, slugify, ...
 ```

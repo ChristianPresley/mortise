@@ -100,12 +100,23 @@ job:
 
 ## Templates
 
-- Five built-in filters and no custom filters.
+- Built-in filters only; no custom filters.
 - Conditions support `==`, `!=`, `not`, `and` and `or`, without parentheses
-  or ordering comparisons (`<`, `>`).
-- Missing variables render as nothing instead of failing, so a typo in a
-  variable name produces empty output rather than an error.
-- `upper` and `lower` change ASCII letters only.
+  or ordering comparisons (`<`, `>`). Filters work in output tags and loop
+  lists, not in conditions.
+- Outside strict mode (the default for `build`), missing variables render
+  as nothing, so a typo in a variable name produces empty output rather
+  than an error. Strict mode does not check conditions, or fields of a
+  missing value that a loop iterates.
+- `upper`, `lower` and `slugify` change ASCII letters only; `slugify` keeps
+  other non-ASCII bytes as they are.
+- `truncate` counts code points, not grapheme clusters, and `size` counts
+  a string's bytes.
+- `reading_time` assumes 200 words a minute and counts words by spaces, so
+  text without spaces (Chinese, Japanese) counts as few words.
+- `sort` compares strings byte by byte, not by locale.
+- `json` output is safe inside `<script>` but not inside an HTML attribute.
+- `date` formats know `%Y %m %d %e %B %b %%` and English month names only.
 
 ## Link checking
 

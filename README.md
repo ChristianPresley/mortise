@@ -41,7 +41,7 @@ Most of that time goes to copying the 27 MB debug binary and starting it.
 
 ```sh
 mortise new my-site                              # create a starter site
-mortise build [SITE_DIR] [--drafts]              # build SITE_DIR (default .) into SITE_DIR/_site
+mortise build [SITE_DIR] [--drafts] [--strict]   # build SITE_DIR (default .) into SITE_DIR/_site
 mortise check [SITE_DIR] [--drafts]              # report broken internal links and anchors
 mortise serve [SITE_DIR] [--port N] [--drafts]   # dev server on http://localhost:4000/
 mortise version
@@ -58,7 +58,9 @@ exits with status 1, so it can gate CI. Links with a scheme (`https:`,
 `new` writes a small working site: a layout, a post layout, a header
 include, a paginated home page, an about page, a welcome post, and a
 stylesheet with colors for highlighted code. `--drafts` publishes pages and
-posts marked `draft: true`.
+posts marked `draft: true`. `--strict` makes an undefined template variable
+an error; `serve` is strict unless `--no-strict` or `strict: false` in
+`_config.yml` says otherwise (see [strict mode](docs/templates.md#strict-mode)).
 
 `build` deletes and rewrites `SITE_DIR/_site` on every run.
 
