@@ -248,7 +248,11 @@ pub const Server = struct {
             if (old) |o| s.release(o);
             const ms = @as(f64, @floatFromInt(s.last_build_ns)) / std.time.ns_per_ms;
             if (site.full) {
-                s.logLine("Built {d} pages, {d} posts, {d} static files in {d:.1} ms", .{ site.pages, site.posts, site.static_files, ms });
+                if (site.skipped.total() > 0) {
+                    s.logLine("Built {d} pages, {d} posts, {d} static files in {d:.1} ms; skipped {f}", .{ site.pages, site.posts, site.static_files, ms, site.skipped });
+                } else {
+                    s.logLine("Built {d} pages, {d} posts, {d} static files in {d:.1} ms", .{ site.pages, site.posts, site.static_files, ms });
+                }
             } else {
                 s.logLine("Rebuilt {d} of {d} pages in {d:.1} ms", .{ site.rendered, site.pages + site.posts, ms });
             }

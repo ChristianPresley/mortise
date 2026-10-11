@@ -158,6 +158,15 @@ job:
   even when frontmatter sets a `date` that overrides the file name's.
 - Frontmatter dates are calendar dates. A time after the date is accepted
   and ignored; there are no time zones.
+- Scheduling compares dates with today's date in UTC, so a post dated
+  today appears at midnight UTC, not local midnight. `serve` reads the date
+  once when it starts; a server left running past midnight publishes the
+  next day's posts only after a restart or a full rebuild.
+- A static site cannot publish itself: a scheduled post appears only when
+  the site is built again on or after its date, for example by a daily CI
+  job.
+- Only posts are scheduled by date; pages have no date. `expires` works on
+  both.
 - Markdown content is not run through the template engine, so template tags
   inside a `.md` file appear literally.
 - `baseurl` is added to page URLs only. Links to static files in templates

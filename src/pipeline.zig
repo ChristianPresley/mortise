@@ -94,6 +94,8 @@ pub const Site = struct {
     /// `/blog`, or "" when the site is served from the root. Page URLs
     /// include it; output paths do not.
     baseurl: []const u8,
+    /// Pages and posts left out of this build, by reason.
+    skipped: Skipped = .{},
     /// What `rebuild` needs to update this site. An incrementally rebuilt
     /// site shares memory with the site it came from, so that site's
     /// arena must outlive this one.
@@ -127,7 +129,37 @@ pub const Site = struct {
     }
 };
 
+pub const Skipped = struct {
+    /// `draft: true`, without `--drafts`.
+    drafts: usize = 0,
+    /// Posts dated after today, without `--future`.
+    future: usize = 0,
+    /// Pages and posts whose `expires` date has come.
+    expired: usize = 0,
+
+    pub fn total(s: Skipped) usize {
+        return s.drafts + s.future + s.expired;
+    }
+
+    /// `2 drafts, 1 future post` and so on, leaving out zero counts.
+    pub fn format(s: Skipped, w: *Writer) Writer.Error!void {
+        var first = true;
+        const parts = [_]struct { usize, []const u8, []const u8 }{
+            .{ s.drafts, "draft", "drafts" },
+            .{ s.future, "future post", "future posts" },
+            .{ s.expired, "expired page", "expired pages" },
+        };
+        for (parts) |p| {
+            if (p[0] == 0) continue;
+            if (!first) try w.writeAll(", ");
+            first = false;
+            try w.print("{d} {s}", .{ p[0], if (p[0] == 1) p[1] else p[2] });
+        }
+    }
+};
+
 const State = struct {
+    skipped: Skipped,
     config_fields: frontmatter.Map,
     baseurl: []const u8,
     site_url: ?[]const u8,
@@ -200,6 +232,10 @@ const Builder = struct {
     deps: std.ArrayList([]const u8) = .empty,
     /// Whether a template used by the current page reads site collections.
     reads_collections: bool = false,
+    /// Pages and posts left out so far.
+    skipped: Skipped = .{},
+    /// Publish posts dated after `options.today`.
+    future: bool = false,
     baseurl: []const u8 = "",
     /// Absolute site URL from `url` in the config, needed for the feed and
     /// sitemap; null when unset.
@@ -270,6 +306,12 @@ pub const Options = struct {
     /// Strict mode when neither the options nor the config say: on in
     /// `serve`, where a typo should show up at once, off in `build`.
     strict_by_default: bool = false,
+    /// Today's date as `YYYY-MM-DD`, for scheduled and expiring posts.
+    /// When empty, nothing is left out for its date.
+    today: []const u8 = "",
+    /// Publish posts dated after `today` (`--future`, or `future: true`
+    /// in `_config.yml`).
+    future: bool = false,
 };
 
 /// `build` with options.
@@ -293,6 +335,7 @@ pub fn buildWith(arena: Allocator, src: SiteDir, options: Options, diag: *Diagno
     b.baseurl = try baseUrl(&b, config_fields);
     b.site_url = try siteUrl(&b, config_fields);
     b.markdown_options = try markdownOptions(&b, config_fields);
+    b.future = try showFuture(&b, config_fields);
     b.data = try loadData(&b, listing.files);
 
     for (listing.files) |path| {
@@ -340,8 +383,9 @@ pub fn buildWith(arena: Allocator, src: SiteDir, options: Options, diag: *Diagno
 /// overflow. The result shares memory with `prev`.
 pub fn rebuild(arena: Allocator, src: SiteDir, prev: *const Site, changed: []const []const u8, diag: *Diagnostic) Error!Site {
     const st = prev.state;
-    var b: Builder = .{ .arena = arena, .src = src, .diag = diag, .baseurl = st.baseurl, .site_url = st.site_url, .data = st.data, .options = st.options };
+    var b: Builder = .{ .arena = arena, .src = src, .diag = diag, .baseurl = st.baseurl, .site_url = st.site_url, .data = st.data, .options = st.options, .skipped = st.skipped };
     b.markdown_options = try markdownOptions(&b, st.config_fields);
+    b.future = try showFuture(&b, st.config_fields);
 
     var dirty_templates: std.ArrayList([]const u8) = .empty;
     var dirty_pages: std.ArrayList(usize) = .empty;
@@ -468,6 +512,14 @@ fn loadData(b: *Builder, files: []const []const u8) Error!Value {
         }
     }
     return tree.toObject();
+}
+
+/// Whether to publish future-dated posts: `--future`, or `future: true`.
+fn showFuture(b: *Builder, config_fields: frontmatter.Map) Error!bool {
+    if (b.options.future) return true;
+    const v = config_fields.get("future") orelse return false;
+    if (v != .boolean) return b.fail(config_path, 0, "'future' must be true or false", .{});
+    return v.boolean;
 }
 
 /// Reads and normalizes `url` from the config, or null when unset.
@@ -700,7 +752,8 @@ fn finish(b: *Builder, config_fields: frontmatter.Map, pages: []Page, statics: [
         .rendered = rendered,
         .full = render == null,
         .baseurl = b.baseurl,
-        .state = .{ .config_fields = config_fields, .baseurl = b.baseurl, .site_url = b.site_url, .options = b.options, .data = b.data, .pages = pages, .statics = statics },
+        .skipped = b.skipped,
+        .state = .{ .skipped = b.skipped, .config_fields = config_fields, .baseurl = b.baseurl, .site_url = b.site_url, .options = b.options, .data = b.data, .pages = pages, .statics = statics },
     };
 }
 
@@ -722,7 +775,20 @@ fn loadPage(b: *Builder, path: []const u8, is_post: bool) Error!?Page {
     };
     if (doc.fields.get("draft")) |d| {
         if (d != .boolean) return b.fail(path, fieldLine(data, "draft"), "'draft' must be true or false", .{});
-        if (d.boolean and !b.options.drafts) return null;
+        if (d.boolean and !b.options.drafts) {
+            b.skipped.drafts += 1;
+            return null;
+        }
+    }
+    if (doc.fields.get("expires")) |e| {
+        if (e != .string or template.parseDate(e.string) == null) {
+            return b.fail(path, fieldLine(data, "expires"), "'expires' must look like YYYY-MM-DD", .{});
+        }
+        // Gone from the expiry date on.
+        if (b.options.today.len > 0 and std.mem.order(u8, b.options.today, e.string[0..10]) != .lt) {
+            b.skipped.expired += 1;
+            return null;
+        }
     }
 
     const is_markdown = std.mem.eql(u8, sitepath.extension(path), ".md");
@@ -765,6 +831,11 @@ fn loadPage(b: *Builder, path: []const u8, is_post: bool) Error!?Page {
                 return b.fail(path, fieldLine(data, "date"), "'date' must look like YYYY-MM-DD", .{});
             }
             page.date = d.string[0..10];
+        }
+        // A post dated after today waits for its day, unless `--future`.
+        if (!b.future and b.options.today.len > 0 and std.mem.order(u8, page.date, b.options.today) == .gt) {
+            b.skipped.future += 1;
+            return null;
         }
     }
 
@@ -2344,4 +2415,44 @@ test "<<< includes code from files and rebuilds when they change" {
     try expectBuildError(&.{.{ "a.md", "---\nt: 1\n---\nText\n\n<<< missing.zig\n" }}, "a.md", 6, "cannot include 'missing.zig': no such file");
     try expectBuildError(&.{.{ "a.md", "<<< ../../etc/passwd\n" }}, "a.md", 1, "outside the site");
     try expectBuildError(&.{ .{ "a.md", "<<< b.txt:2-9\n" }, .{ "b.txt", "one\ntwo\n" } }, "a.md", 1, "'b.txt' has no lines 2-9; it has 2");
+}
+
+test "future posts wait for their date and expired pages are left out" {
+    var t: TestSite = try .init(&.{
+        .{ "_posts/2024-01-01-past.md", "Past.\n" },
+        .{ "_posts/2024-06-01-today.md", "Today.\n" },
+        .{ "_posts/2024-01-02-moved.md", "---\ndate: 2024-12-01\n---\nScheduled by its frontmatter date.\n" },
+        .{ "_posts/2025-01-01-next-year.md", "Next year.\n" },
+        .{ "sale.md", "---\nexpires: 2024-06-01\n---\nGone today.\n" },
+        .{ "promo.md", "---\nexpires: 2024-06-02\n---\nStill here.\n" },
+        .{ "draft.md", "---\ndraft: true\n---\nDraft.\n" },
+    });
+    defer t.deinit();
+    const src = SiteDir.borrow(testing.io, t.tmp.dir);
+    var diag: Diagnostic = .{};
+    const a = t.arena.allocator();
+
+    const site = try buildWith(a, src, .{ .today = "2024-06-01" }, &diag);
+    try testing.expect(site.find("2024/01/01/past/index.html") != null);
+    try testing.expect(site.find("2024/06/01/today/index.html") != null);
+    try testing.expect(site.find("2024/12/01/moved/index.html") == null);
+    try testing.expect(site.find("2025/01/01/next-year/index.html") == null);
+    try testing.expect(site.find("sale/index.html") == null);
+    try testing.expect(site.find("promo/index.html") != null);
+    try testing.expectEqual(Skipped{ .drafts = 1, .future = 2, .expired = 1 }, site.skipped);
+    var buf: [64]u8 = undefined;
+    try testing.expectEqualStrings("1 draft, 2 future posts, 1 expired page", try std.fmt.bufPrint(&buf, "{f}", .{site.skipped}));
+
+    // An incremental rebuild keeps the counts.
+    try src.writeFile("promo.md", "---\nexpires: 2024-06-02\n---\nStill here, edited.\n");
+    const again = try rebuild(a, src, &site, &.{"promo.md"}, &diag);
+    try testing.expectEqual(site.skipped, again.skipped);
+
+    // --future publishes them; no date publishes everything but drafts.
+    const future = try buildWith(a, src, .{ .today = "2024-06-01", .future = true }, &diag);
+    try testing.expect(future.find("2025/01/01/next-year/index.html") != null);
+    try testing.expectEqual(Skipped{ .drafts = 1, .expired = 1 }, future.skipped);
+    try testing.expectEqual(Skipped{ .drafts = 1 }, (try buildWith(a, src, .{}, &diag)).skipped);
+
+    try expectBuildError(&.{.{ "a.md", "---\nexpires: never\n---\n" }}, "a.md", 2, "'expires' must look like YYYY-MM-DD");
 }

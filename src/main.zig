@@ -27,6 +27,7 @@ const usage =
     \\
     \\Options for build, check and serve:
     \\  --drafts  Include pages and posts marked draft: true
+    \\  --future  Include posts dated after today
     \\  --strict, --no-strict
     \\            Fail on undefined template variables, or don't. The default
     \\            is strict: in _config.yml, else on for serve, off for build
@@ -145,7 +146,9 @@ fn cmdBuild(ctx: Ctx, rest: []const [:0]const u8) u8 {
 
     const start = Io.Clock.Timestamp.now(io, .awake);
     var diag: pipeline.Diagnostic = .{};
-    const site = pipeline.buildWith(arena, src, .{ .drafts = args.drafts, .strict = args.strict }, &diag) catch |e| {
+    var today_buf: [10]u8 = undefined;
+    const options: pipeline.Options = .{ .drafts = args.drafts, .strict = args.strict, .future = args.future, .today = mortise.scaffold.today(io, &today_buf) };
+    const site = pipeline.buildWith(arena, src, options, &diag) catch |e| {
         switch (e) {
             error.BuildFailed => ctx.err.print("error: {f}\n", .{diag}) catch {},
             error.OutOfMemory => ctx.err.writeAll("error: out of memory\n") catch {},
@@ -162,6 +165,7 @@ fn cmdBuild(ctx: Ctx, rest: []const [:0]const u8) u8 {
     ctx.out.print("Built {d} pages, {d} posts, and {d} static files into {s}/{s} in {d} ms\n", .{
         site.pages, site.posts, site.static_files, dir, pipeline.output_dir, elapsed.toMilliseconds(),
     }) catch return 1;
+    if (site.skipped.total() > 0) ctx.out.print("Skipped {f}\n", .{site.skipped}) catch return 1;
     return 0;
 }
 
@@ -206,6 +210,7 @@ const Args = struct {
     port: u16 = 4000,
     drafts: bool = false,
     strict: ?bool = null,
+    future: bool = false,
     restart_on_rebuild: bool = false,
     /// Set in a server started by the restart supervisor.
     restarted_from: ?[]const u8 = null,
@@ -226,6 +231,10 @@ fn parseArgs(ctx: Ctx, rest: []const [:0]const u8, serve: bool) ?Args {
         }
         if (std.mem.eql(u8, arg, "--strict") or std.mem.eql(u8, arg, "--no-strict")) {
             result.strict = arg[2] == 's';
+            continue;
+        }
+        if (std.mem.eql(u8, arg, "--future")) {
+            result.future = true;
             continue;
         }
         if (serve and std.mem.eql(u8, arg, "--restart-on-rebuild")) {
@@ -284,10 +293,12 @@ fn cmdServe(ctx: Ctx, argv: []const [:0]const u8) u8 {
     // Each process starts its build count from the clock, so pages built by
     // an earlier process (before a restart) reload when they reconnect.
     const first_generation: u64 = @intCast(@max(0, Io.Clock.real.now(io).toMilliseconds()));
+    // The date when the server starts decides which posts are scheduled.
+    var today_buf: [10]u8 = undefined;
     const server = mortise.server.Server.init(ctx.gpa, io, args.dir, .{
         .port = args.port,
         .log = ctx.out,
-        .build = .{ .drafts = args.drafts, .strict = args.strict, .strict_by_default = true },
+        .build = .{ .drafts = args.drafts, .strict = args.strict, .strict_by_default = true, .future = args.future, .today = mortise.scaffold.today(io, &today_buf) },
         .first_generation = first_generation,
     }) catch |e| {
         switch (e) {
@@ -380,6 +391,8 @@ test "parseArgs" {
     try testing.expectEqual(@as(?bool, true), parseArgs(ctx, &.{"--strict"}, false).?.strict);
     try testing.expectEqual(@as(?bool, false), parseArgs(ctx, &.{"--no-strict"}, true).?.strict);
     try testing.expectEqual(@as(?bool, null), parseArgs(ctx, &.{}, false).?.strict);
+    try testing.expect(parseArgs(ctx, &.{"--future"}, true).?.future);
+    try testing.expect(!parseArgs(ctx, &.{}, false).?.future);
     try testing.expect(parseArgs(ctx, &.{ "--port", "1" }, false) == null);
     // Restarting on rebuild is for serve only.
     const r = parseArgs(ctx, &.{ "site", "--restart-on-rebuild", "--restarted-from=bin/mortise" }, true).?;
