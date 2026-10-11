@@ -1,0 +1,12 @@
+body { max-width: 60rem; margin: 2rem auto; padding: 0 1rem; font: 17px/1.6 system-ui, sans-serif; color: #1d1d1f; }
+a { color: #0b57d0; }
+header { display: flex; flex-wrap: wrap; gap: .5rem 1rem; align-items: baseline; justify-content: space-between; padding-bottom: .75rem; border-bottom: 1px solid #e5e5e5; }
+.brand { font-weight: 700; color: inherit; text-decoration: none; }
+.versions a { margin-left: .5rem; padding: .1rem .5rem; border-radius: 6px; color: #6e6e73; text-decoration: none; font-size: .9rem; }
+.versions a.current { background: #eef3fd; color: #0b57d0; font-weight: 600; }
+.outdated { margin: 1rem 0 0; padding: .6rem 1rem; border-radius: 8px; background: #fff4e5; color: #8a4b00; }
+.docs { display: grid; grid-template-columns: 12rem 1fr; gap: 2rem; margin-top: 1.5rem; }
+aside ul { list-style: none; margin: 0; padding: 0; }
+aside a { display: block; padding: .2rem .5rem; border-radius: 6px; color: inherit; text-decoration: none; }
+aside a.current { background: #eef3fd; color: #0b57d0; font-weight: 600; }
+@media (max-width: 760px) { .docs { grid-template-columns: 1fr; } }

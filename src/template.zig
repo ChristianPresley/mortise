@@ -662,7 +662,8 @@ fn parseExpr(lx: *Lexer) ParseError!Expr {
                 (std.mem.eql(u8, path[1], "breadcrumbs") or std.mem.eql(u8, path[1], "previous") or
                     std.mem.eql(u8, path[1], "next") or std.mem.eql(u8, path[1], "related") or
                     std.mem.eql(u8, path[1], "menus") or std.mem.eql(u8, path[1], "backlinks") or
-                    std.mem.eql(u8, path[1], "translations")))
+                    std.mem.eql(u8, path[1], "translations") or std.mem.eql(u8, path[1], "versions") or
+                    std.mem.eql(u8, path[1], "version_nav") or std.mem.eql(u8, path[1], "latest_url")))
             {
                 lx.p.reads_collections = true;
             }

@@ -411,6 +411,17 @@ job:
   should link to `site.languages` home pages when `page.translations` is
   empty.
 
+## Versioned docs
+
+- Every version is built on every build; there is no archive of prebuilt
+  old versions.
+- A version is a top-level directory. Posts, tags and feeds are not
+  versioned, and `site.nav` still lists every version side by side; use
+  `page.version_nav` for one version's pages.
+- There is no `/latest/` alias for the newest version; link to it by name or
+  with `page.latest_url`.
+- Version names that look like numbers must be quoted in `versions:`.
+
 ## Dev server
 
 - `serve` listens on IPv4 loopback (`127.0.0.1`) only. Browsers that resolve

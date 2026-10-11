@@ -285,6 +285,10 @@ my-site/
   `about.fr.md` or `fr/about.md` publishes at `/fr/about/`; templates get
   `page.translations`, `site.languages`, per-language `site.posts` and
   `site.nav`, `site.i18n` strings from `_data/i18n/`, and a feed per language.
+- [Versioned docs](docs/versions.md): `versions: [v2, v1]` treats those
+  directories as versions of the same pages, with `page.versions` for a
+  switcher, `page.outdated` and `page.latest_url` for an old-version notice,
+  and `page.version_nav` for a sidebar per version.
 - Templates see `site` (config values plus `site.posts`, newest first, and
   `site.pages`), `page` (frontmatter plus `url`, `path`, and for posts `date`
   and `slug`), and in layouts `content`.

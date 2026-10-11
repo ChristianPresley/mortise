@@ -1415,6 +1415,8 @@ fn finish(b: *Builder, config_fields: frontmatter.Map, pages: []Page, statics: [
         }
         try addTranslations(arena, pages, langs);
     }
+    const versions = try loadVersions(b, config_fields);
+    if (versions.len > 0) try addVersions(arena, pages, versions, b.baseurl);
     const taxonomies = try taxonomyNames(b, config_fields);
     if (config_fields.get("related")) |v| {
         if (v != .int or v.int < 1 or v.int > 50) return b.fail(config_path, fieldLine(try b.read(config_path), "related"), "'related' must be how many related pages to list, 1 to 50", .{});
@@ -1452,9 +1454,9 @@ fn finish(b: *Builder, config_fields: frontmatter.Map, pages: []Page, statics: [
             try config_entries.append(arena, .{ .key = e.key, .value = .{ .string = b.baseurl } });
             continue;
         }
-        // `site.taxonomies` is the index built from this setting, and
-        // `site.languages` the list built from that one.
-        if (std.mem.eql(u8, e.key, "taxonomies")) continue;
+        // `site.taxonomies`, `site.versions` and `site.languages` are built
+        // from these settings.
+        if (std.mem.eql(u8, e.key, "taxonomies") or std.mem.eql(u8, e.key, "versions")) continue;
         if (multi and std.mem.eql(u8, e.key, "languages")) continue;
         try config_entries.append(arena, .{ .key = e.key, .value = try convert(arena, e.value) });
     }
@@ -1495,6 +1497,7 @@ fn finish(b: *Builder, config_fields: frontmatter.Map, pages: []Page, statics: [
         try site_entries.append(arena, .{ .key = "data", .value = b.data });
         try site_entries.append(arena, .{ .key = "nav", .value = try navTree(arena, subset, root) });
         try site_entries.append(arena, .{ .key = "apis", .value = try apiIndex(arena, subset) });
+        if (versions.len > 0) try site_entries.append(arena, .{ .key = "versions", .value = try versionList(arena, versions, b.baseurl) });
         try site_entries.append(arena, .{ .key = "menus", .value = b.menus });
         tags_out.* = try tagIndex(arena, subset, if (tag_pages) root else null);
         try site_entries.append(arena, .{ .key = "tags", .value = tags_out.* });
@@ -2248,6 +2251,95 @@ fn navLess(mode: SortMode, a: *const Page, b: *const Page) bool {
         .url => if (!std.mem.eql(u8, a.url, b.url)) return std.mem.lessThan(u8, a.url, b.url),
     }
     return std.mem.lessThan(u8, navTitle(a), navTitle(b));
+}
+
+/// `versions:` from the config: the directories that hold each version of
+/// the documentation, newest first.
+fn loadVersions(b: *Builder, config_fields: frontmatter.Map) Error![]const []const u8 {
+    const v = config_fields.get("versions") orelse return &.{};
+    const line = fieldLine(try b.read(config_path), "versions");
+    const msg = "'versions' must list version directories, newest first, such as [v2, v1]";
+    if (v != .list or v.list.len == 0) return b.fail(config_path, line, msg, .{});
+    const out = try b.arena.alloc([]const u8, v.list.len);
+    for (v.list, out, 0..) |item, *o, i| {
+        // `2.0` would read as the number 2; the name must be text.
+        if (item == .int or item == .float) return b.fail(config_path, line, "write version numbers in quotes, such as ['2.0', '1.0']", .{});
+        const name = if (item == .string) item.string else return b.fail(config_path, line, msg, .{});
+        if (name.len == 0 or std.mem.indexOfAny(u8, name, "/\\ ") != null or name[0] == '_' or name[0] == '.') {
+            return b.fail(config_path, line, "version '{s}' must be a plain directory name", .{name});
+        }
+        for (out[0..i]) |prev| if (std.mem.eql(u8, prev, name)) return b.fail(config_path, line, "version '{s}' is listed twice", .{name});
+        o.* = name;
+    }
+    return out;
+}
+
+/// The version of the page at `url` (which includes `baseurl`): the index
+/// of the version whose directory it is under, or null.
+fn pageVersion(url: []const u8, versions: []const []const u8, baseurl: []const u8) ?usize {
+    const rest = if (std.mem.startsWith(u8, url, baseurl)) url[baseurl.len..] else url;
+    for (versions, 0..) |v, i| {
+        if (rest.len > v.len + 1 and rest[0] == '/' and std.mem.startsWith(u8, rest[1..], v) and rest[v.len + 1] == '/') return i;
+    }
+    return null;
+}
+
+/// `site.versions`: each version's `{name, url, latest}`, newest first, the
+/// URL being its directory.
+fn versionList(arena: Allocator, versions: []const []const u8, baseurl: []const u8) Allocator.Error!Value {
+    const out = try arena.alloc(Value, versions.len);
+    for (versions, out, 0..) |v, *o, i| {
+        const e = try arena.alloc(Entry, 3);
+        e[0] = .{ .key = "name", .value = .{ .string = v } };
+        e[1] = .{ .key = "url", .value = .{ .string = try std.fmt.allocPrint(arena, "{s}/{s}/", .{ baseurl, v }) } };
+        e[2] = .{ .key = "latest", .value = .{ .boolean = i == 0 } };
+        o.* = .{ .object = .{ .entries = e } };
+    }
+    return .{ .list = out };
+}
+
+/// Adds to every page in a version directory:
+///
+///   page.version      its version's name
+///   page.versions     the page in every version, newest first, each
+///                     {name, url, current, latest}; a version without the
+///                     page links to its home page instead
+///   page.latest_url   the page in the newest version, or that version's home
+///   page.outdated     whether the page is in an older version
+///   page.version_nav  `site.nav` for just its version, as a tree
+fn addVersions(arena: Allocator, pages: []Page, versions: []const []const u8, baseurl: []const u8) Allocator.Error!void {
+    const navs = try arena.alloc(Value, versions.len);
+    const roots = try arena.alloc([]const u8, versions.len);
+    for (versions, navs, roots) |v, *n, *r| {
+        r.* = try std.fmt.allocPrint(arena, "{s}/{s}/", .{ baseurl, v });
+        n.* = try navChildren(arena, pages, r.*);
+    }
+    for (pages) |*p| {
+        const vi = pageVersion(p.url, versions, baseurl) orelse continue;
+        // The part of the URL after the version directory.
+        const rest = p.url[roots[vi].len..];
+        const list = try arena.alloc(Value, versions.len);
+        var latest_url: []const u8 = roots[0];
+        for (versions, roots, list, 0..) |v, root, *item, wi| {
+            const same = try std.mem.concat(arena, u8, &.{ root, rest });
+            const url = if (pageAtUrl(pages, same) != null) same else root;
+            if (wi == 0) latest_url = url;
+            const e = try arena.alloc(Entry, 4);
+            e[0] = .{ .key = "name", .value = .{ .string = v } };
+            e[1] = .{ .key = "url", .value = .{ .string = url } };
+            e[2] = .{ .key = "current", .value = .{ .boolean = wi == vi } };
+            e[3] = .{ .key = "latest", .value = .{ .boolean = wi == 0 } };
+            item.* = .{ .object = .{ .entries = e } };
+        }
+        var entries: std.ArrayList(Entry) = .empty;
+        try entries.appendSlice(arena, p.object.entries);
+        try entries.append(arena, .{ .key = "version", .value = .{ .string = versions[vi] } });
+        try entries.append(arena, .{ .key = "versions", .value = .{ .list = list } });
+        try entries.append(arena, .{ .key = "latest_url", .value = .{ .string = latest_url } });
+        try entries.append(arena, .{ .key = "outdated", .value = .{ .boolean = vi != 0 } });
+        try entries.append(arena, .{ .key = "version_nav", .value = navs[vi] });
+        p.object = .{ .entries = entries.items };
+    }
 }
 
 /// `site.nav`: the non-post pages as a tree by URL, each node
@@ -4597,4 +4689,36 @@ test "languages: translations, per-language collections, feeds and strings" {
 
     try expectBuildError(&.{.{ "_config.yml", "languages:\n  en: English\ndefault_language: de\n" }}, "_config.yml", 3, "'default_language' must be one of");
     try expectBuildError(&.{.{ "_config.yml", "languages:\n  EN: English\n" }}, "_config.yml", 1, "'EN' is not a language code");
+}
+
+test "versioned docs: switcher links, latest links and per-version navigation" {
+    const layout = "{{ page.version }}|{% for v in page.versions %}{{ v.name }}{% if v.current %}*{% endif %}={{ v.url }};{% endfor %}|" ++
+        "{{ page.latest_url }}|{% if page.outdated %}old{% endif %}|{% for n in page.version_nav %}{{ n.title }},{% endfor %}|" ++
+        "{% for v in site.versions %}{{ v.name }}{% if v.latest %}!{% endif %};{% endfor %}";
+    var t: TestSite = try .init(&.{
+        .{ "_config.yml", "versions: ['2.0', '1.0']\n" },
+        .{ "_layouts/l.html", layout },
+        .{ "2.0/index.md", "---\ntitle: Docs 2\nlayout: l\n---\n" },
+        .{ "2.0/install.md", "---\ntitle: Install\nlayout: l\n---\n" },
+        .{ "2.0/plugins.md", "---\ntitle: Plugins\nlayout: l\n---\n" },
+        .{ "1.0/index.md", "---\ntitle: Docs 1\nlayout: l\n---\n" },
+        .{ "1.0/install.md", "---\ntitle: Install\nlayout: l\n---\n" },
+        .{ "about.md", "---\ntitle: About\nlayout: l\n---\n" },
+    });
+    defer t.deinit();
+    var diag: Diagnostic = .{};
+    const site = t.build(&diag) catch |err| {
+        std.debug.print("{f}\n", .{diag});
+        return err;
+    };
+    const all = "2.0!;1.0;";
+    try testing.expectEqualStrings("1.0|2.0=/2.0/install/;1.0*=/1.0/install/;|/2.0/install/|old|Install,|" ++ all, site.find("1.0/install/index.html").?.data.bytes);
+    // 1.0 has no plugins page, so its link goes to the 1.0 home page.
+    try testing.expectEqualStrings("2.0|2.0*=/2.0/plugins/;1.0=/1.0/;|/2.0/plugins/||Install,Plugins,|" ++ all, site.find("2.0/plugins/index.html").?.data.bytes);
+    // Pages outside the versions have none of it.
+    try testing.expectEqualStrings("|||||" ++ all, site.find("about/index.html").?.data.bytes);
+
+    try expectBuildError(&.{.{ "_config.yml", "versions: [v1, v1]\n" }}, "_config.yml", 1, "'v1' is listed twice");
+    try expectBuildError(&.{.{ "_config.yml", "versions: [a/b]\n" }}, "_config.yml", 1, "plain directory name");
+    try expectBuildError(&.{.{ "_config.yml", "versions: [2.0]\n" }}, "_config.yml", 1, "write version numbers in quotes");
 }

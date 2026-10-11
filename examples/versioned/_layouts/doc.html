@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% if page.title %}{{ page.title }} | {% endif %}{{ site.title }}</title>
+<link rel="stylesheet" href="{{ site.baseurl }}/css/site.css">
+</head>
+<body>
+<header>
+<a class="brand" href="{{ site.baseurl }}/">{{ site.title }}</a>
+{%- if page.versions %}
+<nav class="versions" aria-label="Versions">
+{%- for v in page.versions %} <a href="{{ v.url }}"{% if v.current %} class="current"{% endif %}>{{ v.name }}{% if v.latest %} (latest){% endif %}</a>{% endfor %}
+</nav>
+{%- endif %}
+</header>
+{%- if page.outdated %}
+<p class="outdated">You are reading the docs for {{ page.version }}. <a href="{{ page.latest_url }}">See this page for the latest version.</a></p>
+{%- endif %}
+<div class="docs">
+<aside>
+<ul>
+{%- for item in page.version_nav %}
+<li><a href="{{ item.url }}"{% if item.url == page.url %} class="current"{% endif %}>{{ item.title }}</a></li>
+{%- endfor %}
+</ul>
+</aside>
+<main>
+{{ content }}
+</main>
+</div>
+</body>
+</html>

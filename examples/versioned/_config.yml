@@ -1,0 +1,5 @@
+# Documentation kept for two versions. Build it with:
+#   zig build run -- build examples/versioned
+title: Widget docs
+# Version directories, newest first.
+versions: [v2, v1]
