@@ -196,3 +196,38 @@ in your stylesheet to change the rest:
 | `--mt-accent-text`| Text on the accent color              |
 | `--mt-radius`     | Corner radius                         |
 | `--mt-note`, `--mt-tip`, `--mt-important`, `--mt-warning`, `--mt-caution` | Callout colors |
+
+## Shortcodes
+
+Your own components: every template in `_includes/shortcodes/` is a
+shortcode that Markdown pages can call on a line of its own.
+
+```markdown
+{{< youtube id="dQw4w9WgXcQ" />}}
+
+{{< aside title="Note" >}}
+The body is **Markdown**, and may hold more shortcodes.
+{{< /aside >}}
+```
+
+`{{< NAME key="value" ... >}}` renders `_includes/shortcodes/NAME.html`.
+A tag ending in `/>}}` (or one with no closing tag) has no body; otherwise
+everything up to `{{< /NAME >}}` is rendered as Markdown and passed in.
+Calls of the same shortcode can nest. The template sees:
+
+| Variable  | Value                                                          |
+| --------- | -------------------------------------------------------------- |
+| `args`    | The arguments, as text: `{{ args.title }}`                     |
+| `content` | The rendered body, for calls with one                          |
+| `page`    | The calling page's frontmatter                                 |
+| `site`    | The config from `_config.yml`                                  |
+
+```html
+<!-- _includes/shortcodes/aside.html -->
+<aside class="aside"><strong>{{ args.title | default("Aside") }}</strong>{{ content }}</aside>
+```
+
+Argument values are quoted with `"` or `'`, or written bare when they
+have no spaces. A missing template, a template error or a malformed call
+stops the build at the shortcode's line. Editing a shortcode template
+rebuilds the whole site.

@@ -279,6 +279,9 @@ const Builder = struct {
     /// Heading anchors and copy buttons, from `_config.yml`.
     markdown_options: markdown.Options = .{},
     history: History = .{},
+    /// The config as a template value, for shortcodes, which render while
+    /// pages load, before `site` is complete.
+    site_config: Value = .{ .object = .{} },
     /// `site.data`, from the files in `_data/`.
     data: Value = .{ .object = .{} },
     /// Frontmatter schemas from `_schemas/`, by name.
@@ -398,6 +401,7 @@ pub fn buildWith(arena: Allocator, src: SiteDir, options: Options, diag: *Diagno
     b.markdown_options = try markdownOptions(&b, config_fields);
     b.future = try showFuture(&b, config_fields);
     b.history = try loadHistory(&b, config_fields, listing.files);
+    b.site_config = try convert(arena, .{ .map = config_fields });
     b.data = try loadData(&b, listing.files);
     b.schemas = try loadSchemas(&b, listing.files);
 
@@ -449,6 +453,7 @@ pub fn rebuild(arena: Allocator, src: SiteDir, prev: *const Site, changed: []con
     var b: Builder = .{ .arena = arena, .src = src, .diag = diag, .baseurl = st.baseurl, .site_url = st.site_url, .data = st.data, .options = st.options, .skipped = st.skipped, .history = st.history, .schemas = st.schemas };
     b.markdown_options = try markdownOptions(&b, st.config_fields);
     b.future = try showFuture(&b, st.config_fields);
+    b.site_config = try convert(arena, .{ .map = st.config_fields });
 
     var dirty_templates: std.ArrayList([]const u8) = .empty;
     var dirty_pages: std.ArrayList(usize) = .empty;
@@ -461,7 +466,9 @@ pub fn rebuild(arena: Allocator, src: SiteDir, prev: *const Site, changed: []con
             std.mem.startsWith(u8, path, assets.dir_prefix) or
             std.mem.startsWith(u8, path, schema.dir_prefix) or
             // A site theme can change any page.
-            std.mem.startsWith(u8, path, "_themes/")) return buildWith(arena, src, st.options, diag);
+            std.mem.startsWith(u8, path, "_themes/") or
+            // Shortcodes render into page content when pages load.
+            std.mem.startsWith(u8, path, "_includes/shortcodes/")) return buildWith(arena, src, st.options, diag);
         // Pages that include the file with `<<<` load again; the file's
         // own role, if any, is handled below.
         for (st.pages, 0..) |p, i| {
@@ -1372,6 +1379,8 @@ fn loadPage(b: *Builder, path: []const u8, is_post: bool) Error!?Page {
         var inc: FileIncluder = .{ .b = b, .page = path };
         var md_options = b.markdown_options;
         md_options.includer = .{ .ctx = &inc, .readFn = FileIncluder.read };
+        var sc: ShortcodeRenderer = .{ .b = b, .page = try convert(arena, .{ .map = doc.fields }) };
+        md_options.shortcoder = .{ .ctx = &sc, .renderFn = ShortcodeRenderer.render };
         const rendered = try markdown.toDocumentWith(arena, doc.body, md_options);
         if (rendered.include_error) |e| {
             const at = std.mem.indexOf(u8, doc.body, e.directive[4..]) orelse 0;
@@ -1500,6 +1509,48 @@ fn addAliases(b: *Builder, outputs: *std.ArrayList(Output), config_fields: front
         try outputs.append(arena, .{ .path = redirects.redirects_path, .source = config_path, .data = .{ .bytes = try redirects.redirectsFile(arena, all.items) } });
     }
 }
+
+/// Renders a page's `{{< name >}}` shortcodes with the templates in
+/// `_includes/shortcodes/`. The template sees `args` (the call's
+/// arguments, as text), `content` (the rendered body, when the call has
+/// one), `page` (the page's frontmatter) and `site` (the config).
+const ShortcodeRenderer = struct {
+    b: *Builder,
+    page: Value,
+
+    fn render(ctx: *anyopaque, call: markdown.Shortcode, why: *[]const u8) Allocator.Error!?[]const u8 {
+        const self: *ShortcodeRenderer = @ptrCast(@alignCast(ctx));
+        const b = self.b;
+        const arena = b.arena;
+        const name = try std.fmt.allocPrint(arena, "shortcodes/{s}.html", .{call.name});
+        var td: template.Diagnostic = .{};
+        const tpl = loadInclude(b, name, &td) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.TemplateNotFound => {
+                why.* = try std.fmt.allocPrint(arena, "there is no _includes/{s}", .{name});
+                return null;
+            },
+            error.TemplateSyntax => {
+                why.* = try std.fmt.allocPrint(arena, "{s}:{d}: {s}", .{ td.template, td.line, td.message });
+                return null;
+            },
+        };
+        const args = try arena.alloc(Entry, call.args.len);
+        for (args, call.args) |*e, a| e.* = .{ .key = a.name, .value = .{ .string = a.value } };
+        var entries: std.ArrayList(Entry) = .empty;
+        try entries.append(arena, .{ .key = "args", .value = .{ .object = .{ .entries = args } } });
+        if (call.body) |body| try entries.append(arena, .{ .key = "content", .value = .{ .html = body } });
+        try entries.append(arena, .{ .key = "page", .value = self.page });
+        try entries.append(arena, .{ .key = "site", .value = b.site_config });
+        return template.renderAlloc(arena, tpl, .{ .entries = entries.items }, .{ .ctx = b, .loadFn = loadInclude }, &td) catch |err| switch (err) {
+            error.OutOfMemory, error.WriteFailed => error.OutOfMemory,
+            else => {
+                why.* = try std.fmt.allocPrint(arena, "{s}:{d}: {s}", .{ td.template, td.line, td.message });
+                return null;
+            },
+        };
+    }
+};
 
 /// Reads files for one page's `<<< path` directives: `/path` from the
 /// site root, any other path from the page's directory, never outside the
@@ -3584,4 +3635,26 @@ test "frontmatter schemas check pages and fill in defaults" {
         .{ "docs/a.md", "---\ntitle: A\nweight: heavy\n---\n" },
     }, "docs/a.md", 3, "'weight' must be a whole number (_schemas/docs.yml)");
     try expectBuildError(&.{.{ "_schemas/pages.yml", "title:\n  type: words\n" }}, "_schemas/pages.yml", 1, "'title' has a 'type' that is not");
+}
+
+test "shortcodes render templates from _includes/shortcodes" {
+    var t: TestSite = try .init(&.{
+        .{ "_config.yml", "title: Site\n" },
+        .{ "_includes/shortcodes/note.html", "<aside class=\"{{ args.kind | default(\"info\") }}\">{{ site.title }}/{{ page.title }}: {{ content }}</aside>" },
+        .{ "_includes/shortcodes/br.html", "<br>" },
+        .{ "a.md", "---\ntitle: A\n---\n{{< note kind=\"warn\" >}}\nHi *there*\n{{< br />}}\n{{< /note >}}\n" },
+    });
+    defer t.deinit();
+    var diag: Diagnostic = .{};
+    const site = t.build(&diag) catch |err| {
+        std.debug.print("{f}\n", .{diag});
+        return err;
+    };
+    try testing.expectEqualStrings("<aside class=\"warn\">Site/A: <p>Hi <em>there</em></p>\n<br>\n</aside>\n", site.find("a/index.html").?.data.bytes);
+
+    try expectBuildError(&.{.{ "a.md", "---\nx: 1\n---\n\n{{< nope >}}\n" }}, "a.md", 5, "shortcode 'nope': there is no _includes/shortcodes/nope.html");
+    try expectBuildError(&.{
+        .{ "_includes/shortcodes/bad.html", "\n{{ args }}" },
+        .{ "a.md", "{{< bad >}}\n" },
+    }, "a.md", 1, "shortcode 'bad': _includes/shortcodes/bad.html:2: cannot output an object");
 }

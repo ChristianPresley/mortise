@@ -67,6 +67,11 @@ job:
   are code only; Markdown files cannot be included as Markdown.
 - Region markers are found by text: a line that merely mentions `#region`
   or `#endregion` in a string counts as a marker.
+- Shortcodes work only on a line of their own; `{{< x >}}` in the middle of
+  a sentence stays text. Arguments are text only (no numbers, lists or
+  expressions), and there are no positional arguments.
+- Shortcodes render while pages load, so their templates see the config as
+  `site` but not `site.posts`, `site.pages`, navigation or data files.
 
 ## Data files
 

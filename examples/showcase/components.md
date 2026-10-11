@@ -79,3 +79,21 @@ grid above does with `::::grid`.
 :::figure The Mortise logo, as an SVG image with a caption.
 ![Mortise logo](/images/logo.svg)
 :::
+
+## Shortcodes
+
+Templates in `_includes/shortcodes/` become Markdown shortcodes: a line
+`{{< stat value="1.1 s" label="Showcase build" />}}` renders
+`stat.html` with the arguments, and a pair of tags passes the Markdown
+between them as `content`, so shortcodes can nest.
+
+{{< stats >}}
+{{< stat value="20" label="Pages" />}}
+{{< stat value="1.1 s" label="Release build" />}}
+{{< stat value="0" label="Dependencies" />}}
+{{< /stats >}}
+
+{{< aside title="Written in Markdown" >}}
+This box is the `aside` shortcode. Its body is **Markdown**, rendered
+before the template wraps it.
+{{< /aside >}}

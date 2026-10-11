@@ -163,7 +163,10 @@ my-site/
 - Built-in [components](docs/components.md): callouts (`> [!NOTE]`),
   cards, grids, details, figures, buttons, and steps (`:::card Title` ...
   `:::`), plus `:badge[New]` and `:kbd[Ctrl]`, styled by a `mortise.css`
-  the build writes when a page uses them.
+  the build writes when a page uses them. Your own components are
+  [shortcodes](docs/components.md#shortcodes): templates in
+  `_includes/shortcodes/` that Markdown calls as
+  `{{< name key="value" >}}`, with Markdown bodies and nesting.
 - Fenced code in Zig, C/C++, Rust, Go, JavaScript/TypeScript, Python,
   shell, JSON, and YAML is syntax-highlighted at build time with
   `hl-*` classes for your stylesheet; see the

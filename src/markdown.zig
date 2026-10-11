@@ -32,15 +32,35 @@ pub const Document = struct {
     /// Whether the document uses a component (callout, container, badge,
     /// or key) that needs `components_css`.
     uses_components: bool,
-    /// The first `<<< path` include that failed, or null.
+    /// The first `<<< path` include or `{{< shortcode >}}` that failed, or
+    /// null.
     include_error: ?IncludeError = null,
 };
 
 pub const IncludeError = struct {
-    /// The directive's line as written, such as `<<< a.zig#main`, so the
-    /// caller can find its line number.
+    /// The directive's line as written, such as `<<< a.zig#main` or
+    /// `{{< note >}}`, so the caller can find its line number. The first
+    /// four bytes are the directive's opening (`<<< `, `{{< `).
     directive: []const u8,
     message: []const u8,
+};
+
+/// A `{{< name key="value" >}}` shortcode call.
+pub const Shortcode = struct {
+    name: []const u8,
+    args: []const Arg,
+    /// The rendered Markdown between `{{< name >}}` and `{{< /name >}}`,
+    /// or null for a call without a body.
+    body: ?[]const u8,
+
+    pub const Arg = struct { name: []const u8, value: []const u8 };
+};
+
+/// Renders shortcodes, usually through templates.
+pub const Shortcoder = struct {
+    ctx: *anyopaque,
+    /// The shortcode's HTML, or null with a reason in `why`.
+    renderFn: *const fn (ctx: *anyopaque, call: Shortcode, why: *[]const u8) Allocator.Error!?[]const u8,
 };
 
 /// Reads files for the `<<< path` directive (see `snippet.zig`).
@@ -63,6 +83,9 @@ pub const Options = struct {
     /// Reads the files of `<<< path` directives. Without one, a directive
     /// renders as a plain paragraph.
     includer: ?Includer = null,
+    /// Renders `{{< shortcode >}}` lines. Without one, they render as
+    /// plain paragraphs.
+    shortcoder: ?Shortcoder = null,
 };
 
 /// Shows the copy buttons of `Options.copy_buttons` and copies a block's
@@ -211,6 +234,9 @@ const Block = union(enum) {
     container: struct { kind: ContainerKind, title: []const u8, children: []const Block },
     /// `<<< path...`: code from a file; the text after `<<<`.
     include: []const u8,
+    /// `{{< name args >}}`, with the blocks up to `{{< /name >}}` when the
+    /// call has a body.
+    shortcode: struct { line: []const u8, name: []const u8, args: []const Shortcode.Arg, body: ?[]const Block, bad: ?[]const u8 = null },
 };
 
 const Code = struct { info: []const u8, meta: []const u8 = "", text: []const u8 };
@@ -415,6 +441,8 @@ fn parseBlocks(arena: Allocator, lines: []const []const u8) Allocator.Error!Pars
         } else if (includeDirective(line)) |text| {
             try blocks.append(arena, .{ .include = text });
             i += 1;
+        } else if (shortcodeOpen(line)) |inner| {
+            i = try parseShortcode(arena, lines, i, inner, &blocks);
         } else if (listMarker(line)) |m| {
             i = try parseList(arena, lines, i, m, &blocks);
         } else {
@@ -454,6 +482,93 @@ fn includeDirective(line: []const u8) ?[]const u8 {
     const t = trimLeft(line);
     if (!std.mem.startsWith(u8, t, "<<< ")) return null;
     return std.mem.trim(u8, t[4..], " \t");
+}
+
+/// `{{< ... >}}` on a line of its own: the text inside, trimmed.
+fn shortcodeTag(line: []const u8) ?[]const u8 {
+    if (indentOf(line) > 3) return null;
+    const t = std.mem.trim(u8, line, " \t");
+    if (!std.mem.startsWith(u8, t, "{{<") or !std.mem.endsWith(u8, t, ">}}") or t.len < 6) return null;
+    return std.mem.trim(u8, t[3 .. t.len - 3], " \t");
+}
+
+/// An opening (not closing) shortcode tag.
+fn shortcodeOpen(line: []const u8) ?[]const u8 {
+    const inner = shortcodeTag(line) orelse return null;
+    if (inner.len == 0 or inner[0] == '/') return null;
+    return inner;
+}
+
+/// Parses `{{< name key="value" >}}` and, unless the tag ends with `/`, a
+/// body up to the matching `{{< /name >}}`. A call with no closing tag
+/// has no body.
+fn parseShortcode(arena: Allocator, lines: []const []const u8, start: usize, inner_raw: []const u8, out: *std.ArrayList(Block)) Allocator.Error!usize {
+    var inner = inner_raw;
+    const self_closing = std.mem.endsWith(u8, inner, "/");
+    if (self_closing) inner = std.mem.trimEnd(u8, inner[0 .. inner.len - 1], " \t");
+    const name_end = std.mem.indexOfAny(u8, inner, " \t") orelse inner.len;
+    const name = inner[0..name_end];
+    var call: @FieldType(Block, "shortcode") = .{ .line = std.mem.trim(u8, lines[start], " \t"), .name = name, .args = &.{}, .body = null };
+    for (name) |c| if (!(std.ascii.isAlphanumeric(c) or c == '-' or c == '_')) {
+        call.bad = "a shortcode name may hold letters, digits, '-' and '_'";
+    };
+    // Arguments: key="value", key='value' or key=value.
+    var args: std.ArrayList(Shortcode.Arg) = .empty;
+    var rest = std.mem.trim(u8, inner[name_end..], " \t");
+    while (rest.len > 0 and call.bad == null) {
+        const eq = std.mem.indexOfScalar(u8, rest, '=') orelse {
+            call.bad = "arguments must look like key=\"value\"";
+            break;
+        };
+        const key = std.mem.trim(u8, rest[0..eq], " \t");
+        var after = rest[eq + 1 ..];
+        var value: []const u8 = undefined;
+        if (after.len > 0 and (after[0] == '"' or after[0] == '\'')) {
+            const close = std.mem.indexOfScalarPos(u8, after, 1, after[0]) orelse {
+                call.bad = "an argument's quoted value is not closed";
+                break;
+            };
+            value = after[1..close];
+            after = after[close + 1 ..];
+        } else {
+            const end = std.mem.indexOfAny(u8, after, " \t") orelse after.len;
+            value = after[0..end];
+            after = after[end..];
+        }
+        if (key.len == 0) {
+            call.bad = "arguments must look like key=\"value\"";
+            break;
+        }
+        try args.append(arena, .{ .name = key, .value = value });
+        rest = std.mem.trim(u8, after, " \t");
+    }
+    call.args = args.items;
+    if (self_closing) {
+        try out.append(arena, .{ .shortcode = call });
+        return start + 1;
+    }
+    // Find the matching close, counting nested calls of the same name.
+    var depth: usize = 1;
+    var j = start + 1;
+    while (j < lines.len) : (j += 1) {
+        const tag = shortcodeTag(lines[j]) orelse continue;
+        const tag_name_end = std.mem.indexOfAny(u8, tag, " \t") orelse tag.len;
+        if (tag[0] == '/') {
+            if (std.mem.eql(u8, std.mem.trim(u8, tag[1..], " \t"), name)) depth -= 1;
+            if (depth == 0) break;
+        } else if (std.mem.eql(u8, tag[0..tag_name_end], name) and !std.mem.endsWith(u8, tag, "/")) {
+            depth += 1;
+        }
+    }
+    if (j >= lines.len) {
+        // No closing tag: a call without a body.
+        try out.append(arena, .{ .shortcode = call });
+        return start + 1;
+    }
+    const body = try parseBlocks(arena, lines[start + 1 .. j]);
+    call.body = body.blocks;
+    try out.append(arena, .{ .shortcode = call });
+    return j + 1;
 }
 
 fn isFenceClose(line: []const u8, f: Fence) bool {
@@ -555,6 +670,7 @@ fn interruptsParagraph(line: []const u8) bool {
     if (fenceStart(line) != null or atxHeading(line) != null) return true;
     if (isThematicBreak(line) or quoteContent(line) != null or containerStart(line) != null) return true;
     if (footnoteDefStart(line) != null) return true;
+    if (includeDirective(line) != null or shortcodeTag(line) != null) return true;
     if (listMarker(line)) |m| return !m.empty and (!m.ordered or m.start == 1);
     return false;
 }
@@ -1195,6 +1311,31 @@ fn renderBlock(r: *Renderer, b: Block, tight: bool, w: *Writer) Error!void {
                 error.UnclosedRegion => return fail(r, directive, "region '{s}' in '{s}' has no '#endregion'", .{ spec.select.region, spec.path }),
             };
             try renderCode(arena, .{ .info = snippet.language(spec.path), .meta = spec.meta, .text = code }, r.options.copy_buttons, w);
+        },
+        .shortcode => |sc| {
+            const sh = r.options.shortcoder orelse {
+                try w.writeAll("<p>");
+                try escapeHtml(w, sc.line);
+                return w.writeAll("</p>\n");
+            };
+            if (sc.bad) |msg| {
+                if (r.include_error == null) r.include_error = .{ .directive = sc.line, .message = try std.fmt.allocPrint(arena, "shortcode '{s}': {s}", .{ sc.name, msg }) };
+                return;
+            }
+            // The body is Markdown, rendered first so it can hold more
+            // shortcodes.
+            const body: ?[]const u8 = if (sc.body) |blocks| blk: {
+                var aw: Writer.Allocating = .init(arena);
+                renderBlocks(r, blocks, false, &aw.writer) catch return error.OutOfMemory;
+                break :blk aw.written();
+            } else null;
+            var why: []const u8 = "";
+            const html = (try sh.renderFn(sh.ctx, .{ .name = sc.name, .args = sc.args, .body = body }, &why)) orelse {
+                if (r.include_error == null) r.include_error = .{ .directive = sc.line, .message = try std.fmt.allocPrint(arena, "shortcode '{s}': {s}", .{ sc.name, why }) };
+                return;
+            };
+            try w.writeAll(html);
+            if (html.len > 0 and html[html.len - 1] != '\n') try w.writeByte('\n');
         },
         .list => |l| {
             if (!l.ordered) {
@@ -1921,4 +2062,45 @@ test "<<< without an includer is a paragraph" {
     try expectHtml("<p>&lt;&lt;&lt; a.zig</p>\n", "<<< a.zig");
     // Not a directive without the space, or when indented as code.
     try expectHtml("<p>&lt;&lt;&lt;a.zig</p>\n", "<<<a.zig");
+}
+
+test "shortcodes call the shortcoder, with Markdown bodies and nesting" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const Fake = struct {
+        fn render(ctx: *anyopaque, call: Shortcode, why: *[]const u8) Allocator.Error!?[]const u8 {
+            const al: *const Allocator = @ptrCast(@alignCast(ctx));
+            if (std.mem.eql(u8, call.name, "missing")) {
+                why.* = "no template";
+                return null;
+            }
+            var args: std.ArrayList(u8) = .empty;
+            for (call.args) |arg| try args.print(al.*, " {s}={s}", .{ arg.name, arg.value });
+            return try std.fmt.allocPrint(al.*, "<{s}{s}>{s}</{s}>", .{ call.name, args.items, call.body orelse "", call.name });
+        }
+    };
+    var al = a;
+    const opts: Options = .{ .shortcoder = .{ .ctx = @ptrCast(&al), .renderFn = Fake.render } };
+    const doc = try toDocumentWith(a,
+        \\{{< video id="abc 1" start=10 />}}
+        \\
+        \\{{< box title='Hi' >}}
+        \\Some *text*.
+        \\
+        \\{{< box >}}
+        \\inner
+        \\{{< /box >}}
+        \\{{< /box >}}
+        \\
+    , opts);
+    try std.testing.expectEqualStrings(
+        "<video id=abc 1 start=10></video>\n<box title=Hi><p>Some <em>text</em>.</p>\n<box><p>inner</p>\n</box>\n</box>\n",
+        doc.html,
+    );
+    const bad = try toDocumentWith(a, "{{< missing >}}\n", opts);
+    try std.testing.expectEqualStrings("shortcode 'missing': no template", bad.include_error.?.message);
+    try std.testing.expectEqualStrings("{{< missing >}}", bad.include_error.?.directive);
+    // Without a shortcoder, the line stays text.
+    try expectHtml("<p>{{&lt; x &gt;}}</p>\n", "{{< x >}}");
 }

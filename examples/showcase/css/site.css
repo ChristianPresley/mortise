@@ -56,3 +56,7 @@ footer { color: var(--muted); font-size: .9rem; border-top: 1px solid #e5e5e5; }
 .hl-comment { color: #a0a1a7; font-style: italic; }
 .hl-builtin { color: #4078f2; }
 .page-meta { margin: 2rem 0 1rem; font-size: .85rem; color: var(--muted); }
+.stats { display: flex; flex-wrap: wrap; gap: 1rem; margin: 1.5rem 0; }
+.stat { display: flex; flex-direction: column; min-width: 8rem; padding: .75rem 1rem; border: 1px solid var(--m-border, #e5e5e5); border-radius: 6px; }
+.stat-value { font-size: 1.6rem; font-weight: 700; color: var(--m-accent, var(--accent)); }
+.stat-label { font-size: .8rem; opacity: .75; }
