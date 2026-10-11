@@ -1,0 +1,14 @@
+# Every post is checked against these rules when the site builds.
+title:
+  type: string
+  required: true
+layout:
+  type: string
+  enum: [post]
+  default: post
+tags:
+  type: list
+date:
+  type: date
+updated:
+  type: date

@@ -53,3 +53,52 @@ Errors look like:
 ```
 content/posts/hello.md:4: duplicate key 'title'
 ```
+
+## Schemas
+
+A site can describe the frontmatter its pages must have. Put a schema in
+`_schemas/`:
+
+| File                  | Checks                                              |
+| --------------------- | --------------------------------------------------- |
+| `_schemas/posts.yml`  | every post                                          |
+| `_schemas/DIR.yml`    | pages under `DIR/`, such as `_schemas/docs.yml`     |
+| `_schemas/pages.yml`  | every other page                                    |
+
+Each key names a field and holds its rules:
+
+```yaml
+# _schemas/posts.yml
+title:
+  type: string
+  required: true
+status:
+  type: string
+  enum: [draft, review, published]
+  default: draft
+weight:
+  type: int
+  min: 0
+  max: 100
+published:
+  type: date
+```
+
+| Rule       | Meaning                                                           |
+| ---------- | ----------------------------------------------------------------- |
+| `type`     | `string`, `int`, `number` (int or float), `bool`, `date` (`YYYY-MM-DD`), `list` or `map` |
+| `required` | `true`: the field must be present (unless it has a `default`)    |
+| `enum`     | The value must be one of the listed values                        |
+| `default`  | Used when the page leaves the field out; templates see it too     |
+| `min`, `max` | Bounds for numbers                                              |
+
+A page that breaks a rule stops the build at the field's line (a missing
+field at line 1):
+
+```
+_posts/2024-01-05-hello.md:3: 'status' must be one of: draft, review, published (_schemas/posts.yml)
+```
+
+Fields a schema does not mention are allowed. With `schema_json: true` in
+`_config.yml`, the build also writes each schema as JSON Schema to
+`/schemas/NAME.json`, for editors that check frontmatter as you type.

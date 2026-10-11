@@ -28,6 +28,7 @@ const gzip = @import("gzip.zig");
 const search = @import("search.zig");
 const minify = @import("minify.zig");
 const data_files = @import("data.zig");
+const schema = @import("schema.zig");
 const openapi = @import("openapi.zig");
 const themes = @import("themes.zig");
 const tokens = @import("tokens.zig");
@@ -180,6 +181,7 @@ const State = struct {
     options: Options,
     data: Value,
     history: History,
+    schemas: std.StringArrayHashMapUnmanaged(schema.Schema),
     /// Every page and post, in `pageOrder`.
     pages: []const Page,
     /// Files copied unchanged.
@@ -279,6 +281,8 @@ const Builder = struct {
     history: History = .{},
     /// `site.data`, from the files in `_data/`.
     data: Value = .{ .object = .{} },
+    /// Frontmatter schemas from `_schemas/`, by name.
+    schemas: std.StringArrayHashMapUnmanaged(schema.Schema) = .empty,
     /// The `paginator` variable while rendering one page of a paginated
     /// page, or null.
     paginator: ?template.Object = null,
@@ -395,6 +399,7 @@ pub fn buildWith(arena: Allocator, src: SiteDir, options: Options, diag: *Diagno
     b.future = try showFuture(&b, config_fields);
     b.history = try loadHistory(&b, config_fields, listing.files);
     b.data = try loadData(&b, listing.files);
+    b.schemas = try loadSchemas(&b, listing.files);
 
     for (listing.files) |path| {
         if (std.mem.eql(u8, path, config_path)) continue;
@@ -441,7 +446,7 @@ pub fn buildWith(arena: Allocator, src: SiteDir, options: Options, diag: *Diagno
 /// overflow. The result shares memory with `prev`.
 pub fn rebuild(arena: Allocator, src: SiteDir, prev: *const Site, changed: []const []const u8, diag: *Diagnostic) Error!Site {
     const st = prev.state;
-    var b: Builder = .{ .arena = arena, .src = src, .diag = diag, .baseurl = st.baseurl, .site_url = st.site_url, .data = st.data, .options = st.options, .skipped = st.skipped, .history = st.history };
+    var b: Builder = .{ .arena = arena, .src = src, .diag = diag, .baseurl = st.baseurl, .site_url = st.site_url, .data = st.data, .options = st.options, .skipped = st.skipped, .history = st.history, .schemas = st.schemas };
     b.markdown_options = try markdownOptions(&b, st.config_fields);
     b.future = try showFuture(&b, st.config_fields);
 
@@ -454,6 +459,7 @@ pub fn rebuild(arena: Allocator, src: SiteDir, prev: *const Site, changed: []con
         if (std.mem.eql(u8, path, config_path) or std.mem.eql(u8, path, "*") or
             std.mem.startsWith(u8, path, data_files.dir_prefix) or
             std.mem.startsWith(u8, path, assets.dir_prefix) or
+            std.mem.startsWith(u8, path, schema.dir_prefix) or
             // A site theme can change any page.
             std.mem.startsWith(u8, path, "_themes/")) return buildWith(arena, src, st.options, diag);
         // Pages that include the file with `<<<` load again; the file's
@@ -557,6 +563,49 @@ fn baseUrl(b: *Builder, config_fields: frontmatter.Map) Error![]const u8 {
     if (raw[0] != '/') return b.fail(config_path, 0, fail_msg, .{});
     _ = sitepath.normalize(b.arena, raw[1..]) catch return b.fail(config_path, 0, fail_msg, .{});
     return raw;
+}
+
+/// Loads `_schemas/NAME.yml` files, keyed by NAME.
+fn loadSchemas(b: *Builder, files: []const []const u8) Error!std.StringArrayHashMapUnmanaged(schema.Schema) {
+    var out: std.StringArrayHashMapUnmanaged(schema.Schema) = .empty;
+    for (files) |path| {
+        if (!std.mem.startsWith(u8, path, schema.dir_prefix) or !std.mem.endsWith(u8, path, ".yml")) continue;
+        const name = path[schema.dir_prefix.len .. path.len - ".yml".len];
+        if (std.mem.indexOfScalar(u8, name, '/') != null) continue;
+        const data = try b.read(path);
+        var fd: frontmatter.Diagnostic = .{};
+        const map = frontmatter.parseFile(b.arena, data, &fd) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.InvalidFrontmatter => return b.fail(path, fd.line, "{s}", .{fd.message}),
+        };
+        var d: schema.Diagnostic = .{};
+        const s = schema.parse(b.arena, path, map, &d) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.InvalidSchema => return b.fail(path, fieldLine(data, d.key), "'{s}' {s}", .{ d.key, d.message }),
+        };
+        try out.put(b.arena, name, s);
+    }
+    return out;
+}
+
+/// Checks a page's frontmatter against its schema, filling in defaults:
+/// `posts` for posts, the schema named like the page's top directory
+/// when there is one, else `pages`.
+fn applySchema(b: *Builder, path: []const u8, data: []const u8, is_post: bool, fields: *frontmatter.Map) Error!void {
+    if (b.schemas.count() == 0) return;
+    const name = if (is_post) "posts" else blk: {
+        if (std.mem.indexOfScalar(u8, path, '/')) |slash| {
+            if (b.schemas.contains(path[0..slash])) break :blk path[0..slash];
+        }
+        break :blk "pages";
+    };
+    const s = b.schemas.get(name) orelse return;
+    var out: frontmatter.Map = .{};
+    if (try schema.check(b.arena, s, fields.*, &out)) |p| {
+        // A missing field is reported at the frontmatter's start.
+        return b.fail(path, if (p.missing) 1 else fieldLine(data, p.key), "{s}", .{p.message});
+    }
+    fields.* = out;
 }
 
 /// Loads every data file into the value of `site.data`.
@@ -1238,6 +1287,13 @@ fn finish(b: *Builder, config_fields: frontmatter.Map, pages: []Page, statics: [
     try addAliases(b, &outputs, config_fields, pages);
     if (icon_config) |c| try addIcons(b, &outputs, c);
     if (has_search) try addSearch(b, &outputs, pages);
+    if (try configFlag(b, config_fields, "schema_json", false)) {
+        for (b.schemas.keys(), b.schemas.values()) |name, s| {
+            const out_path = try std.fmt.allocPrint(arena, "schemas/{s}.json", .{name});
+            if (hasOutput(outputs.items, out_path)) continue;
+            try outputs.append(arena, .{ .path = out_path, .source = s.path, .data = .{ .bytes = try schema.jsonSchema(arena, s, name) } });
+        }
+    }
     if (b.site_url) |url| try addGenerated(b, &outputs, config_fields, pages, url);
 
     std.mem.sortUnstable(Output, outputs.items, {}, outputOrder);
@@ -1258,7 +1314,7 @@ fn finish(b: *Builder, config_fields: frontmatter.Map, pages: []Page, statics: [
         .full = render == null,
         .baseurl = b.baseurl,
         .skipped = b.skipped,
-        .state = .{ .skipped = b.skipped, .config_fields = config_fields, .baseurl = b.baseurl, .site_url = b.site_url, .options = b.options, .data = b.data, .history = b.history, .pages = pages, .statics = statics },
+        .state = .{ .skipped = b.skipped, .config_fields = config_fields, .baseurl = b.baseurl, .site_url = b.site_url, .options = b.options, .data = b.data, .history = b.history, .schemas = b.schemas, .pages = pages, .statics = statics },
         .warnings = b.warnings.items,
         .gzip = if (config_fields.get("gzip")) |v| (if (v == .boolean) v.boolean else return b.fail(config_path, fieldLine(try b.read(config_path), "gzip"), "'gzip' must be true or false", .{})) else false,
         .minify = try configFlag(b, config_fields, "minify", false),
@@ -1277,10 +1333,11 @@ fn loadPage(b: *Builder, path: []const u8, is_post: bool) Error!?Page {
     const arena = b.arena;
     const data = try b.read(path);
     var fd: frontmatter.Diagnostic = .{};
-    const doc = frontmatter.parse(arena, data, &fd) catch |err| switch (err) {
+    var doc = frontmatter.parse(arena, data, &fd) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         error.InvalidFrontmatter => return b.fail(path, fd.line, "{s}", .{fd.message}),
     };
+    try applySchema(b, path, data, is_post, &doc.fields);
     if (doc.fields.get("draft")) |d| {
         if (d != .boolean) return b.fail(path, fieldLine(data, "draft"), "'draft' must be true or false", .{});
         if (d.boolean and !b.options.drafts) {
@@ -3496,4 +3553,35 @@ test "minify: true shrinks HTML and CSS when writing" {
     const a = t.arena.allocator();
     try testing.expectEqualStrings("<p>a b</p>\n<pre>  x  </pre>", try src.readFile(a, "_site/a.html"));
     try testing.expectEqualStrings("a{color:red}", try src.readFile(a, "_site/s.css"));
+}
+
+test "frontmatter schemas check pages and fill in defaults" {
+    var t: TestSite = try .init(&.{
+        .{ "_config.yml", "schema_json: true\n" },
+        .{ "_schemas/posts.yml", "title:\n  type: string\n  required: true\nstatus:\n  enum: [draft, live]\n  default: live\n" },
+        .{ "_schemas/docs.yml", "weight:\n  type: int\n  required: true\n" },
+        .{ "_posts/2024-01-05-a.md", "---\ntitle: A\nlayout: x\n---\nA\n" },
+        .{ "_layouts/x.html", "{{ page.status }}" },
+        .{ "docs/b.md", "---\nweight: 2\n---\nB\n" },
+        .{ "about.md", "No schema for plain pages here.\n" },
+    });
+    defer t.deinit();
+    var diag: Diagnostic = .{};
+    const site = t.build(&diag) catch |err| {
+        std.debug.print("{f}\n", .{diag});
+        return err;
+    };
+    // The default reaches templates.
+    try testing.expectEqualStrings("live", site.find("2024/01/05/a/index.html").?.data.bytes);
+    _ = try std.json.parseFromSliceLeaky(std.json.Value, t.arena.allocator(), site.find("schemas/posts.json").?.data.bytes, .{});
+
+    try expectBuildError(&.{
+        .{ "_schemas/posts.yml", "title:\n  required: true\n" },
+        .{ "_posts/2024-01-05-a.md", "---\nlayout: x\n---\n" },
+    }, "_posts/2024-01-05-a.md", 1, "'title' is required by _schemas/posts.yml");
+    try expectBuildError(&.{
+        .{ "_schemas/docs.yml", "weight:\n  type: int\n" },
+        .{ "docs/a.md", "---\ntitle: A\nweight: heavy\n---\n" },
+    }, "docs/a.md", 3, "'weight' must be a whole number (_schemas/docs.yml)");
+    try expectBuildError(&.{.{ "_schemas/pages.yml", "title:\n  type: words\n" }}, "_schemas/pages.yml", 1, "'title' has a 'type' that is not");
 }

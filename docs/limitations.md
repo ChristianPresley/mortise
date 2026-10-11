@@ -232,6 +232,15 @@ job:
 - `serve` rebuilds the whole index after every change, which grows the
   rebuild time on large sites with search on.
 
+## Schemas
+
+- A page gets one schema: `posts`, its top directory's, or `pages`;
+  schemas do not combine, and nested directories use their top one.
+- Rules cover a field's own value: there are no rules for list items, the
+  fields of a map, string patterns or lengths, or fields a schema does not
+  mention.
+- OpenAPI pages (`_api/`) are not checked.
+
 ## Site pipeline
 
 - `gzip: true` writes gzip only (no Brotli or Zstandard), and only in

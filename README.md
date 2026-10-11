@@ -224,6 +224,10 @@ my-site/
   and a small client; `{{ site.search_box }}` adds the button, and Ctrl+K
   opens a search dialog with prefix matching, BM25 ranking and links to
   the matching heading.
+- [Frontmatter schemas](docs/frontmatter.md#schemas): `_schemas/posts.yml`,
+  `_schemas/pages.yml` or `_schemas/DIR.yml` declare each field's type,
+  whether it is required, allowed values, defaults and number ranges; a
+  page that breaks a rule stops the build at the field's line.
 - Templates see `site` (config values plus `site.posts`, newest first, and
   `site.pages`), `page` (frontmatter plus `url`, `path`, and for posts `date`
   and `slug`), and in layouts `content`.
