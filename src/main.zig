@@ -20,11 +20,12 @@ const usage =
     \\Commands:
     \\  new       Create a new site in SITE_DIR (required; must be empty or missing)
     \\  build     Build SITE_DIR (default: the current directory) into SITE_DIR/_site
+    \\  check     Build SITE_DIR in memory and report broken internal links and anchors
     \\  serve     Serve SITE_DIR on localhost and reload the browser on every change
     \\  version   Print the version
     \\  help      Print this message
     \\
-    \\Options for build and serve:
+    \\Options for build, check and serve:
     \\  --drafts  Include pages and posts marked draft: true
     \\
     \\Options for serve:
@@ -35,7 +36,7 @@ const usage =
     \\
 ;
 
-const Command = enum { new, build, serve, version, help };
+const Command = enum { new, build, check, serve, version, help };
 
 const Ctx = struct {
     io: Io,
@@ -79,6 +80,7 @@ fn run(ctx: Ctx, args: []const [:0]const u8) u8 {
         .version => if (ctx.out.print("mortise {s}\n", .{mortise.version})) 0 else |_| 1,
         .new => cmdNew(ctx, args[2..]),
         .build => cmdBuild(ctx, args[2..]),
+        .check => cmdCheck(ctx, args[2..]),
         .serve => cmdServe(ctx, args),
     };
 }
@@ -157,6 +159,42 @@ fn cmdBuild(ctx: Ctx, rest: []const [:0]const u8) u8 {
     ctx.out.print("Built {d} pages, {d} posts, and {d} static files into {s}/{s} in {d} ms\n", .{
         site.pages, site.posts, site.static_files, dir, pipeline.output_dir, elapsed.toMilliseconds(),
     }) catch return 1;
+    return 0;
+}
+
+fn cmdCheck(ctx: Ctx, rest: []const [:0]const u8) u8 {
+    const args = parseArgs(ctx, rest, false) orelse return 2;
+    const dir = args.dir;
+    var src = SiteDir.open(ctx.io, dir) catch |e| {
+        ctx.err.print("mortise: cannot open site directory '{s}': {s}\n", .{ dir, @errorName(e) }) catch {};
+        return 1;
+    };
+    defer src.close();
+
+    var build_arena: mortise.BuildArena = .init(ctx.gpa);
+    defer build_arena.deinit();
+    const arena = build_arena.begin();
+
+    var diag: pipeline.Diagnostic = .{};
+    const site = pipeline.buildWith(arena, src, .{ .drafts = args.drafts }, &diag) catch |e| {
+        switch (e) {
+            error.BuildFailed => ctx.err.print("error: {f}\n", .{diag}) catch {},
+            error.OutOfMemory => ctx.err.writeAll("error: out of memory\n") catch {},
+        }
+        return 1;
+    };
+    const report = mortise.check.check(arena, site, src) catch {
+        ctx.err.writeAll("error: out of memory\n") catch {};
+        return 1;
+    };
+    for (report.problems) |p| ctx.err.print("{f}\n", .{p}) catch {};
+    const summary = "Checked {d} links in {d} pages: {d} broken\n";
+    const counts = .{ report.links, report.pages, report.problems.len };
+    if (report.problems.len > 0) {
+        ctx.err.print(summary, counts) catch {};
+        return 1;
+    }
+    ctx.out.print(summary, counts) catch return 1;
     return 0;
 }
 

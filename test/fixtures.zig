@@ -90,6 +90,10 @@ test "the showcase example builds" {
             return error.TestExpectedOutput;
         }
     }
+    // Every internal link and anchor in the showcase resolves.
+    const report = try mortise.check.check(arena_state.allocator(), site, src);
+    for (report.problems) |p| std.debug.print("showcase: {f}\n", .{p});
+    try testing.expectEqual(@as(usize, 0), report.problems.len);
 }
 
 test "markdown fixtures" {

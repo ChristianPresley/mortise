@@ -107,6 +107,18 @@ job:
   variable name produces empty output rather than an error.
 - `upper` and `lower` change ASCII letters only.
 
+## Link checking
+
+- `mortise check` checks internal links only. External URLs are skipped,
+  not fetched.
+- Only `href` and `src` attributes are read; `srcset`, CSS `url()` and
+  links built by JavaScript are not checked.
+- An HTML scanner, not a full parser, finds links: it skips comments and
+  the bodies of `<script>` and `<style>`, and decodes only the character
+  references Mortise writes (`&amp;`, `&quot;`, `&#39;`, `&lt;`, `&gt;`).
+- A link to a directory without a trailing slash (`/docs`) counts as valid
+  when `docs/index.html` exists, matching `serve` and most static hosts.
+
 ## Site pipeline
 
 - Posts must be Markdown files in `_posts/` named `YYYY-MM-DD-slug.md`,

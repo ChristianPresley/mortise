@@ -42,9 +42,18 @@ Most of that time goes to copying the 27 MB debug binary and starting it.
 ```sh
 mortise new my-site                              # create a starter site
 mortise build [SITE_DIR] [--drafts]              # build SITE_DIR (default .) into SITE_DIR/_site
+mortise check [SITE_DIR] [--drafts]              # report broken internal links and anchors
 mortise serve [SITE_DIR] [--port N] [--drafts]   # dev server on http://localhost:4000/
 mortise version
 ```
+
+`check` builds the site in memory (it writes nothing) and reads every
+`href` and `src` in the HTML it produces. Each link to a page or file of
+the site must name an output that exists, and each `#fragment` must match
+an `id` on the target page. Problems are printed as
+`OUTPUT:LINE: broken link "URL": REASON (from SOURCE)` and the command
+exits with status 1, so it can gate CI. Links with a scheme (`https:`,
+`mailto:`) are not fetched.
 
 `new` writes a small working site: a layout, a post layout, a header
 include, a paginated home page, an about page, a welcome post, and a
@@ -174,6 +183,7 @@ See the [Markdown subset](docs/markdown.md),
 | `src/pipeline.zig`    | Source tree to output files                       |
 | `src/watch.zig`       | Native file watchers                              |
 | `src/server.zig`      | Dev server and Server-Sent Events live reload     |
+| `src/check.zig`       | `mortise check` link and anchor checker           |
 | `src/main.zig`        | Command-line entry point                          |
 | `src/restart.zig`     | `serve --restart-on-rebuild` supervisor           |
 | `src/themes/`         | Built-in themes (`theme:` in `_config.yml`)       |
