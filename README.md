@@ -144,6 +144,9 @@ my-site/
 - [OpenAPI reference pages](docs/openapi.md): each `_api/NAME.json`
   OpenAPI 3 document becomes a static page at `/api/NAME/` with every
   operation, parameter, schema, and an example body.
+- [Wikilinks](docs/markdown.md#wikilinks): `[[Getting Started]]`,
+  `[[docs/install]]` or `[[Install#Linux|label]]` link pages by title, file
+  name or path, and `page.backlinks` lists the pages linking to a page.
 - Code blocks with titles, marked lines, line numbers, and diffs, and code
   included from files with `<<< path:10-30` or `<<< path#region`
   ([details](docs/markdown.md#code-from-files)); tabs and
@@ -278,6 +281,7 @@ See the [Markdown subset](docs/markdown.md),
 | `src/main.zig`        | Command-line entry point                          |
 | `src/restart.zig`     | `serve --restart-on-rebuild` supervisor           |
 | `src/themes/`         | Built-in themes (`theme:` in `_config.yml`)       |
+| `src/links.zig`      | Wikilink resolution and backlinks                 |
 | `src/images.zig`     | `<img>` sizes, lazy loading and `srcset` copies     |
 | `render/`             | CPU renderer for build-time graphics; see [render/README.md](render/README.md) |
 | `test/`               | Fixture and end-to-end tests and their inputs     |

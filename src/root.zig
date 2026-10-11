@@ -33,6 +33,7 @@ pub const git = @import("git.zig");
 pub const seo = @import("seo.zig");
 pub const a11y = @import("a11y.zig");
 pub const images = @import("images.zig");
+pub const links = @import("links.zig");
 pub const scaffold = @import("scaffold.zig");
 pub const watch = @import("watch.zig");
 pub const server = @import("server.zig");

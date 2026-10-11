@@ -38,6 +38,7 @@ const redirects = @import("redirects.zig");
 const git = @import("git.zig");
 const seo = @import("seo.zig");
 const images = @import("images.zig");
+const links = @import("links.zig");
 const Value = template.Value;
 const Entry = template.Entry;
 
@@ -189,7 +190,7 @@ const State = struct {
     statics: []const Output,
 };
 
-const Page = struct {
+pub const Page = struct {
     source: []const u8,
     is_post: bool,
     is_markdown: bool,
@@ -209,6 +210,12 @@ const Page = struct {
     toc: ?[]const u8 = null,
     /// Whether the Markdown uses a component that needs `mortise.css`.
     uses_components: bool = false,
+    /// The Markdown's HTML with its wikilinks unresolved, when it has any;
+    /// `html` holds them resolved against the current set of pages.
+    wikilink_html: ?[]const u8 = null,
+    /// URLs of the site's pages this page's Markdown links to, for
+    /// backlinks.
+    link_targets: []const []const u8 = &.{},
     /// For an OpenAPI page, the rendered reference (for `site.apis`).
     api: ?openapi.Rendered = null,
     /// The page's own fields, without navigation; computed once per load.
@@ -317,6 +324,8 @@ const Builder = struct {
     image_infos: std.StringHashMapUnmanaged(?images.Info) = .empty,
     /// Resized images the page being rendered refers to.
     page_variants: std.ArrayList(images.Variant) = .empty,
+    /// Set by `links.resolve` when a wikilink is ambiguous.
+    link_error: links.Failure = .{},
 
     fn fail(b: *Builder, path: []const u8, line: usize, comptime fmt: []const u8, args: anytype) Error {
         b.diag.* = .{
@@ -531,7 +540,7 @@ pub fn rebuild(arena: Allocator, src: SiteDir, prev: *const Site, changed: []con
     const render = try arena.alloc(bool, pages.len);
     for (pages, render, 0..) |p, *r, i| {
         r.* = std.mem.indexOfScalar(usize, dirty_pages.items, i) != null or
-            (dirty_pages.items.len > 0 and p.reads_collections) or
+            (dirty_pages.items.len > 0 and (p.reads_collections or p.wikilink_html != null)) or
             usesAny(p.sources, dirty_templates.items);
     }
     return finish(&b, st.config_fields, pages, st.statics, render);
@@ -1223,6 +1232,9 @@ fn finish(b: *Builder, config_fields: frontmatter.Map, pages: []Page, statics: [
     var post_values: std.ArrayList(Value) = .empty;
     var page_values: std.ArrayList(Value) = .empty;
     var post_count: usize = 0;
+    // Wikilinks name other pages, so they are resolved on every build.
+    var backlinks = try links.resolve(arena, pages, b.baseurl, &b.link_error);
+    if (b.link_error.message.len > 0) return b.fail(b.link_error.path, 0, "{s}", .{b.link_error.message});
     for (pages) |*p| {
         if (p.base.entries.len == 0) p.base = try pageObject(arena, p);
     }
@@ -1240,6 +1252,7 @@ fn finish(b: *Builder, config_fields: frontmatter.Map, pages: []Page, statics: [
         try entries.append(arena, .{ .key = "menus", .value = try pageMenus(arena, b.menus, p.url, root) });
         p.object = .{ .entries = entries.items };
     }
+    try links.addBacklinks(arena, pages, &backlinks);
     for (pages) |*p| {
         if (p.is_post) {
             try post_values.append(arena, .{ .object = p.object });
@@ -1505,6 +1518,7 @@ fn loadPage(b: *Builder, path: []const u8, is_post: bool) Error!?Page {
         page.toc = try tocHtml(arena, rendered.headings);
         page.uses_components = rendered.uses_components;
         page.included_files = inc.files.items;
+        if (std.mem.indexOf(u8, rendered.html, markdown.wikilink_prefix) != null) page.wikilink_html = rendered.html;
     }
 
     if (is_post) {
@@ -1599,6 +1613,9 @@ fn loadPage(b: *Builder, path: []const u8, is_post: bool) Error!?Page {
         }
         page.aliases = aliases.items;
     }
+    if (page.html) |h| if (is_markdown) {
+        page.link_targets = try links.targets(arena, h, page.url);
+    };
     return page;
 }
 
@@ -1863,7 +1880,7 @@ fn pageObject(arena: Allocator, p: *const Page) Allocator.Error!template.Object 
 
 /// A page's title for navigation: its `title`, else the last URL segment,
 /// else "Home".
-fn navTitle(p: *const Page) []const u8 {
+pub fn navTitle(p: *const Page) []const u8 {
     if (stringField(p.fields, "title")) |t| return t;
     const trimmed = std.mem.trim(u8, p.url, "/");
     if (trimmed.len == 0) return "Home";
@@ -4229,4 +4246,40 @@ test "img tags get sizes, lazy loading and resized copies" {
     try expectBuildError(&.{.{ "_config.yml", "images:\n  widths: [4]\n" }}, "_config.yml", 1, "'images.widths' must list widths");
     try expectBuildError(&.{.{ "_config.yml", "title: x\nimages:\n  quality: 0\n" }}, "_config.yml", 2, "'images.quality'");
     try expectBuildError(&.{.{ "_config.yml", "images:\n  lazzy: false\n" }}, "_config.yml", 1, "unknown image setting 'lazzy'");
+}
+
+test "wikilinks resolve by title, path and file name, with backlinks" {
+    var t: TestSite = try .init(&.{
+        .{ "_config.yml", "heading_anchors: false\n" },
+        .{ "_layouts/l.html", "{{ content }}|{% for b in page.backlinks %}<{{ b.title }}>{% endfor %}" },
+        .{ "docs/install.md", "---\ntitle: Installing Mortise\nlayout: l\n---\n# Linux\n" },
+        .{ "about.md", "---\ntitle: About\nlayout: l\n---\n[[installing mortise#Linux]] [[docs/install|setup]] [[install]] [[Nowhere]]\n" },
+        .{ "_posts/2024-01-02-news.md", "---\ntitle: News\nlayout: l\n---\nRead [the docs](../../../../docs/install/) and [[#Top]].\n" },
+    });
+    defer t.deinit();
+    const src = SiteDir.borrow(testing.io, t.tmp.dir);
+    var diag: Diagnostic = .{};
+    const first = t.build(&diag) catch |err| {
+        std.debug.print("{f}\n", .{diag});
+        return err;
+    };
+    try testing.expectEqualStrings(
+        "<p><a class=\"wikilink\" href=\"/docs/install/#linux\">installing mortise \u{203a} Linux</a> <a class=\"wikilink\" href=\"/docs/install/\">setup</a> " ++
+            "<a class=\"wikilink\" href=\"/docs/install/\">install</a> <a class=\"wikilink wikilink-missing\" title=\"No page named Nowhere\">Nowhere</a></p>\n|",
+        first.find("about/index.html").?.data.bytes,
+    );
+    try testing.expectEqualStrings("<h1 id=\"linux\">Linux</h1>\n|<About><News>", first.find("docs/install/index.html").?.data.bytes);
+    try testing.expect(std.mem.indexOf(u8, first.find("2024/01/02/news/index.html").?.data.bytes, "href=\"#top\"") != null);
+
+    // A new title still resolves: the page is found by its path.
+    try src.writeFile("docs/install.md", "---\ntitle: Setup\nlayout: l\n---\n# Linux\n");
+    const second = try rebuild(t.arena.allocator(), src, &first, &.{"docs/install.md"}, &diag);
+    try testing.expect(std.mem.indexOf(u8, second.find("about/index.html").?.data.bytes, "title=\"No page named installing mortise\"") != null);
+    try testing.expectEqualStrings("<h1 id=\"linux\">Linux</h1>\n|<About><News>", second.find("docs/install/index.html").?.data.bytes);
+
+    try expectBuildError(&.{
+        .{ "a/notes.md", "---\ntitle: A\n---\n" },
+        .{ "b/notes.md", "---\ntitle: B\n---\n" },
+        .{ "c.md", "[[notes]]\n" },
+    }, "c.md", 0, "wikilink [[notes]] could mean any of a/notes.md, b/notes.md");
 }

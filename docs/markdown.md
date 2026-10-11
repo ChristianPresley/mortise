@@ -202,6 +202,31 @@ Inline links only: `[text](destination)` or `[text](destination "title")`.
 - Spaces in the destination are written as `%20`; no other URL
   normalization is done.
 
+### Wikilinks
+
+`[[Name]]` links to another page of the site by name, written on one line
+without brackets inside:
+
+| Written                    | Links to                                          |
+| -------------------------- | ------------------------------------------------- |
+| `[[Getting Started]]`      | The page titled "Getting Started"                 |
+| `[[install]]`              | The page whose file is `install.md` (or `install/index.md`) |
+| `[[docs/install]]`         | The page at that path or URL, the most exact form |
+| `[[Install#Linux]]`        | The `#linux` heading on that page                 |
+| `[[#Usage]]`               | The `#usage` heading on this page                 |
+| `[[Install\|the setup guide]]` | That page, with the label "the setup guide"   |
+
+Titles and file names are compared as slugs, so case and punctuation do
+not matter; a post's file name is matched without its date. Paths are
+tried first. The link text is the name as written (`Install › Linux` for
+a heading), or the label after `|`, which may hold inline Markdown.
+
+The output is `<a class="wikilink" href="URL">`. A name that matches no
+page becomes `<a class="wikilink wikilink-missing" title="No page named
+...">` without an `href`, for a stylesheet to mark. A name that matches
+more than one page fails the build, listing them, so the link never points
+at the wrong one.
+
 ### Images
 
 `![alt](source "title")` renders as `<img src="..." alt="..." />`. The alt
@@ -241,5 +266,5 @@ These render as plain paragraph text:
 - Reference-style links and link reference definitions.
 - HTML entities and numeric character references (`&amp;` renders as
   `&amp;amp;`).
-- Extensions other than tables, strikethrough, highlight, task lists, footnotes,
+- Extensions other than tables, strikethrough, highlight, wikilinks, task lists, footnotes,
   definition lists, and the [components](components.md).

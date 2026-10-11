@@ -60,3 +60,6 @@ footer { color: var(--muted); font-size: .9rem; border-top: 1px solid #e5e5e5; }
 .stat { display: flex; flex-direction: column; min-width: 8rem; padding: .75rem 1rem; border: 1px solid var(--m-border, #e5e5e5); border-radius: 6px; }
 .stat-value { font-size: 1.6rem; font-weight: 700; color: var(--m-accent, var(--accent)); }
 .stat-label { font-size: .8rem; opacity: .75; }
+.backlinks { display: block; margin: 2rem 0 1rem; font-size: .9rem; }
+.backlinks a { margin-left: .6rem; }
+.wikilink-missing { opacity: .7; text-decoration: underline dotted; cursor: help; }

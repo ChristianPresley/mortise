@@ -197,6 +197,7 @@ wiki-style sidebars, breadcrumbs, and pagers:
 | `page.breadcrumbs` | Ancestor pages by URL, root first, each `{title, url}`         |
 | `page.previous`    | Previous page in the same URL directory, or the older post     |
 | `page.next`        | Next page in the same URL directory, or the newer post         |
+| `page.backlinks`   | Pages that link here (wikilinks or Markdown links), each `{title, url}`, by title |
 | `site.nav`         | Every non-post page as a tree: `{title, url, children}`        |
 | `site.apis`        | Every [OpenAPI page](openapi.md#site-wide-api-navigation)      |
 

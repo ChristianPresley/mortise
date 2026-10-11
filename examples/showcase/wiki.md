@@ -8,6 +8,14 @@ weight: 4
 Elements that reference sites and wikis lean on, written in plain
 Markdown. Wrap a phrase in double equals signs to ==highlight== it.
 
+## Wikilinks
+
+Link pages by name with double brackets: [[Install]] finds the page
+titled Install, [[docs/configuration|the configuration page]] names one
+by path, and [[Components#Callouts]] jumps to a heading. A name that
+matches no page, such as [[Roadmap]], is marked instead of breaking.
+Each page lists the pages that link to it under "Linked from".
+
 ## Task lists
 
 - [x] Markdown subset and fixtures

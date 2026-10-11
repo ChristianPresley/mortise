@@ -73,6 +73,20 @@ job:
 - Shortcodes render while pages load, so their templates see the config as
   `site` but not `site.posts`, `site.pages`, navigation or data files.
 
+## Wikilinks and backlinks
+
+- Wikilinks are resolved after Markdown renders, so a missing page is
+  marked in the output rather than reported with a line number, and an
+  ambiguous name's error names the file but not the line.
+- `![[embeds]]` (transclusion) and wikilinks in templates are not
+  supported; `[[...]]` inside a link's text is literal.
+- Heading anchors in `[[Page#Heading]]` are the heading's slug; a heading
+  whose id got a `-2` suffix for being repeated cannot be targeted by name.
+- Backlinks count links in Markdown content only, not links written in
+  layouts, includes or HTML pages.
+- Editing any page re-renders every page that has wikilinks or shows
+  backlinks, since either can change when another page's title does.
+
 ## Data files
 
 - Changing anything in `_data/` rebuilds the whole site, since any page may

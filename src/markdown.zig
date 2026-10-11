@@ -1481,6 +1481,12 @@ fn parseInlines(arena: Allocator, s: []const u8) Allocator.Error![]const Inline 
             },
             '[' => {
                 try p.addText(s[text_start..i]);
+                if (wikilink(s[i..])) |wl| {
+                    try p.add(.{ .raw = try wikilinkHtml(arena, wl) });
+                    i += wl.len;
+                    text_start = i;
+                    continue;
+                }
                 if (footnoteRef(s[i..])) |label| {
                     // A placeholder that `finishFootnotes` numbers once the
                     // whole document is rendered.
@@ -1539,6 +1545,47 @@ fn parseInlines(arena: Allocator, s: []const u8) Allocator.Error![]const Inline 
     try p.addText(s[text_start..]);
     try processEmphasis(arena, p.nodes.items, 0);
     return p.nodes.items;
+}
+
+/// Wikilinks render as links to `wikilink_prefix` plus their target, for
+/// the site pipeline to point at the page they name once every page is
+/// known: `[[Target]]`, `[[Target#Heading]]`, `[[Target|label]]`.
+pub const wikilink_prefix = "mortise:wikilink:";
+
+const Wikilink = struct { target: []const u8, label: []const u8, len: usize };
+
+/// A `[[...]]` wikilink at the start of `s`, on one line, without brackets
+/// inside.
+fn wikilink(s: []const u8) ?Wikilink {
+    if (!std.mem.startsWith(u8, s, "[[")) return null;
+    const close = std.mem.indexOfAnyPos(u8, s, 2, "[]\n") orelse return null;
+    if (!std.mem.startsWith(u8, s[close..], "]]")) return null;
+    const inner = s[2..close];
+    const bar = std.mem.indexOfScalar(u8, inner, '|');
+    const target = std.mem.trim(u8, inner[0 .. bar orelse inner.len], " ");
+    if (target.len == 0) return null;
+    const label = if (bar) |b| std.mem.trim(u8, inner[b + 1 ..], " ") else "";
+    return .{ .target = target, .label = label, .len = close + 2 };
+}
+
+fn wikilinkHtml(arena: Allocator, wl: Wikilink) Allocator.Error!@FieldType(Inline, "raw") {
+    // Without a label: the page name, then `›` and the heading.
+    const label = if (wl.label.len > 0) wl.label else blk: {
+        const hash = std.mem.indexOfScalar(u8, wl.target, '#') orelse break :blk wl.target;
+        if (hash == 0) break :blk wl.target[1..];
+        break :blk try std.mem.concat(arena, u8, &.{ wl.target[0..hash], " \u{203a} ", wl.target[hash + 1 ..] });
+    };
+    var aw: Writer.Allocating = .init(arena);
+    const w = &aw.writer;
+    w.writeAll("<a class=\"wikilink\" href=\"" ++ wikilink_prefix) catch return error.OutOfMemory;
+    escapeHtml(w, wl.target) catch return error.OutOfMemory;
+    w.writeAll("\">") catch return error.OutOfMemory;
+    // A written label may hold inline Markdown; a page name is text.
+    if (wl.label.len > 0) {
+        renderInline(arena, label, w) catch return error.OutOfMemory;
+    } else escapeHtml(w, label) catch return error.OutOfMemory;
+    w.writeAll("</a>") catch return error.OutOfMemory;
+    return .{ .html = try aw.toOwnedSlice(), .plain = label };
 }
 
 const InlineComponent = struct { name: []const u8, text: []const u8, len: usize };
@@ -2034,6 +2081,14 @@ test "links and images" {
     try expectHtml("<p>[not a link]</p>\n", "[not a link]");
     try expectHtml("<p>[a <a href=\"/b\">b</a>](/c)</p>\n", "[a [b](/b)](/c)");
     try expectHtml("<p><a href=\"/x\"><img src=\"/i\" alt=\"i\" /></a></p>\n", "[![i](/i)](/x)");
+}
+
+test "wikilinks" {
+    try expectHtml("<p>See <a class=\"wikilink\" href=\"mortise:wikilink:Getting Started\">Getting Started</a>.</p>\n", "See [[Getting Started]].");
+    try expectHtml("<p><a class=\"wikilink\" href=\"mortise:wikilink:docs/a&amp;b\">the <em>A</em></a></p>\n", "[[ docs/a&b | the *A* ]]");
+    try expectHtml("<p><a class=\"wikilink\" href=\"mortise:wikilink:Install#Linux\">Install \u{203a} Linux</a> <a class=\"wikilink\" href=\"mortise:wikilink:#Usage\">Usage</a></p>\n", "[[Install#Linux]] [[#Usage]]");
+    // Not wikilinks: empty, spanning lines, or with brackets inside.
+    try expectHtml("<p>[[]] [[a\nb]] [[a [b] c]]</p>\n", "[[]] [[a\nb]] [[a [b] c]]");
 }
 
 test "escaping" {
