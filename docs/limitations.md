@@ -59,6 +59,11 @@ job:
   `copy_code: false` on such sites.
 - Heading anchors add a `#` to the heading's text content, which `strip_html`
   and `word_count` see.
+- `<<<` includes only files inside the site directory, so a docs site in a
+  subfolder cannot include its repository's source files. Included files
+  are code only; Markdown files cannot be included as Markdown.
+- Region markers are found by text: a line that merely mentions `#region`
+  or `#endregion` in a string counts as a marker.
 
 ## Data files
 

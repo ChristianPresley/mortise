@@ -96,6 +96,35 @@ const x = 1;
 ```
 ````
 
+### Code from files
+
+A line holding `<<<`, a space and a file path (indented by at most three
+spaces) becomes a fenced code block with the file's contents. The
+language comes from the file's extension (`.zig`, `.rs`, `.py`, `.yml`, …).
+
+```markdown
+<<< _snippets/server.zig                 the whole file
+<<< _snippets/server.zig:10-30           lines 10 to 30 (also :10, :10-)
+<<< _snippets/server.zig#accept          a named region
+<<< _snippets/server.zig#accept {2} title="server.zig" lineNumbers
+```
+
+- A path starting with `/` is relative to the site root; any other path is
+  relative to the page's directory. It cannot lead outside the site.
+  Keep snippets in an unpublished directory such as `_snippets/` unless
+  you also want them copied into the output.
+- A region runs from a line containing `#region NAME` to its matching
+  `#endregion`, in any comment syntax (`// #region accept`,
+  `# #region accept`, `<!-- #region accept -->`). Marker lines are left
+  out, including those of nested regions, and so are all markers when
+  including a whole file.
+- The included lines lose their common indentation.
+- Options after the path work as on a fence: `{lines}` to mark (counted
+  within the included lines), `title="..."`, `lineNumbers`.
+- A missing file, a line range past the end, or an unknown region stops the
+  build with the page's file and line. The page is rebuilt when an included
+  file changes.
+
 ### Lists
 
 - **Bullet markers:** `-`, `+` or `*`.

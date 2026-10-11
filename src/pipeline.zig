@@ -175,6 +175,8 @@ const Page = struct {
     aliases: []const AliasPath = &.{},
     /// `YYYY-MM-DD` of the last change, from frontmatter `updated`, or "".
     updated: []const u8 = "",
+    /// Files the Markdown includes with `<<< path`.
+    included_files: []const []const u8 = &.{},
     sources: []const []const u8 = &.{},
     reads_collections: bool = false,
 };
@@ -350,13 +352,20 @@ pub fn rebuild(arena: Allocator, src: SiteDir, prev: *const Site, changed: []con
         if (std.mem.eql(u8, path, config_path) or std.mem.eql(u8, path, "*") or
             std.mem.startsWith(u8, path, data_files.dir_prefix) or
             std.mem.startsWith(u8, path, assets.dir_prefix)) return buildWith(arena, src, st.options, diag);
+        // Pages that include the file with `<<<` load again; the file's
+        // own role, if any, is handled below.
+        for (st.pages, 0..) |p, i| {
+            for (p.included_files) |f| {
+                if (std.mem.eql(u8, f, path) and std.mem.indexOfScalar(usize, dirty_pages.items, i) == null) try dirty_pages.append(arena, i);
+            }
+        }
         if (std.mem.startsWith(u8, path, "_layouts/") or std.mem.startsWith(u8, path, "_includes/")) {
             try dirty_templates.append(arena, path);
             continue;
         }
         if (findPage(st.pages, path)) |i| {
             if (!b.exists(path)) return buildWith(arena, src, st.options, diag);
-            try dirty_pages.append(arena, i);
+            if (std.mem.indexOfScalar(usize, dirty_pages.items, i) == null) try dirty_pages.append(arena, i);
             continue;
         }
         if (findStatic(st.statics, path)) {
@@ -657,6 +666,7 @@ fn finish(b: *Builder, config_fields: frontmatter.Map, pages: []Page, statics: [
             b.deps = .empty;
             b.reads_collections = false;
             try b.addDep(p.source);
+            for (p.included_files) |f| try b.addDep(f);
             try renderPaginated(b, p, post_values.items);
             p.sources = b.deps.items;
             p.reads_collections = b.reads_collections;
@@ -728,10 +738,18 @@ fn loadPage(b: *Builder, path: []const u8, is_post: bool) Error!?Page {
         .html = null,
     };
     if (is_markdown) {
-        const rendered = try markdown.toDocumentWith(arena, doc.body, b.markdown_options);
+        var inc: FileIncluder = .{ .b = b, .page = path };
+        var md_options = b.markdown_options;
+        md_options.includer = .{ .ctx = &inc, .readFn = FileIncluder.read };
+        const rendered = try markdown.toDocumentWith(arena, doc.body, md_options);
+        if (rendered.include_error) |e| {
+            const at = std.mem.indexOf(u8, doc.body, e.directive[4..]) orelse 0;
+            return b.fail(path, doc.body_line + std.mem.count(u8, doc.body[0..at], "\n"), "{s}", .{e.message});
+        }
         page.html = rendered.html;
         page.toc = try tocHtml(arena, rendered.headings);
         page.uses_components = rendered.uses_components;
+        page.included_files = inc.files.items;
     }
 
     if (is_post) {
@@ -840,6 +858,49 @@ fn addAliases(b: *Builder, outputs: *std.ArrayList(Output), config_fields: front
         try outputs.append(arena, .{ .path = redirects.redirects_path, .source = config_path, .data = .{ .bytes = try redirects.redirectsFile(arena, all.items) } });
     }
 }
+
+/// Reads files for one page's `<<< path` directives: `/path` from the
+/// site root, any other path from the page's directory, never outside the
+/// site. Records each file read, for incremental rebuilds.
+const FileIncluder = struct {
+    b: *Builder,
+    page: []const u8,
+    files: std.ArrayList([]const u8) = .empty,
+
+    fn read(ctx: *anyopaque, raw: []const u8, why: *[]const u8) ?[]const u8 {
+        const self: *FileIncluder = @ptrCast(@alignCast(ctx));
+        const arena = self.b.arena;
+        const joined = if (raw.len > 0 and raw[0] == '/')
+            raw[1..]
+        else if (sitepath.dirname(self.page)) |dir|
+            std.fmt.allocPrint(arena, "{s}/{s}", .{ dir, raw }) catch return oom(why)
+        else
+            raw;
+        const path = sitepath.normalize(arena, joined) catch |err| {
+            why.* = switch (err) {
+                error.OutOfMemory => "out of memory",
+                error.EscapesRoot => "the path leads outside the site",
+                else => "not a valid site path",
+            };
+            return null;
+        };
+        if (std.mem.eql(u8, path, self.page)) {
+            why.* = "a page cannot include itself";
+            return null;
+        }
+        const data = self.b.src.readFile(arena, path) catch |err| {
+            why.* = if (err == error.FileNotFound) "no such file" else @errorName(err);
+            return null;
+        };
+        self.files.append(arena, path) catch return oom(why);
+        return data;
+    }
+
+    fn oom(why: *[]const u8) ?[]const u8 {
+        why.* = "out of memory";
+        return null;
+    }
+};
 
 /// Turns `_api/NAME.json` into a page at `/api/NAME/` holding the rendered
 /// reference, laid out with `_layouts/api.html`, else `_layouts/doc.html`,
@@ -2243,4 +2304,44 @@ test "heading anchors and copy buttons, on by default" {
         "<h2 id=\"install\">Install</h2>\n<pre><code class=\"language-sh\">zig build\n</code></pre>\n",
         try t2.output("a/index.html"),
     );
+}
+
+test "<<< includes code from files and rebuilds when they change" {
+    var t: TestSite = try .init(&.{
+        .{ "_config.yml", "copy_code: false\n" },
+        .{ "_snippets/hello.zig", "const std = @import(\"std\");\n\npub fn main() void {\n    // #region greet\n    std.debug.print(\"hi\", .{});\n    // #endregion greet\n}\n" },
+        .{ "docs/guide.md", "# Guide\n\n<<< /_snippets/hello.zig#greet\n\n<<< ../_snippets/hello.zig:1 title=\"first line\"\n" },
+        .{ "other.md", "Other.\n" },
+    });
+    defer t.deinit();
+    const a = t.arena.allocator();
+    const src = SiteDir.borrow(testing.io, t.tmp.dir);
+    var diag: Diagnostic = .{};
+    var site = try t.build(&diag);
+    const guide = site.find("docs/guide/index.html").?.data.bytes;
+    // The region, dedented, without its markers.
+    try testing.expect(std.mem.indexOf(u8, guide, "<pre><code class=\"language-zig\">std.debug.print(") != null);
+    try testing.expect(std.mem.indexOf(u8, guide, "<div class=\"mt-code-title\">first line</div>") != null);
+    try testing.expect(std.mem.indexOf(u8, guide, "#region") == null);
+    // The snippet is a dependency of the page that includes it.
+    for (site.deps) |d| {
+        if (std.mem.eql(u8, d.output, "docs/guide/index.html")) try testing.expectEqualStrings("_snippets/hello.zig", d.sources[1]);
+    }
+
+    // Editing the snippet re-renders only the page that includes it.
+    try src.writeFile("_snippets/hello.zig", "// #region greet\nchanged();\n// #endregion\n");
+    site = try rebuild(a, src, &site, &.{"_snippets/hello.zig"}, &diag);
+    try testing.expectEqual(@as(usize, 1), site.rendered);
+    try testing.expect(std.mem.indexOf(u8, site.find("docs/guide/index.html").?.data.bytes, "changed") != null);
+
+    // A region that disappears is an error on the directive's line.
+    try src.writeFile("_snippets/hello.zig", "nothing here\n");
+    try testing.expectError(error.BuildFailed, rebuild(a, src, &site, &.{"_snippets/hello.zig"}, &diag));
+    try testing.expectEqualStrings("docs/guide.md", diag.path);
+    try testing.expectEqual(@as(usize, 3), diag.line);
+    try testing.expectEqualStrings("'/_snippets/hello.zig' has no '#region greet'", diag.message);
+
+    try expectBuildError(&.{.{ "a.md", "---\nt: 1\n---\nText\n\n<<< missing.zig\n" }}, "a.md", 6, "cannot include 'missing.zig': no such file");
+    try expectBuildError(&.{.{ "a.md", "<<< ../../etc/passwd\n" }}, "a.md", 1, "outside the site");
+    try expectBuildError(&.{ .{ "a.md", "<<< b.txt:2-9\n" }, .{ "b.txt", "one\ntwo\n" } }, "a.md", 1, "'b.txt' has no lines 2-9; it has 2");
 }

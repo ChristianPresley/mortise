@@ -122,7 +122,9 @@ my-site/
 - [OpenAPI reference pages](docs/openapi.md): each `_api/NAME.json`
   OpenAPI 3 document becomes a static page at `/api/NAME/` with every
   operation, parameter, schema, and an example body.
-- Code blocks with titles, marked lines, line numbers, and diffs; tabs and
+- Code blocks with titles, marked lines, line numbers, and diffs, and code
+  included from files with `<<< path:10-30` or `<<< path#region`
+  ([details](docs/markdown.md#code-from-files)); tabs and
   code groups; task lists, footnotes, and definition lists; and
   `page.breadcrumbs`, `page.previous`/`page.next`, and `site.nav` for
   wiki-style navigation. See [components](docs/components.md) and

@@ -25,6 +25,16 @@ pub fn main() !void {
 [{ "title": "Home", "url": "/" }]
 ```
 
+## Included from a file
+
+`<<< path` includes a file as a code block: all of it, a line range
+(`:5-7`), or a region marked with `#region NAME` comments. The block takes
+the usual options, and the page rebuilds when the file changes.
+
+<<< _snippets/server.zig#accept title="_snippets/server.zig#accept" {3}
+
+<<< _snippets/server.zig:5-7 lineNumbers
+
 ## Diffs
 
 ```diff title="_config.yml"

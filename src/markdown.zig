@@ -8,6 +8,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const Writer = std.Io.Writer;
 const highlight = @import("highlight.zig");
+const snippet = @import("snippet.zig");
 
 pub const Error = Allocator.Error || Writer.Error;
 
@@ -31,6 +32,22 @@ pub const Document = struct {
     /// Whether the document uses a component (callout, container, badge,
     /// or key) that needs `components_css`.
     uses_components: bool,
+    /// The first `<<< path` include that failed, or null.
+    include_error: ?IncludeError = null,
+};
+
+pub const IncludeError = struct {
+    /// The directive's line as written, such as `<<< a.zig#main`, so the
+    /// caller can find its line number.
+    directive: []const u8,
+    message: []const u8,
+};
+
+/// Reads files for the `<<< path` directive (see `snippet.zig`).
+pub const Includer = struct {
+    ctx: *anyopaque,
+    /// Returns the file's contents, or null with a reason in `why`.
+    readFn: *const fn (ctx: *anyopaque, path: []const u8, why: *[]const u8) ?[]const u8,
 };
 
 /// The stylesheet for components, written to the site as `mortise.css`.
@@ -43,6 +60,9 @@ pub const Options = struct {
     /// Add a hidden copy button (`<button class="mt-copy" hidden>`) to each
     /// fenced code block. `copy_script` shows the buttons and copies.
     copy_buttons: bool = false,
+    /// Reads the files of `<<< path` directives. Without one, a directive
+    /// renders as a plain paragraph.
+    includer: ?Includer = null,
 };
 
 /// Shows the copy buttons of `Options.copy_buttons` and copies a block's
@@ -74,7 +94,7 @@ pub fn toDocumentWith(arena: Allocator, src: []const u8, options: Options) Alloc
     const html = try aw.toOwnedSlice();
     // Every component's markup carries an mt- class.
     const uses = std.mem.indexOf(u8, html, "class=\"mt-") != null;
-    return .{ .html = html, .headings = r.headings.items, .uses_components = uses };
+    return .{ .html = html, .headings = r.headings.items, .uses_components = uses, .include_error = r.include_error };
 }
 
 /// Renders `src` to HTML on `w`. Scratch memory comes from `arena`.
@@ -189,6 +209,8 @@ const Block = union(enum) {
     /// `Term` followed by `: Definition` lines.
     definitions: []const Definition,
     container: struct { kind: ContainerKind, title: []const u8, children: []const Block },
+    /// `<<< path...`: code from a file; the text after `<<<`.
+    include: []const u8,
 };
 
 const Code = struct { info: []const u8, meta: []const u8 = "", text: []const u8 };
@@ -390,6 +412,9 @@ fn parseBlocks(arena: Allocator, lines: []const []const u8) Allocator.Error!Pars
         } else if (atxHeading(line)) |h| {
             try blocks.append(arena, h);
             i += 1;
+        } else if (includeDirective(line)) |text| {
+            try blocks.append(arena, .{ .include = text });
+            i += 1;
         } else if (listMarker(line)) |m| {
             i = try parseList(arena, lines, i, m, &blocks);
         } else {
@@ -421,6 +446,14 @@ fn fenceStart(line: []const u8) ?Fence {
     if (c == '`' and std.mem.indexOfScalar(u8, rest, '`') != null) return null;
     const word_end = std.mem.indexOfAny(u8, rest, " \t") orelse rest.len;
     return .{ .indent = ind, .char = c, .len = n, .info = rest[0..word_end], .meta = std.mem.trim(u8, rest[word_end..], " \t") };
+}
+
+/// `<<< path ...` on a line of its own: the text after `<<<`.
+fn includeDirective(line: []const u8) ?[]const u8 {
+    if (indentOf(line) > 3) return null;
+    const t = trimLeft(line);
+    if (!std.mem.startsWith(u8, t, "<<< ")) return null;
+    return std.mem.trim(u8, t[4..], " \t");
 }
 
 fn isFenceClose(line: []const u8, f: Fence) bool {
@@ -866,6 +899,7 @@ fn parseContainer(arena: Allocator, lines: []const []const u8, start: usize, c: 
 const Renderer = struct {
     arena: Allocator,
     options: Options = .{},
+    include_error: ?IncludeError = null,
     /// Heading ids already used, so each id in the document is unique.
     ids: std.StringHashMapUnmanaged(void) = .empty,
     headings: std.ArrayList(Heading) = .empty,
@@ -1139,6 +1173,29 @@ fn renderBlock(r: *Renderer, b: Block, tight: bool, w: *Writer) Error!void {
             }
         },
         .code => |c| try renderCode(arena, c, r.options.copy_buttons, w),
+        .include => |text| {
+            const directive = try std.mem.concat(arena, u8, &.{ "<<< ", text });
+            const inc = r.options.includer orelse {
+                try w.writeAll("<p>");
+                try escapeHtml(w, directive);
+                return w.writeAll("</p>\n");
+            };
+            const fail = struct {
+                fn f(rr: *Renderer, d: []const u8, comptime fmt: []const u8, args: anytype) Error!void {
+                    if (rr.include_error == null) rr.include_error = .{ .directive = d, .message = try std.fmt.allocPrint(rr.arena, fmt, args) };
+                }
+            }.f;
+            const spec = snippet.parseSpec(text) orelse return fail(r, directive, "'<<<' needs a file path, as in <<< src/main.zig", .{});
+            var why: []const u8 = "";
+            const data = inc.readFn(inc.ctx, spec.path, &why) orelse return fail(r, directive, "cannot include '{s}': {s}", .{ spec.path, why });
+            const code = snippet.extract(arena, data, spec.select) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                error.BadRange => return fail(r, directive, "'{s}' has no lines {d}-{d}; it has {d}", .{ spec.path, spec.select.lines.start, spec.select.lines.end orelse 0, std.mem.count(u8, std.mem.trimEnd(u8, data, "\n"), "\n") + 1 }),
+                error.NoSuchRegion => return fail(r, directive, "'{s}' has no '#region {s}'", .{ spec.path, spec.select.region }),
+                error.UnclosedRegion => return fail(r, directive, "region '{s}' in '{s}' has no '#endregion'", .{ spec.select.region, spec.path }),
+            };
+            try renderCode(arena, .{ .info = snippet.language(spec.path), .meta = spec.meta, .text = code }, r.options.copy_buttons, w);
+        },
         .list => |l| {
             if (!l.ordered) {
                 try w.writeAll("<ul>\n");
@@ -1858,4 +1915,10 @@ test "heading anchors and copy buttons are options" {
         doc.html,
     );
     try std.testing.expect(doc.uses_components);
+}
+
+test "<<< without an includer is a paragraph" {
+    try expectHtml("<p>&lt;&lt;&lt; a.zig</p>\n", "<<< a.zig");
+    // Not a directive without the space, or when indented as code.
+    try expectHtml("<p>&lt;&lt;&lt;a.zig</p>\n", "<<<a.zig");
 }
