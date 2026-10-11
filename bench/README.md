@@ -53,3 +53,49 @@ Notes:
   each file read and write costs more there.
 - macOS (kqueue) is covered by CI tests but has not been benchmarked: there
   is no Mac in the development setup.
+
+## Full builds
+
+`build_time.zig` times complete builds of a large generated site, the way
+`mortise build` runs them: read every source, render every page, and write
+`_site/`.
+
+```sh
+zig build bench-build                # 10,000 posts, 5 runs
+zig build bench-build -- 1000 5      # PAGES RUNS
+```
+
+Each post has frontmatter with a title and two tags, a few paragraphs with
+emphasis and links, a list, a heading and a code block, under a two-layout
+chain; the site also has a paginated home page and a page per tag. The
+benchmark writes the same site for Hugo (`zig-out/bench-build/hugo`, with
+equivalent Go templates) and times `hugo` too when it is on the `PATH`.
+
+Pages load in parallel, and output files are written and the previous
+`_site` deleted by up to 16 workers. Builds are deterministic: the same
+sources give byte-identical output and, when several pages are broken, the
+same error, whatever order the threads ran in.
+
+### Results
+
+Development machine (AMD Ryzen 7 9800X3D, 16 threads), median of 5 runs,
+2026-10-11. "Build" is reading and rendering; "write" is writing `_site`
+and removing the previous one.
+
+| Platform     | Posts  | Outputs | Build  | Write   | Total   | Pages/s |
+| ------------ | ------ | ------- | ------ | ------- | ------- | ------- |
+| Linux (WSL2) | 1,000  | 1,112   | 17 ms  | 172 ms  | 189 ms  | 5,300   |
+| Linux (WSL2) | 10,000 | 11,012  | 175 ms | 1.71 s  | 1.89 s  | 5,300   |
+| Windows 11   | 10,000 | 11,012  | 186 ms | 8.84 s  | 9.03 s  | 1,100   |
+
+Before this work the same 10,000-post build took 16 s on Windows (0.8 to
+2 s of it building) and about 10 s on Linux with one writer.
+
+Notes:
+
+- Writing files dominates. On Windows each new file costs far more than on
+  Linux, mostly in the file system and real-time virus scanning, and
+  parallel writing helps much less there.
+- Hugo was not installed on the development machine, so there is no Hugo
+  number here yet. Run `zig build bench-build` with `hugo` on the `PATH` to
+  compare on your own machine.

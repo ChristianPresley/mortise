@@ -443,11 +443,14 @@ pub fn buildWith(arena: Allocator, src: SiteDir, options: Options, diag: *Diagno
     b.data = try loadData(&b, listing.files);
     b.schemas = try loadSchemas(&b, listing.files);
 
+    // Pages load in parallel once every file is sorted; everything else
+    // is quick and happens here in order.
+    var jobs: std.ArrayList(LoadJob) = .empty;
     for (listing.files) |path| {
         if (std.mem.eql(u8, path, config_path)) continue;
         if (std.mem.startsWith(u8, path, "_posts/")) {
             if (!std.mem.eql(u8, sitepath.extension(path), ".md")) continue;
-            if (try loadPage(&b, path, true)) |p| try pages.append(arena, p);
+            try jobs.append(arena, .{ .path = path, .is_post = true });
             continue;
         }
         if (openapi.isSpec(path)) {
@@ -461,13 +464,24 @@ pub fn buildWith(arena: Allocator, src: SiteDir, options: Options, diag: *Diagno
         if (sitepath.hasHiddenComponent(path)) continue;
 
         const ext = sitepath.extension(path);
-        if (std.mem.eql(u8, ext, ".md")) {
-            if (try loadPage(&b, path, false)) |p| try pages.append(arena, p);
-        } else if (std.mem.eql(u8, ext, ".html") and try startsWithFrontmatter(&b, path)) {
-            if (try loadPage(&b, path, false)) |p| try pages.append(arena, p);
+        if (std.mem.eql(u8, ext, ".md") or (std.mem.eql(u8, ext, ".html") and try startsWithFrontmatter(&b, path))) {
+            try jobs.append(arena, .{ .path = path, .is_post = false });
         } else {
             try statics.append(arena, .{ .path = path, .source = path, .data = .copy });
         }
+    }
+    loadPages(&b, jobs.items);
+    // The first failure in listing order is the one reported, whichever
+    // worker met it first.
+    for (jobs.items) |*job| {
+        const page = job.result catch |err| {
+            b.diag.* = job.diag;
+            return err;
+        };
+        if (page) |p| try pages.append(arena, p);
+        b.skipped.drafts += job.skipped.drafts;
+        b.skipped.future += job.skipped.future;
+        b.skipped.expired += job.skipped.expired;
     }
     std.mem.sortUnstable(Page, pages.items, {}, pageOrder);
     return finish(&b, config_fields, pages.items, statics.items, null);
@@ -1678,6 +1692,51 @@ fn startsWithFrontmatter(b: *Builder, path: []const u8) Error!bool {
     return std.mem.startsWith(u8, d, "---\n") or std.mem.startsWith(u8, d, "---\r\n");
 }
 
+const LoadJob = struct {
+    path: []const u8,
+    is_post: bool,
+    result: Error!?Page = null,
+    diag: Diagnostic = .{},
+    /// Why the page was left out, if it was.
+    skipped: Skipped = .{},
+};
+
+/// Runs `loadPage` for every job, spread over several threads for big
+/// sites. Each job gets its own copy of the builder, so a failure only
+/// writes to that job's diagnostic; loading touches nothing else shared but
+/// the arena, which is thread-safe.
+fn loadPages(b: *Builder, jobs: []LoadJob) void {
+    const Worker = struct {
+        fn run(builder: *const Builder, all: []LoadJob, first: usize, step: usize) void {
+            var i = first;
+            while (i < all.len) : (i += step) {
+                var own = builder.*;
+                own.diag = &all[i].diag;
+                own.skipped = .{};
+                // Shortcodes load templates while pages load; each job
+                // keeps its own cache and dependency list, so workers never
+                // write to shared ones.
+                own.templates = .empty;
+                own.deps = .empty;
+                all[i].result = loadPage(&own, all[i].path, all[i].is_post);
+                all[i].skipped = own.skipped;
+            }
+        }
+    };
+    // Threads only pay off when there is enough to share out.
+    const workers = if (jobs.len < 64) 1 else @min(std.Thread.getCpuCount() catch 1, 16);
+    if (workers <= 1) return Worker.run(b, jobs, 0, 1);
+    const io = b.src.io;
+    var group: std.Io.Group = .init;
+    for (0..workers) |k| {
+        group.concurrent(io, Worker.run, .{ b, jobs, k, workers }) catch Worker.run(b, jobs, k, workers);
+    }
+    group.await(io) catch {
+        group.cancel(io);
+        for (jobs) |*j| j.result = error.BuildFailed;
+    };
+}
+
 /// Reads and parses a page or post. Returns null for drafts.
 fn loadPage(b: *Builder, path: []const u8, is_post: bool) Error!?Page {
     if (openapi.isSpec(path)) return try loadApiPage(b, path);
@@ -2157,9 +2216,19 @@ fn parentUrl(url: []const u8) []const u8 {
     return trimmed[0 .. slash + 1];
 }
 
-fn pageAtUrl(pages: []const Page, url: []const u8) ?*const Page {
-    for (pages) |*p| if (!p.is_post and std.mem.eql(u8, p.url, url)) return p;
-    return null;
+/// Non-post pages by URL, built once per build so navigation does not
+/// search every page for every link.
+const PageIndex = std.StringHashMapUnmanaged(*const Page);
+
+fn pageIndex(arena: Allocator, pages: []const Page) Allocator.Error!PageIndex {
+    var index: PageIndex = .empty;
+    for (pages) |*p| {
+        if (p.is_post) continue;
+        const gop = try index.getOrPut(arena, p.url);
+        // The first page at a URL wins, as a search in order would find it.
+        if (!gop.found_existing) gop.value_ptr.* = p;
+    }
+    return index;
 }
 
 /// Sets each page's `object` to its fields plus navigation:
@@ -2169,6 +2238,20 @@ fn pageAtUrl(pages: []const Page, url: []const u8) ?*const Page {
 ///   page.next         previous and next page in the same URL directory,
 ///                     ordered by `weight` then title
 fn addNavigation(arena: Allocator, pages: []Page) Allocator.Error!void {
+    const index = try pageIndex(arena, pages);
+    // Each URL directory's visible pages, in navigation order.
+    var by_dir: std.StringHashMapUnmanaged(std.ArrayList(*const Page)) = .empty;
+    for (pages) |*q| {
+        if (q.is_post or isHiddenFromNav(q) or std.mem.eql(u8, q.url, "/")) continue;
+        const dir = parentUrl(q.url);
+        if (dir.len == 0) continue;
+        const gop = try by_dir.getOrPut(arena, dir);
+        if (!gop.found_existing) gop.value_ptr.* = .empty;
+        try gop.value_ptr.append(arena, q);
+    }
+    var lists = by_dir.iterator();
+    while (lists.next()) |e| std.mem.sortUnstable(*const Page, e.value_ptr.items, sectionSort(&index, e.key_ptr.*), navLess);
+
     for (pages, 0..) |*p, i| {
         var entries: std.ArrayList(Entry) = .empty;
         try entries.appendSlice(arena, p.base.entries);
@@ -2178,7 +2261,7 @@ fn addNavigation(arena: Allocator, pages: []Page) Allocator.Error!void {
         var dir = parentUrl(p.url);
         var stack: std.ArrayList(Value) = .empty;
         while (dir.len > 0) : (dir = parentUrl(dir)) {
-            if (pageAtUrl(pages, dir)) |anc| try stack.append(arena, try navLink(arena, anc));
+            if (index.get(dir)) |anc| try stack.append(arena, try navLink(arena, anc));
             if (dir.len == 1) break;
         }
         var k = stack.items.len;
@@ -2194,8 +2277,8 @@ fn addNavigation(arena: Allocator, pages: []Page) Allocator.Error!void {
             // Posts are newest first: the next item is older.
             if (i + 1 < pages.len and pages[i + 1].is_post) prev = &pages[i + 1];
             if (i > 0 and pages[i - 1].is_post) next = &pages[i - 1];
-        } else {
-            const siblings = try siblingPages(arena, pages, p);
+        } else if (!std.mem.eql(u8, p.url, "/")) {
+            const siblings: []const *const Page = if (by_dir.get(parentUrl(p.url))) |l| l.items else &.{};
             for (siblings, 0..) |s, si| {
                 if (s != p) continue;
                 if (si > 0) prev = siblings[si - 1];
@@ -2208,20 +2291,6 @@ fn addNavigation(arena: Allocator, pages: []Page) Allocator.Error!void {
     }
 }
 
-/// Pages in the same URL directory as `p` (not counting the directory's
-/// own index page), in navigation order.
-fn siblingPages(arena: Allocator, pages: []const Page, p: *const Page) Allocator.Error![]const *const Page {
-    const dir = parentUrl(p.url);
-    var out: std.ArrayList(*const Page) = .empty;
-    if (std.mem.eql(u8, p.url, "/") or dir.len == 0) return out.items;
-    for (pages) |*q| {
-        if (q.is_post or isHiddenFromNav(q)) continue;
-        if (std.mem.eql(u8, parentUrl(q.url), dir) and !std.mem.eql(u8, q.url, "/")) try out.append(arena, q);
-    }
-    std.mem.sortUnstable(*const Page, out.items, sectionSort(pages, dir), navLess);
-    return out.items;
-}
-
 fn isHiddenFromNav(p: *const Page) bool {
     const v = p.fields.get("nav") orelse return false;
     return v == .boolean and !v.boolean;
@@ -2231,9 +2300,9 @@ fn isHiddenFromNav(p: *const Page) bool {
 const SortMode = enum { weight, title, date, url };
 
 /// The order of the pages in the URL directory `dir`.
-fn sectionSort(pages: []const Page, dir: []const u8) SortMode {
-    const index = pageAtUrl(pages, dir) orelse return .weight;
-    const s = stringField(index.fields, "sort") orelse return .weight;
+fn sectionSort(index: *const PageIndex, dir: []const u8) SortMode {
+    const page = index.get(dir) orelse return .weight;
+    const s = stringField(page.fields, "sort") orelse return .weight;
     return std.meta.stringToEnum(SortMode, s) orelse .weight;
 }
 
@@ -2316,8 +2385,10 @@ fn addVersions(arena: Allocator, pages: []Page, versions: []const []const u8, ba
     const roots = try arena.alloc([]const u8, versions.len);
     for (versions, navs, roots) |v, *n, *r| {
         r.* = try std.fmt.allocPrint(arena, "{s}/{s}/", .{ baseurl, v });
-        n.* = try navChildren(arena, pages, r.*);
+        // The version's tree is `site.nav` rooted at its directory.
+        n.* = try navTree(arena, pages, r.*[0 .. r.len - 1]);
     }
+    const index = try pageIndex(arena, pages);
     for (pages) |*p| {
         const vi = pageVersion(p.url, versions, baseurl) orelse continue;
         // The part of the URL after the version directory.
@@ -2326,7 +2397,7 @@ fn addVersions(arena: Allocator, pages: []Page, versions: []const []const u8, ba
         var latest_url: []const u8 = roots[0];
         for (versions, roots, list, 0..) |v, root, *item, wi| {
             const same = try std.mem.concat(arena, u8, &.{ root, rest });
-            const url = if (pageAtUrl(pages, same) != null) same else root;
+            const url = if (index.get(same) != null) same else root;
             if (wi == 0) latest_url = url;
             const e = try arena.alloc(Entry, 4);
             e[0] = .{ .key = "name", .value = .{ .string = v } };
@@ -2351,25 +2422,31 @@ fn addVersions(arena: Allocator, pages: []Page, versions: []const []const u8, ba
 /// is not in the tree; pages with `nav: false` are left out.
 fn navTree(arena: Allocator, pages: []const Page, baseurl: []const u8) Allocator.Error!Value {
     const root = try std.fmt.allocPrint(arena, "{s}/", .{baseurl});
-    return navChildren(arena, pages, root);
+    const index = try pageIndex(arena, pages);
+    // Each visible page hangs under its nearest ancestor page, or the root.
+    var children: std.StringHashMapUnmanaged(std.ArrayList(*const Page)) = .empty;
+    for (pages) |*q| {
+        if (q.is_post or isHiddenFromNav(q) or std.mem.eql(u8, q.url, root)) continue;
+        if (!std.mem.startsWith(u8, q.url, root)) continue;
+        var anc = parentUrl(q.url);
+        while (anc.len > root.len and index.get(anc) == null) anc = parentUrl(anc);
+        if (anc.len < root.len) continue;
+        const gop = try children.getOrPut(arena, anc);
+        if (!gop.found_existing) gop.value_ptr.* = .empty;
+        try gop.value_ptr.append(arena, q);
+    }
+    return navChildren(arena, &index, &children, root);
 }
 
-fn navChildren(arena: Allocator, pages: []const Page, dir: []const u8) Allocator.Error!Value {
-    var kids: std.ArrayList(*const Page) = .empty;
-    for (pages) |*q| {
-        if (q.is_post or isHiddenFromNav(q) or std.mem.eql(u8, q.url, dir)) continue;
-        // The nearest ancestor page decides where a page hangs in the tree.
-        var anc = parentUrl(q.url);
-        while (anc.len > dir.len and pageAtUrl(pages, anc) == null) anc = parentUrl(anc);
-        if (std.mem.eql(u8, anc, dir)) try kids.append(arena, q);
-    }
-    std.mem.sortUnstable(*const Page, kids.items, sectionSort(pages, dir), navLess);
-    const out = try arena.alloc(Value, kids.items.len);
-    for (kids.items, out) |q, *o| {
+fn navChildren(arena: Allocator, index: *const PageIndex, children: *const std.StringHashMapUnmanaged(std.ArrayList(*const Page)), dir: []const u8) Allocator.Error!Value {
+    const kids = (children.get(dir) orelse return .{ .list = &.{} }).items;
+    std.mem.sortUnstable(*const Page, kids, sectionSort(index, dir), navLess);
+    const out = try arena.alloc(Value, kids.len);
+    for (kids, out) |q, *o| {
         const entries = try arena.alloc(Entry, 3);
         entries[0] = .{ .key = "title", .value = .{ .string = navTitle(q) } };
         entries[1] = .{ .key = "url", .value = .{ .string = q.url } };
-        entries[2] = .{ .key = "children", .value = if (std.mem.endsWith(u8, q.url, "/")) try navChildren(arena, pages, q.url) else .{ .list = &.{} } };
+        entries[2] = .{ .key = "children", .value = if (std.mem.endsWith(u8, q.url, "/")) try navChildren(arena, index, children, q.url) else .{ .list = &.{} } };
         o.* = .{ .object = .{ .entries = entries } };
     }
     return .{ .list = out };
@@ -3238,24 +3315,75 @@ fn loadInclude(ctx: *anyopaque, name: []const u8, diag: *template.Diagnostic) te
 }
 
 /// Writes every output into `out`, copying static files from `src`, and
-/// `.gz` copies of text files when the site asks for them.
+/// `.gz` copies of text files when the site asks for them. Files are
+/// written by several workers at once, which matters on file systems where
+/// each new file is slow, such as Windows with a virus scanner. On failure,
+/// `diag` names the first output, in output order, that could not be
+/// written, so the error does not depend on timing.
 pub fn writeSite(site: Site, src: SiteDir, out: SiteDir, diag: *Diagnostic) error{BuildFailed}!void {
-    for (site.outputs) |o| {
-        const result = if (site.minify and minifiable(o.path))
-            writeMinified(o, src, out)
-        else switch (o.data) {
-            .bytes => |bytes| out.writeFile(o.path, bytes),
-            .copy => src.copyFileTo(o.source, out, o.path),
-        };
-        result catch |err| {
-            diag.* = .{ .path = o.path, .message = @errorName(err) };
-            return error.BuildFailed;
-        };
-        if (site.gzip) writeGzip(o, src, out, site.minify and minifiable(o.path)) catch |err| {
-            diag.* = .{ .path = o.path, .message = @errorName(err) };
+    const outputs = site.outputs;
+    if (outputs.len == 0) return;
+    const workers = @min(std.Thread.getCpuCount() catch 1, 16, outputs.len);
+    const Worker = struct {
+        /// Index of the first output this worker failed to write, if any.
+        failed: ?usize = null,
+        err: anyerror = error.Unexpected,
+
+        fn run(w: *@This(), st: *const Site, first: usize, step: usize, s: SiteDir, o: SiteDir) void {
+            const all = st.outputs;
+            var i = first;
+            while (i < all.len) : (i += step) {
+                const item = all[i];
+                writeOne(st, item, s, o) catch |e| {
+                    w.failed = i;
+                    w.err = e;
+                    return;
+                };
+            }
+        }
+    };
+    var state: [16]Worker = @splat(.{});
+    if (workers <= 1) {
+        Worker.run(&state[0], &site, 0, 1, src, out);
+    } else {
+        // Outputs are spread round-robin, so every worker gets a mix of
+        // directories and sizes.
+        var group: std.Io.Group = .init;
+        for (state[0..workers], 0..) |*w, k| {
+            // Without a free thread, the worker runs here and now.
+            group.concurrent(src.io, Worker.run, .{ w, &site, k, workers, src, out }) catch Worker.run(w, &site, k, workers, src, out);
+        }
+        group.await(src.io) catch {
+            group.cancel(src.io);
+            diag.* = .{ .path = "", .message = "canceled" };
             return error.BuildFailed;
         };
     }
+    var first: ?usize = null;
+    var err: anyerror = error.Unexpected;
+    for (state[0..workers]) |w| if (w.failed) |i| if (first == null or i < first.?) {
+        first = i;
+        err = w.err;
+    };
+    if (first) |i| {
+        diag.* = .{ .path = outputs[i].path, .message = @errorName(err) };
+        return error.BuildFailed;
+    }
+}
+
+/// Writes one output, minified when the site asks, and its `.gz` copy.
+/// Each worker makes the directories its files need: with a directory per
+/// page, making them one by one up front would take longer than writing
+/// the files.
+fn writeOne(site: *const Site, o: Output, src: SiteDir, out: SiteDir) !void {
+    const minify_it = site.minify and minifiable(o.path);
+    if (minify_it) {
+        try writeMinified(o, src, out);
+    } else switch (o.data) {
+        .bytes => |bytes| try out.writeFile(o.path, bytes),
+        .copy => try src.copyFileTo(o.source, out, o.path),
+    }
+    if (site.gzip) try writeGzip(o, src, out, minify_it);
 }
 
 fn minifiable(path: []const u8) bool {
@@ -3334,8 +3462,50 @@ pub fn writeOutputDir(site: Site, src: SiteDir, diag: *Diagnostic) error{BuildFa
             return err;
         };
     }
-    src.deleteTree(output_dir) catch |err| return ioFail(diag, output_dir, err);
+    // Swap the new site in before deleting the old one, so `_site` is only
+    // missing between two renames, then delete the old one in parallel.
+    src.deleteTree(old_output_dir) catch |err| return ioFail(diag, old_output_dir, err);
+    const had_old = if (src.dir.rename(output_dir, src.dir, old_output_dir, src.io)) true else |err| switch (err) {
+        error.FileNotFound => false,
+        else => return ioFail(diag, output_dir, err),
+    };
     src.dir.rename(staging_dir, src.dir, output_dir, src.io) catch |err| return ioFail(diag, output_dir, err);
+    if (had_old) deleteTreeParallel(src, old_output_dir) catch |err| return ioFail(diag, old_output_dir, err);
+}
+
+/// Where `writeOutputDir` moves the previous `_site` while it is deleted.
+pub const old_output_dir = ".mortise-old";
+
+/// Deletes the directory `sp` with its top-level entries spread over
+/// several workers, which is several times faster than one at a time for
+/// a big site.
+fn deleteTreeParallel(src: SiteDir, sp: []const u8) !void {
+    const io = src.io;
+    var dir = src.dir.openDir(io, sp, .{ .iterate = true }) catch |err| switch (err) {
+        error.FileNotFound => return,
+        else => return err,
+    };
+    defer dir.close(io);
+    var names_buf: std.heap.ArenaAllocator = .init(std.heap.smp_allocator);
+    defer names_buf.deinit();
+    var names: std.ArrayList([]const u8) = .empty;
+    var it = dir.iterate();
+    while (try it.next(io)) |entry| try names.append(names_buf.allocator(), try names_buf.allocator().dupe(u8, entry.name));
+
+    const Worker = struct {
+        fn run(d: std.Io.Dir, i: std.Io, all: []const []const u8, first: usize, step: usize) void {
+            var k = first;
+            while (k < all.len) : (k += step) d.deleteTree(i, all[k]) catch {};
+        }
+    };
+    const workers = @min(std.Thread.getCpuCount() catch 1, 16, @max(names.items.len, 1));
+    var group: std.Io.Group = .init;
+    for (0..workers) |k| {
+        group.concurrent(io, Worker.run, .{ dir, io, names.items, k, workers }) catch Worker.run(dir, io, names.items, k, workers);
+    }
+    group.await(io) catch group.cancel(io);
+    // Whatever a worker could not delete makes this fail with its reason.
+    try src.deleteTree(sp);
 }
 
 fn ioFail(diag: *Diagnostic, path: []const u8, err: anyerror) error{BuildFailed} {
@@ -3957,6 +4127,12 @@ test "writeOutputDir replaces _site only after a complete write" {
     try testing.expectEqualStrings("<p>new</p>\n", try src.readFile(a, "_site/index.html"));
     try testing.expectError(error.FileNotFound, src.readFile(a, "_site/stale.html"));
     try testing.expectError(error.FileNotFound, src.readFile(a, staging_dir ++ "/index.html"));
+    // The previous site is moved aside and deleted, deep folders included.
+    try src.writeFile("_site/a/b/c/old.html", "old");
+    try writeOutputDir(site, src, &diag);
+    try testing.expectEqualStrings("<p>new</p>\n", try src.readFile(a, "_site/index.html"));
+    try testing.expectError(error.FileNotFound, src.readFile(a, "_site/a/b/c/old.html"));
+    try testing.expectError(error.FileNotFound, src.dir.statFile(testing.io, old_output_dir, .{}));
 }
 
 test "feed and sitemap are generated when the site has a url" {
@@ -4749,4 +4925,37 @@ test "mermaid blocks become SVG, and bad ones fail the build" {
     defer t.deinit();
     try testing.expect(std.mem.startsWith(u8, try t.output("a/index.html"), "<figure class=\"mt-diagram mt-diagram-flowchart\">"));
     try expectBuildError(&.{.{ "a.md", "```mermaid\ngraph TD\nA[open --> B\n```\n" }}, "a.md", 0, "diagram, line 2 of its block: node 'A' is missing ']'");
+}
+
+test "builds are deterministic, also when pages load in parallel" {
+    var t: TestSite = try .init(&.{
+        .{ "_config.yml", "title: T\nurl: https://x.dev\n" },
+        .{ "_layouts/l.html", "{{ page.title }}|{% for p in site.posts %}{{ p.url }}{% endfor %}|{% for n in site.nav %}{{ n.title }}{% endfor %}{{ content }}" },
+        .{ "_layouts/tag.html", "{{ page.tag }}:{% for p in page.posts %}{{ p.title }},{% endfor %}" },
+    });
+    defer t.deinit();
+    // Enough pages that loading is shared out across threads.
+    const src = SiteDir.borrow(testing.io, t.tmp.dir);
+    const a = t.arena.allocator();
+    for (0..150) |i| {
+        try src.writeFile(try std.fmt.allocPrint(a, "_posts/2024-01-{d:0>2}-p{d}.md", .{ i % 28 + 1, i }), try std.fmt.allocPrint(a, "---\ntitle: P{d}\nlayout: l\ntags: [t{d}]\n---\n# H{d}\n\nText *{d}*.\n", .{ i, i % 5, i, i }));
+        try src.writeFile(try std.fmt.allocPrint(a, "docs/d{d}.md", .{i}), try std.fmt.allocPrint(a, "---\ntitle: D{d}\nlayout: l\nweight: {d}\n---\nPage {d}.\n", .{ i, i % 7, i }));
+    }
+    var diag: Diagnostic = .{};
+    const first = try t.build(&diag);
+    const second = try t.build(&diag);
+    try testing.expectEqual(first.outputs.len, second.outputs.len);
+    for (first.outputs, second.outputs) |x, y| {
+        try testing.expectEqualStrings(x.path, y.path);
+        if (x.data == .bytes) try testing.expectEqualStrings(x.data.bytes, y.data.bytes);
+    }
+
+    // With several broken pages, the one reported is the first in path
+    // order, however the threads were scheduled.
+    try src.writeFile("docs/d3.md", "---\ndraft: never\n---\n");
+    try src.writeFile("docs/d90.md", "---\ndraft: maybe\n---\n");
+    for (0..3) |_| {
+        try testing.expectError(error.BuildFailed, t.build(&diag));
+        try testing.expectEqualStrings("docs/d3.md", diag.path);
+    }
 }

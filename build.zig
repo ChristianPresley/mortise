@@ -122,6 +122,23 @@ pub fn build(b: *std.Build) void {
     if (b.args) |args| bench_run.addArgs(args);
     b.step("bench", "Run the save-to-reload latency benchmark").dependOn(&bench_run.step);
 
+    // `zig build bench-build -- [PAGES] [RUNS]` times full builds of a large
+    // site, and of the same site with Hugo when it is installed.
+    const bench_build_exe = b.addExecutable(.{
+        .name = "build-time",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("bench/build_time.zig"),
+            .target = target,
+            .optimize = .ReleaseFast,
+            .imports = &.{
+                .{ .name = "mortise", .module = bench_exe.root_module.import_table.get("mortise").? },
+            },
+        }),
+    });
+    const bench_build_run = b.addRunArtifact(bench_build_exe);
+    if (b.args) |args| bench_build_run.addArgs(args);
+    b.step("bench-build", "Time full builds of a large site").dependOn(&bench_build_run.step);
+
     // Fixture tests find their inputs through absolute paths baked in here.
     const test_paths = b.addOptions();
     test_paths.addOption([]const u8, "markdown_fixtures", b.pathFromRoot("test/fixtures/markdown"));

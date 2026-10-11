@@ -23,6 +23,7 @@ zig build test                    # unit, fixture, and end-to-end tests
 zig build -Doptimize=ReleaseFast  # optimized binary
 zig build render-gallery          # renders example graphics to zig-out/render-gallery
 zig build theme-gallery           # builds the showcase in every theme to zig-out/theme-gallery
+zig build bench-build             # times full builds of a 10,000-page site
 ```
 
 ### Working on Mortise itself
@@ -90,7 +91,10 @@ page or post with `expires: YYYY-MM-DD` is left out from that date on.
 `build` and `serve` report what they skipped, as in
 `Skipped 1 draft, 2 future posts, 1 expired page`.
 
-`build` deletes and rewrites `SITE_DIR/_site` on every run. Static files
+`build` deletes and rewrites `SITE_DIR/_site` on every run, reading pages and
+writing files in parallel; 10,000 posts build in about 1.9 s on Linux (see
+[bench/](bench/README.md#full-builds)). The output is deterministic: the
+same sources always give byte-identical files. Static files
 linked with `{{ "css/site.css" | asset }}` get the `baseurl` and, in
 `build`, a content hash in their name (`css/site.3aec6594.css`) for
 long-lived caching; `| sri` gives the matching `integrity=` hash (see

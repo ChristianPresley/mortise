@@ -416,9 +416,13 @@ job:
   `_includes/`.
 - `build` writes into a hidden `.mortise-staging` directory and swaps it in
   for `_site` only after every file is written, so a failed write leaves
-  the previous `_site` intact. The swap itself (delete `_site`, then rename)
-  is two steps, so a crash between them leaves no `_site` until the next
-  build.
+  the previous `_site` intact. The swap is two renames (`_site` to
+  `.mortise-old`, then staging to `_site`), so a crash between them leaves no
+  `_site` until the next build; `.mortise-old` is then deleted.
+- Pages load and files are written on up to 16 threads. Rendering pages
+  is still done on one thread.
+- Directories starting with `.` (such as `.git`) and the top-level `_site`
+  are not read at all, so files in them are invisible to the build.
 
 ## Languages
 

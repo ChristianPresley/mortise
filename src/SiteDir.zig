@@ -91,17 +91,24 @@ pub const ListResult = struct {
 };
 
 /// Lists every regular file under the directory. Symlinks and special files
-/// are skipped. All memory comes from `arena`.
+/// are skipped, and so are directories that never hold sources: those
+/// starting with `.` (such as `.git`), which are never published, and the
+/// build's own `_site` at the top. All memory comes from `arena`.
 ///
 /// Returns `error.InvalidPath` when a file name is not a valid site path;
 /// `bad_path.*` then holds the offending native path (allocated with
 /// `arena`) so the caller can report it.
 pub fn listFiles(self: SiteDir, arena: Allocator, bad_path: *?[]const u8) !ListResult {
-    var walker = try self.dir.walk(arena);
+    var walker = try self.dir.walkSelectively(arena);
     defer walker.deinit();
 
     var files: std.ArrayList([]const u8) = .empty;
     while (try walker.next(self.io)) |entry| {
+        if (entry.kind == .directory) {
+            const skip = entry.basename[0] == '.' or (entry.depth() == 1 and std.mem.eql(u8, entry.basename, "_site"));
+            if (!skip) try walker.enter(self.io, entry);
+            continue;
+        }
         if (entry.kind != .file) continue;
         // Outside Windows the walker joins with '/', so a '\' is part of a
         // file name; normalize would wrongly treat it as a separator.
