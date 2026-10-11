@@ -86,6 +86,8 @@ scene built from meshes.
 | `hud.zig`        | Panel frames, reticles, radar scopes                           |
 | `planet.zig`     | Terran, lava, ice and gas planets with atmospheres             |
 | `SpriteSheet.zig`| Frame packing and CSS `steps` animation                        |
+| `text.zig`       | A built-in stroke font: measuring, drawing, wrapping with ellipsis |
+| `card.zig`       | 1200x630 social cards in plain, visor and lcars styles         |
 | `png.zig`        | PNG encoder and a decoder for 8-bit images                     |
 
 ## How it works
@@ -122,3 +124,6 @@ scene built from meshes.
 - Output is deterministic for a given build, but floating-point results can
   differ in the last bit between CPU architectures, so tests check
   properties of images rather than exact pixel hashes.
+- The stroke font has ASCII, curly quotes, dashes and the ellipsis.
+  Lowercase is drawn as small capitals, accented Latin letters as their
+  base letter, and every other character as a box. There is no kerning.

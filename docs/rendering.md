@@ -155,6 +155,34 @@ faintly through. Writes CSS when animated.
 | `hidden`     | 0.2         | Brightness of edges behind the shape, 0 to 1  |
 | `frames`, `seconds`, `columns` | 24, 3, 8 | As for `radar`                |
 
+### card
+
+A social card: the image link previews show for a page (Open Graph and
+Twitter cards), 1200×630 by default. The title is set in Mortise's
+built-in stroke font, a geometric, chamfered face with small capitals for
+lowercase, and wraps onto up to three lines, shrinking before it is cut
+with an ellipsis.
+
+```yaml
+kind: card
+style: visor
+title: "Hello, Mortise: what the build draws"
+subtitle: My Site
+label: 2024-01-08
+```
+
+| Field        | Default   | Meaning                                                  |
+| ------------ | --------- | -------------------------------------------------------- |
+| `title`      | required  | The big text                                             |
+| `subtitle`   | none      | Small text above the title, such as the site's name      |
+| `label`      | none      | Small text below the title, such as a date               |
+| `style`      | plain     | `plain` (accent bar), `visor` (glowing HUD panel), `lcars` (console elbow bars) |
+| `accent`, `background`, `foreground` | the style's | Colors                    |
+| `width`, `height` | 1200, 630 | Size; the layout scales with the height                |
+
+The font covers ASCII, curly quotes, dashes and the ellipsis; accented
+Latin letters are drawn as their base letter and anything else as a box.
+
 ## Speed
 
 Rendering takes from a few milliseconds (a panel) to a few seconds (a large

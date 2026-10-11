@@ -34,6 +34,8 @@ pub const starfield = @import("starfield.zig");
 pub const hud = @import("hud.zig");
 pub const planet = @import("planet.zig");
 pub const SpriteSheet = @import("SpriteSheet.zig");
+pub const text = @import("text.zig");
+pub const card = @import("card.zig");
 
 /// Encodes a canvas as a PNG file in memory. The caller owns the result.
 pub fn encodePng(gpa: Allocator, c: Canvas, tone: Canvas.ToneMap) Allocator.Error![]u8 {

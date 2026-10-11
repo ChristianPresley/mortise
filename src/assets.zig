@@ -53,7 +53,7 @@ pub const Diagnostic = struct {
 
 pub const Error = error{InvalidSpec} || Allocator.Error;
 
-pub const Kind = enum { starfield, panel, reticle, radar, planet, hologram };
+pub const Kind = enum { starfield, panel, reticle, radar, planet, hologram, card };
 
 /// Upper bounds that keep a typo from rendering for minutes.
 const max_side = 4096;
@@ -83,6 +83,7 @@ pub fn render(gpa: Allocator, arena: Allocator, io: std.Io, name: []const u8, so
         .radar => try radar(gpa, &s, class),
         .planet => try planet(gpa, &s, class),
         .hologram => try hologram(gpa, &s, class),
+        .card => try card(gpa, &s),
     };
     errdefer {
         gpa.free(rendered.png);
@@ -303,6 +304,22 @@ fn defaultAtmosphere(kind: r.planet.Kind) Color {
     };
 }
 
+fn card(gpa: Allocator, s: *Spec) Error!Rendered {
+    var c = try r.card.render(gpa, .{
+        .width = try s.side("width", 1200),
+        .height = try s.side("height", 630),
+        .title = try s.text("title", null),
+        .subtitle = try s.text("subtitle", ""),
+        .label = try s.text("label", ""),
+        .style = try s.enumField(r.card.Style, "style", .plain),
+        .accent = try s.optionalColor("accent"),
+        .background = try s.optionalColor("background"),
+        .foreground = try s.optionalColor("foreground"),
+    });
+    defer c.deinit(gpa);
+    return .{ .png = try r.encodePng(gpa, c, .clamp), .css = null };
+}
+
 pub const Shape = enum { icosphere, sphere, cube, torus, gem };
 
 fn hologram(gpa: Allocator, s: *Spec, class: []const u8) Error!Rendered {
@@ -467,6 +484,22 @@ const Spec = struct {
         return s.fail(s.lineOf(key), "'{s}' must be a color such as \"#3fd8ff\" (quoted, since # starts a comment)", .{key});
     }
 
+    fn optionalColor(s: *Spec, key: []const u8) Error!?Color {
+        if (s.fields.get(key) == null) return null;
+        return try s.color(key, undefined);
+    }
+
+    /// Text; numbers are written out as text.
+    fn text(s: *Spec, key: []const u8, default: ?[]const u8) Error![]const u8 {
+        const v = s.get(key) orelse return default orelse s.fail(0, "'{s}' is required", .{key});
+        return switch (v) {
+            .string => |t| t,
+            .int => |i| std.fmt.allocPrint(s.arena, "{d}", .{i}),
+            .float => |f| std.fmt.allocPrint(s.arena, "{d}", .{f}),
+            else => s.fail(s.lineOf(key), "'{s}' must be text", .{key}),
+        };
+    }
+
     fn enumField(s: *Spec, comptime E: type, key: []const u8, default: ?E) Error!E {
         const v = s.get(key) orelse {
             if (default) |d| return d;
@@ -572,13 +605,15 @@ test "colors" {
 }
 
 test "bad specs name the line" {
-    try expectSpecError("width: 64\n", 0, "'kind' is required; it must be one of: starfield, panel, reticle, radar, planet, hologram");
-    try expectSpecError("kind: nebula\n", 1, "'kind' must be one of: starfield, panel, reticle, radar, planet, hologram");
+    try expectSpecError("width: 64\n", 0, "'kind' is required; it must be one of: starfield, panel, reticle, radar, planet, hologram, card");
+    try expectSpecError("kind: nebula\n", 1, "'kind' must be one of: starfield, panel, reticle, radar, planet, hologram, card");
     try expectSpecError("kind: starfield\nwidht: 64\n", 2, "unknown field 'widht'");
     try expectSpecError("kind: starfield\nwidth: 99999\n", 2, "'width' must be a whole number from 8 to 4096");
     try expectSpecError("kind: reticle\ncolor: teal\n", 2, "'color' must be a color such as \"#3fd8ff\" (quoted, since # starts a comment)");
     try expectSpecError("kind: panel\nwidth: 64\nheight: 64\n", 0, "the panel is too small for its corners; make it at least 152 pixels on each side");
     try expectSpecError("kind: [a\n", 1, "unterminated list; add ']'");
+    try expectSpecError("kind: card\nsubtitle: x\n", 0, "'title' is required");
+    try expectSpecError("kind: card\ntitle: x\nstyle: neon\n", 3, "'style' must be one of: plain, visor, lcars");
 }
 
 test "kinds render PNGs, with CSS where needed" {
