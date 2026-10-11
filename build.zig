@@ -181,6 +181,24 @@ pub fn build(b: *std.Build) void {
     if (b.args) |args| gallery_run.addArgs(args) else gallery_run.addArg(b.getInstallPath(.prefix, "render-gallery"));
     b.step("render-gallery", "Render the renderer's example gallery").dependOn(&gallery_run.step);
 
+    // `zig build theme-gallery -- [OUT_DIR]` builds the showcase with every
+    // built-in theme into OUT_DIR (default zig-out/theme-gallery).
+    const theme_gallery_exe = b.addExecutable(.{
+        .name = "theme-gallery",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tools/theme_gallery.zig"),
+            .target = target,
+            .optimize = .ReleaseFast,
+            .imports = &.{
+                .{ .name = "mortise", .module = mod },
+            },
+        }),
+    });
+    const theme_gallery_run = b.addRunArtifact(theme_gallery_exe);
+    theme_gallery_run.addArg(b.pathFromRoot("examples/showcase"));
+    if (b.args) |args| theme_gallery_run.addArgs(args) else theme_gallery_run.addArg(b.getInstallPath(.prefix, "theme-gallery"));
+    b.step("theme-gallery", "Build the showcase with every theme").dependOn(&theme_gallery_run.step);
+
     const test_step = b.step("test", "Run all unit and fixture tests");
     test_step.dependOn(&b.addRunArtifact(mod_tests).step);
     test_step.dependOn(&b.addRunArtifact(exe_tests).step);

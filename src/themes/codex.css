@@ -1,0 +1,186 @@
+/* Mortise theme "codex": the encyclopedia of a starship's computer.
+   Holographic blue on deep navy over a faint hexagon lattice, thin
+   tracked headings, rules that end in nodes, and entry panels with one
+   cut corner; orange marks what can be used. Colors come from the --m-
+   design tokens; no fonts, images or scripts. Motion stops under
+   prefers-reduced-motion. */
+
+:root {
+  --x-blue: var(--m-accent);
+  --x-orange: var(--m-accent2);
+  --x-holo: color-mix(in srgb, var(--m-accent) 45%, transparent);
+  --x-panel: color-mix(in srgb, var(--m-surface) 82%, transparent);
+  --x-cut: polygon(16px 0, 100% 0, 100% 100%, 0 100%, 0 16px);
+  --x-display: "Segoe UI Variable Display", "Segoe UI", "Helvetica Neue", "Roboto", system-ui, sans-serif;
+  --x-mono: "Cascadia Code", ui-monospace, SFMono-Regular, Consolas, monospace;
+  --mt-border: var(--m-border);
+  --mt-surface: var(--x-panel);
+  --mt-subtle: color-mix(in srgb, var(--m-accent) 7%, transparent);
+  --mt-muted: var(--m-muted);
+  --mt-accent: var(--m-accent);
+  --mt-note: var(--m-accent);
+  --mt-tip: #63e0b4;
+  --mt-important: #b79bff;
+  --mt-warning: var(--m-accent2);
+  --mt-caution: #ff5d6c;
+  --mt-radius: 0;
+}
+
+html {
+  scrollbar-color: var(--m-border) var(--m-bg);
+  background:
+    radial-gradient(ellipse 70% 50% at 70% 0, color-mix(in srgb, var(--m-accent) 12%, transparent), transparent 70%) fixed,
+    /* A hexagon lattice: two offset grids of soft dots. */
+    radial-gradient(circle at 50% 50%, color-mix(in srgb, var(--m-accent) 10%, transparent) 1.4px, transparent 1.6px) 0 0 / 28px 48px,
+    radial-gradient(circle at 50% 50%, color-mix(in srgb, var(--m-accent) 10%, transparent) 1.4px, transparent 1.6px) 14px 24px / 28px 48px,
+    var(--m-bg);
+}
+
+:root body {
+  color: var(--m-text);
+  background: transparent;
+  font-family: var(--x-display);
+  font-size: 17px;
+  font-weight: 380;
+}
+::selection { background: var(--x-blue); color: var(--m-bg); }
+
+:root body > header {
+  padding: 1.2rem 0 1rem;
+  margin-bottom: 2rem;
+  border-bottom: 1px solid var(--m-border);
+  position: relative;
+}
+/* A node at each end of the header rule. */
+:root body > header::after {
+  content: "";
+  position: absolute;
+  left: -4px;
+  right: -4px;
+  bottom: -4px;
+  height: 7px;
+  background: radial-gradient(circle, var(--x-blue) 2.5px, transparent 3px) left / 7px 7px no-repeat, radial-gradient(circle, var(--x-blue) 2.5px, transparent 3px) right / 7px 7px no-repeat;
+}
+:root body > header .brand {
+  color: #fff;
+  font-weight: 300;
+  font-size: 1.15rem;
+  letter-spacing: .35em;
+  text-transform: uppercase;
+  text-decoration: none;
+}
+:root body > header .brand::before { content: "\2B21  "; color: var(--x-blue); }
+:root body > header nav { gap: .2rem 1.2rem; }
+:root body > header nav a {
+  padding: .2rem 0;
+  color: var(--m-muted);
+  font-size: .82rem;
+  letter-spacing: .18em;
+  text-transform: uppercase;
+  text-decoration: none;
+  border-bottom: 2px solid transparent;
+}
+:root body > header nav a:hover { color: #fff; border-bottom-color: var(--x-holo); }
+:root body > header nav a.current { color: #fff; border-bottom-color: var(--x-orange); }
+
+:root body :is(h1, h2, h3, h4) { font-family: var(--x-display); color: #fff; font-weight: 300; letter-spacing: .08em; }
+:root body h1 { font-size: 2.3rem; letter-spacing: .12em; text-transform: uppercase; text-shadow: 0 0 22px var(--x-holo); animation: x-resolve .9s ease-out both; }
+@keyframes x-resolve { from { opacity: 0; letter-spacing: .4em; filter: blur(3px); } }
+:root body h1 + p, :root body .lead { color: var(--m-muted); font-size: 1.1rem; }
+:root body h2 {
+  position: relative;
+  margin-top: 2.6rem;
+  padding-bottom: .35rem;
+  font-size: 1.3rem;
+  text-transform: uppercase;
+  letter-spacing: .16em;
+  border-bottom: 1px solid var(--m-border);
+}
+:root body h2::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  bottom: -4px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--x-blue);
+  box-shadow: 0 0 8px var(--x-holo);
+}
+:root body h3 { font-size: 1.05rem; color: var(--x-blue); font-weight: 500; letter-spacing: .05em; }
+:root body :is(.mt-api, .mt-card, .mt-details, .mt-callout, .mt-tabs, .mt-api-card) h2 { border: 0; }
+:root body :is(.mt-api, .mt-card, .mt-details, .mt-callout, .mt-tabs, .mt-api-card) h2::after { content: none; }
+
+:root body a { color: var(--x-blue); text-decoration: none; }
+:root body a:hover { color: var(--x-orange); }
+:root body main p a { border-bottom: 1px solid var(--x-holo); }
+:root body main p a:hover { border-bottom-color: var(--x-orange); }
+:root body :is(.lead, .meta, small) { color: var(--m-muted); }
+:root body strong { color: #fff; font-weight: 600; }
+:root body hr { border: 0; height: 1px; background: linear-gradient(90deg, var(--x-blue), var(--m-border) 30%, var(--m-border) 70%, transparent); }
+:root body mark { background: color-mix(in srgb, var(--m-accent2) 25%, transparent); color: #fff; box-shadow: inset 0 -2px 0 var(--x-orange); }
+
+/* Entry panels: translucent, one corner cut, a lit top edge. */
+:root body :is(pre, .toc-box, .mt-card, .mt-details, .mt-figure, .mt-code, .mt-api-op, .mt-api-schema, .mt-api-card, .mt-callout, .pager .prev, .pager .next) {
+  border: 1px solid var(--m-border);
+  border-top: 2px solid var(--x-blue);
+  border-radius: 0;
+  background: linear-gradient(to bottom, color-mix(in srgb, var(--m-accent) 8%, var(--x-panel)), var(--x-panel) 3rem);
+  clip-path: var(--x-cut);
+}
+:root body pre { padding: 1rem 1.2rem; background: color-mix(in srgb, #02060c 90%, transparent); color: var(--m-text); }
+:root body .mt-code pre { border: 0; clip-path: none; }
+:root body .mt-code-title { color: var(--x-blue); letter-spacing: .1em; }
+:root body code { font-family: var(--x-mono); }
+:root body :not(pre) > code { padding: .05rem .35rem; background: color-mix(in srgb, var(--m-accent) 12%, transparent); color: #cfe7ff; border-radius: 2px; }
+:root body .hl-keyword { color: #8ec5ff; }
+:root body :is(.hl-literal, .hl-number) { color: var(--x-orange); }
+:root body .hl-string { color: #8fe3c0; }
+:root body .hl-comment { color: #5d7390; font-style: italic; }
+:root body .hl-builtin { color: #c9a8ff; }
+
+:root body .toc-box strong { color: var(--x-orange); letter-spacing: .25em; text-transform: uppercase; font-size: .72rem; font-weight: 600; }
+:root body .toc-box a { color: var(--m-text); }
+:root body .toc-box a:hover { color: var(--x-orange); }
+
+:root body .mt-callout { border-top-color: var(--mt-tone); background: linear-gradient(to bottom, color-mix(in srgb, var(--mt-tone) 12%, var(--x-panel)), var(--x-panel) 3rem); }
+:root body .mt-callout-title { letter-spacing: .2em; text-transform: uppercase; font-size: .78rem; font-weight: 600; }
+
+:root body table { border-collapse: collapse; }
+:root body :is(th, td) { border: 0; border-bottom: 1px solid var(--m-border); }
+:root body th { color: var(--x-blue); font-weight: 500; text-transform: uppercase; letter-spacing: .14em; font-size: .78rem; border-bottom: 2px solid var(--x-blue); }
+:root body tbody tr:hover { background: color-mix(in srgb, var(--m-accent) 6%, transparent); }
+:root body blockquote { border-left: 2px solid var(--x-orange); background: color-mix(in srgb, var(--m-accent2) 5%, transparent); color: var(--m-text); font-style: italic; }
+
+:root body :is(.tag, .mt-badge) { background: color-mix(in srgb, var(--m-accent) 12%, transparent); border: 1px solid var(--m-border); border-radius: 0; color: var(--x-blue); font-size: .75rem; letter-spacing: .1em; text-transform: uppercase; }
+:root body .mt-kbd { background: var(--m-surface); color: #fff; border: 1px solid var(--m-border); border-bottom: 2px solid var(--x-blue); border-radius: 2px; box-shadow: none; }
+:root body .mt-method { border-radius: 0; }
+:root body .mt-steps li::before { border-radius: 0; background: var(--m-surface); color: var(--x-blue); box-shadow: 0 0 0 1px var(--x-blue); clip-path: polygon(30% 0, 70% 0, 100% 50%, 70% 100%, 30% 100%, 0 50%); }
+:root body .mt-steps li { border-left: 1px solid var(--m-border); }
+:root body .mt-actions a { border: 1px solid var(--x-orange); border-radius: 0; color: var(--x-orange); text-transform: uppercase; letter-spacing: .15em; font-size: .82rem; text-decoration: none; clip-path: var(--x-cut); }
+:root body .mt-actions a:first-of-type { background: var(--x-orange); color: #140800; }
+:root body .mt-actions a:hover { filter: brightness(1.15); }
+:root body .mt-tab-label { border-radius: 0; letter-spacing: .08em; }
+
+/* The codex index. */
+:root body .wiki-nav-title { color: var(--x-orange); letter-spacing: .3em; font-weight: 600; }
+:root body .wiki-nav a { color: var(--m-text); border-radius: 0; border-left: 2px solid transparent; }
+:root body .wiki-nav a:hover { background: color-mix(in srgb, var(--m-accent) 8%, transparent); color: #fff; }
+:root body .wiki-nav a.current { background: linear-gradient(90deg, color-mix(in srgb, var(--m-accent) 22%, transparent), transparent); color: #fff; border-left-color: var(--x-orange); }
+:root body .wiki-nav ul ul { border-left-color: var(--m-border); }
+:root body .breadcrumbs, :root body .breadcrumbs a { color: var(--m-muted); text-transform: uppercase; letter-spacing: .14em; font-size: .72rem; }
+:root body .breadcrumbs .here { color: var(--x-blue); }
+:root body .pager a { text-decoration: none; padding: .7rem 1rem; }
+:root body .pager small { color: var(--x-orange); letter-spacing: .2em; text-transform: uppercase; }
+:root body .posts li { list-style: none; padding: .2rem 0 .2rem .9rem; border-left: 2px solid var(--m-border); }
+:root body .posts li:hover { border-left-color: var(--x-orange); }
+
+:root body > footer { border-top: 1px solid var(--m-border); color: var(--m-muted); font-size: .8rem; letter-spacing: .1em; opacity: 1; }
+:root body > footer p::before { content: "CODEX ENTRY ACQUIRED \00b7  "; color: var(--x-blue); letter-spacing: .2em; }
+
+@media (prefers-reduced-motion: reduce) {
+  :root body *, :root body *::before, :root body *::after { animation: none !important; transition: none !important; }
+}
+@media (max-width: 760px) {
+  :root body .toc-box { float: none; margin: 0 0 1rem; }
+}

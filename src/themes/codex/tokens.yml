@@ -1,0 +1,9 @@
+# Design tokens for the codex theme: a starship's encyclopedia.
+scheme: dark
+bg: "#070d17"
+surface: "#0d1828"
+text: "#dbe5f0"
+muted: "#7f93ab"
+accent: "#56b0ff"
+accent2: "#ff8c2e"
+border: "#21354f"

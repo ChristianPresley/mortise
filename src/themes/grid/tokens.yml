@@ -1,0 +1,9 @@
+# Design tokens for the grid theme: light lines inside a computer world.
+scheme: dark
+bg: "#00040a"
+surface: "#020c16"
+text: "#d8f8ff"
+muted: "#6a97a6"
+accent: "#2ff3ff"
+accent2: "#ff9a1f"
+border: "#0f4655"

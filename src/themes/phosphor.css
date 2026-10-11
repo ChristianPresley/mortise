@@ -1,0 +1,171 @@
+/* Mortise theme "phosphor": a monochrome CRT terminal.
+   Every color derives from the --m- design tokens, so retinting the text
+   and accent tokens gives an amber or white monitor. One monospace face,
+   glowing text, scanlines and a curved, vignetted tube; no fonts or
+   scripts. Motion stops under prefers-reduced-motion. */
+
+:root {
+  --p-glow: color-mix(in srgb, var(--m-text) 55%, transparent);
+  --p-dim: color-mix(in srgb, var(--m-text) 14%, transparent);
+  --p-faint: color-mix(in srgb, var(--m-text) 7%, transparent);
+  --p-mono: "Cascadia Mono", "IBM Plex Mono", "DejaVu Sans Mono", ui-monospace, SFMono-Regular, Consolas, monospace;
+  --mt-border: var(--m-border);
+  --mt-surface: var(--p-faint);
+  --mt-subtle: var(--p-faint);
+  --mt-muted: var(--m-muted);
+  --mt-accent: var(--m-accent);
+  --mt-note: var(--m-text);
+  --mt-tip: var(--m-text);
+  --mt-important: var(--m-accent);
+  --mt-warning: var(--m-accent);
+  --mt-caution: var(--m-danger);
+  --mt-radius: 0;
+}
+
+html {
+  background: radial-gradient(ellipse 80% 70% at 50% 40%, color-mix(in srgb, var(--m-text) 6%, var(--m-bg)), var(--m-bg) 75%) fixed, var(--m-bg);
+  scrollbar-color: var(--m-border) transparent;
+}
+
+:root body {
+  color: var(--m-text);
+  background: transparent;
+  font-family: var(--p-mono);
+  font-size: 16px;
+  line-height: 1.6;
+  text-shadow: 0 0 .5px var(--m-text), 0 0 7px var(--p-glow);
+}
+
+/* The tube: scanlines, a slow refresh band, and dark curved corners. */
+:root body::before,
+:root body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 2147483000;
+  pointer-events: none;
+}
+:root body::before {
+  background:
+    repeating-linear-gradient(to bottom, rgba(0, 0, 0, .28) 0 1px, transparent 1px 3px),
+    radial-gradient(ellipse 110% 105% at 50% 50%, transparent 58%, rgba(0, 0, 0, .7) 100%);
+}
+:root body::after {
+  height: 18vh;
+  background: linear-gradient(to bottom, transparent, color-mix(in srgb, var(--m-text) 5%, transparent), transparent);
+  animation: p-refresh 7s linear infinite;
+}
+@keyframes p-refresh { from { transform: translateY(-20vh); } to { transform: translateY(110vh); } }
+
+::selection { background: var(--m-text); color: var(--m-bg); text-shadow: none; }
+
+/* The prompt line. */
+:root body > header {
+  padding: 1rem 0 .8rem;
+  border-bottom: 1px dashed var(--m-border);
+}
+:root body > header .brand { color: var(--m-accent); font-weight: 700; letter-spacing: .04em; text-decoration: none; }
+:root body > header .brand:hover { background: none; color: var(--m-accent); text-shadow: inherit; }
+:root body > header .brand::before { content: "user@"; color: var(--m-muted); font-weight: 400; }
+:root body > header .brand::after { content: ":~$"; color: var(--m-muted); font-weight: 400; }
+:root body > header nav { gap: .2rem 1.1rem; }
+:root body > header nav a { color: var(--m-text); text-decoration: none; }
+:root body > header nav a::before { content: "./"; color: var(--m-muted); }
+:root body > header nav a:hover,
+:root body > header nav a.current { background: var(--m-text); color: var(--m-bg); text-shadow: none; }
+:root body > header nav a:is(:hover, .current)::before { color: inherit; }
+
+/* Headings: the same face, set apart by markers rather than size. */
+:root body :is(h1, h2, h3, h4) { font-family: var(--p-mono); color: var(--m-accent); font-weight: 700; letter-spacing: .02em; line-height: 1.3; }
+:root body h1 { font-size: 1.6rem; text-transform: uppercase; animation: p-type 1s steps(18) both; }
+:root body h1::after { content: "\2588"; margin-left: .2em; font-weight: 400; animation: p-blink 1s steps(2) infinite; }
+@keyframes p-blink { 50% { opacity: 0; } }
+@keyframes p-type { from { clip-path: inset(0 100% 0 0); } to { clip-path: inset(0 0 0 0); } }
+:root body h2 { font-size: 1.2rem; margin-top: 2.2rem; }
+:root body h2::before { content: "## "; color: var(--m-muted); }
+:root body h3 { font-size: 1.05rem; }
+:root body h3::before { content: "### "; color: var(--m-muted); }
+:root body :is(.mt-api, .mt-card, .mt-details, .mt-callout, .mt-tabs, .mt-api-card) :is(h2, h3)::before { content: none; }
+
+:root body a { color: var(--m-accent); text-decoration: underline; text-decoration-style: dotted; text-underline-offset: 3px; }
+:root body a:hover { background: var(--m-accent); color: var(--m-bg); text-decoration: none; text-shadow: none; }
+:root body :is(.lead, .meta, small) { color: var(--m-muted); }
+:root body hr { border: 0; height: auto; overflow: hidden; color: var(--m-muted); text-align: center; }
+:root body hr::after { content: "- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - -"; white-space: nowrap; }
+:root body ul { list-style: none; padding-left: 1.4rem; }
+:root body ul > li::before { content: "* "; margin-left: -1.4rem; display: inline-block; width: 1.4rem; color: var(--m-muted); }
+:root body :is(.mt-tasks, .mt-steps, .mt-tabs ul, .wiki-nav ul, .posts) > li::before { content: none; }
+:root body mark { background: var(--m-text); color: var(--m-bg); text-shadow: none; padding: 0 .2rem; }
+
+/* Boxes: text-mode frames. */
+:root body :is(pre, .toc-box, .mt-card, .mt-details, .mt-figure, .mt-code, .mt-api-op, .mt-api-schema, .mt-api-card, .mt-callout, .pager .prev, .pager .next) {
+  border: 1px solid var(--m-border);
+  border-radius: 0;
+  background: color-mix(in srgb, var(--m-surface) 80%, transparent);
+  box-shadow: inset 0 0 18px color-mix(in srgb, var(--m-text) 6%, transparent);
+}
+:root body .mt-card { border-style: double; border-width: 3px; }
+:root body pre { padding: 1rem; color: var(--m-text); }
+:root body .mt-code pre { border: 0; box-shadow: none; }
+:root body .mt-code-title { background: var(--m-text); color: var(--m-bg); text-shadow: none; }
+:root body code { font-family: var(--p-mono); }
+:root body :not(pre) > code { padding: 0 .3rem; background: var(--p-dim); color: var(--m-accent); border-radius: 0; }
+/* Syntax colors become brightness and style. */
+:root body .hl-keyword { color: var(--m-accent); font-weight: 700; }
+:root body :is(.hl-literal, .hl-number) { color: var(--m-accent); }
+:root body .hl-string { color: var(--m-text); text-decoration: underline dotted color-mix(in srgb, var(--m-text) 40%, transparent); }
+:root body .hl-comment { color: var(--m-muted); font-style: italic; }
+:root body .hl-builtin { color: var(--m-accent); font-style: italic; }
+
+:root body .toc-box strong { color: var(--m-accent); }
+:root body .toc-box strong::before { content: "["; color: var(--m-muted); }
+:root body .toc-box strong::after { content: "]"; color: var(--m-muted); }
+
+:root body .mt-callout { border-left: 4px double var(--mt-tone); }
+:root body .mt-callout-title { text-transform: uppercase; letter-spacing: .1em; }
+:root body .mt-callout-title::before { content: "!! "; }
+
+:root body table { border-collapse: collapse; }
+:root body :is(th, td) { border: 1px dashed var(--m-border); padding: .3rem .7rem; }
+:root body th { background: var(--p-dim); color: var(--m-accent); text-transform: uppercase; font-size: .85rem; }
+:root body blockquote { border-left: 0; padding-left: 1.6rem; color: var(--m-muted); position: relative; }
+:root body blockquote::before { content: ">"; position: absolute; left: .3rem; color: var(--m-text); }
+
+:root body :is(.tag, .mt-badge) { border: 1px solid var(--m-border); border-radius: 0; background: none; color: var(--m-text); padding: 0 .35rem; font-size: .8rem; }
+:root body :is(.tag, .mt-badge)::before { content: "#"; color: var(--m-muted); }
+:root body .mt-kbd { border: 1px solid var(--m-text); border-radius: 0; background: none; color: var(--m-accent); box-shadow: 2px 2px 0 var(--m-border); }
+:root body .mt-method { border-radius: 0; background: var(--m-text); color: var(--m-bg); text-shadow: none; }
+:root body .mt-steps li::before { border-radius: 0; background: var(--m-text); color: var(--m-bg); text-shadow: none; }
+:root body .mt-steps li { border-left: 1px dashed var(--m-border); }
+:root body .mt-actions a { border: 1px solid var(--m-text); border-radius: 0; background: none; color: var(--m-text); text-decoration: none; }
+:root body .mt-actions a::before { content: "[ "; }
+:root body .mt-actions a::after { content: " ]"; }
+:root body .mt-actions a:first-of-type,
+:root body .mt-actions a:hover { background: var(--m-text); color: var(--m-bg); text-shadow: none; }
+:root body .mt-tab-label { border-radius: 0; }
+
+:root body .wiki-nav-title { color: var(--m-muted); text-transform: uppercase; letter-spacing: .1em; }
+:root body .wiki-nav a { color: var(--m-text); border-radius: 0; text-decoration: none; }
+:root body .wiki-nav a:hover { background: var(--p-dim); color: var(--m-accent); }
+:root body .wiki-nav a.current { background: var(--m-text); color: var(--m-bg); text-shadow: none; }
+:root body .wiki-nav a.current::before { content: "> "; }
+:root body .breadcrumbs, :root body .breadcrumbs a { color: var(--m-muted); }
+:root body .breadcrumbs .here { color: var(--m-accent); }
+:root body .pager a { text-decoration: none; padding: .6rem .9rem; }
+:root body .pager small { color: var(--m-muted); text-transform: uppercase; }
+:root body .pager .prev small::before { content: "<< "; }
+:root body .pager .next small::after { content: " >>"; }
+:root body .posts { list-style: none; padding-left: 0; }
+:root body .posts li::before { content: "-rw-r--r--  "; color: var(--m-muted); white-space: pre; }
+
+:root body > footer { border-top: 1px dashed var(--m-border); color: var(--m-muted); opacity: 1; }
+:root body > footer p::before { content: "[process completed] "; color: var(--m-text); }
+
+@media (prefers-reduced-motion: reduce) {
+  :root body *, :root body *::before, :root body *::after { animation: none !important; transition: none !important; }
+  :root body::after { display: none; }
+}
+@media (max-width: 760px) {
+  :root body .toc-box { float: none; margin: 0 0 1rem; }
+  :root body .posts li::before { content: none; }
+}

@@ -1,0 +1,12 @@
+# Design tokens for the cyberdeck theme: neon on a dark violet field.
+scheme: dark
+bg: "#0a0612"
+surface: "#150b24"
+text: "#e8e3ff"
+muted: "#9187b8"
+accent: "#ff2bd6"
+accent2: "#19f0ff"
+border: "#3b2160"
+warning: "#f5e400"
+success: "#3dffa2"
+danger: "#ff3b5c"

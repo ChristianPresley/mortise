@@ -398,6 +398,9 @@ pub const Options = struct {
     /// Publish posts dated after `today` (`--future`, or `future: true`
     /// in `_config.yml`).
     future: bool = false,
+    /// Config settings that replace or add to those in `_config.yml`, for
+    /// tools that build one site several ways (such as the theme gallery).
+    config: []const frontmatter.Entry = &.{},
 };
 
 /// `build` with options.
@@ -418,6 +421,7 @@ pub fn buildWith(arena: Allocator, src: SiteDir, options: Options, diag: *Diagno
     for (listing.files) |path| {
         if (std.mem.eql(u8, path, config_path)) config_fields = try loadConfig(&b);
     }
+    if (options.config.len > 0) config_fields = try overrideConfig(arena, config_fields, options.config);
     b.baseurl = try baseUrl(&b, config_fields);
     b.site_url = try siteUrl(&b, config_fields);
     b.markdown_options = try markdownOptions(&b, config_fields);
@@ -1438,6 +1442,20 @@ fn addImageVariants(b: *Builder, outputs: *std.ArrayList(Output), pages: []const
         error.ImageFailed => return b.fail(failure.path, 0, "cannot resize this image for srcset ({s}); convert it to an 8-bit PNG or a baseline or progressive JPEG", .{failure.reason}),
     };
     for (list.items, files) |v, bytes| try outputs.append(arena, .{ .path = v.path, .source = v.source, .data = .{ .bytes = bytes } });
+}
+
+/// `fields` with each of `overrides` replacing the setting of its name, or
+/// added after them.
+fn overrideConfig(arena: Allocator, fields: frontmatter.Map, overrides: []const frontmatter.Entry) Allocator.Error!frontmatter.Map {
+    var out: std.ArrayList(frontmatter.Entry) = .empty;
+    for (fields.entries) |e| {
+        const v = for (overrides) |o| {
+            if (std.mem.eql(u8, o.key, e.key)) break o.value;
+        } else e.value;
+        try out.append(arena, .{ .key = e.key, .value = v });
+    }
+    for (overrides) |o| if (fields.get(o.key) == null) try out.append(arena, o);
+    return .{ .entries = out.items };
 }
 
 fn startsWithFrontmatter(b: *Builder, path: []const u8) Error!bool {
@@ -3113,7 +3131,7 @@ test "an unknown theme names the config line and the themes" {
     try expectBuildError(&.{
         .{ "_config.yml", "title: T\ntheme: borg\n" },
         .{ "index.md", "hi\n" },
-    }, "_config.yml", 2, "unknown theme 'borg'; the themes are: visor, lcars");
+    }, "_config.yml", 2, "unknown theme 'borg'; the themes are: visor, lcars, phosphor");
 }
 
 test "render specs become images, with CSS for animated kinds" {

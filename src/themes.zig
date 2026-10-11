@@ -70,7 +70,18 @@ pub const all = [_]Theme{
         .{ .name = "planet", .spec = @embedFile("themes/lcars/planet.yml") },
         .{ .name = "hologram", .spec = @embedFile("themes/lcars/hologram.yml") },
     } },
+    plain("phosphor"),
+    plain("cyberdeck"),
+    plain("freighter"),
+    plain("grid"),
+    plain("codex"),
+    plain("cockpit"),
 };
+
+/// A theme on `core` made of `themes/NAME.css` and `themes/NAME/tokens.yml`.
+fn plain(comptime name: []const u8) Theme {
+    return .{ .name = name, .base = "core", .css = @embedFile("themes/" ++ name ++ ".css"), .tokens = @embedFile("themes/" ++ name ++ "/tokens.yml") };
+}
 
 /// The built-in theme `name`, including hidden ones (for `base`).
 pub fn find(name: []const u8) ?Theme {
@@ -78,7 +89,7 @@ pub fn find(name: []const u8) ?Theme {
     return null;
 }
 
-/// "visor, lcars", for error messages: the themes a site can pick.
+/// "visor, lcars, ...", for error messages: the themes a site can pick.
 pub const names = blk: {
     var s: []const u8 = "";
     for (all) |t| {
@@ -97,6 +108,6 @@ test "find" {
     try std.testing.expect(find("visor") != null);
     try std.testing.expect(find("lcars") != null);
     try std.testing.expect(find("nope") == null);
-    try std.testing.expectEqualStrings("visor, lcars", names);
+    try std.testing.expectEqualStrings("visor, lcars, phosphor, cyberdeck, freighter, grid, codex, cockpit", names);
     try std.testing.expect(file(find("core").?, "_layouts/post.html") != null);
 }

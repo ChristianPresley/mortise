@@ -1,0 +1,214 @@
+/* Mortise theme "cockpit": the flight deck of a trading ship.
+   Orange vector light on black, framed by the canopy's struts, with
+   trapezoid console panels, extended uppercase readouts, and ice blue for
+   the odd cold instrument. Colors come from the --m- design tokens; no
+   fonts, images or scripts. Motion stops under prefers-reduced-motion. */
+
+:root {
+  --k-orange: var(--m-accent);
+  --k-ice: var(--m-accent2);
+  --k-line: color-mix(in srgb, var(--m-accent) 45%, transparent);
+  --k-dim: color-mix(in srgb, var(--m-accent) 14%, transparent);
+  --k-panel: color-mix(in srgb, var(--m-surface) 78%, transparent);
+  /* A console panel: wider at the top, its lower corners bevelled. */
+  --k-bevel: polygon(0 0, 100% 0, 100% calc(100% - 12px), calc(100% - 12px) 100%, 12px 100%, 0 calc(100% - 12px));
+  --k-display: "Bahnschrift", "Eurostile", "Microgramma", "Arial Narrow", system-ui, sans-serif;
+  --k-mono: "Cascadia Code", ui-monospace, SFMono-Regular, Consolas, monospace;
+  --mt-border: var(--k-line);
+  --mt-surface: var(--k-panel);
+  --mt-subtle: var(--k-dim);
+  --mt-muted: var(--m-muted);
+  --mt-accent: var(--m-accent);
+  --mt-note: var(--m-accent2);
+  --mt-tip: var(--m-accent);
+  --mt-important: var(--m-accent);
+  --mt-warning: #ffd23f;
+  --mt-caution: var(--m-danger);
+  --mt-radius: 0;
+}
+
+html {
+  scrollbar-color: var(--m-border) var(--m-bg);
+  background:
+    radial-gradient(ellipse 120% 70% at 50% 120%, color-mix(in srgb, var(--m-accent) 10%, transparent), transparent 60%) fixed,
+    var(--m-bg);
+}
+
+:root body {
+  color: var(--m-text);
+  background: transparent;
+  font-family: var(--k-display);
+  font-size: 17px;
+  letter-spacing: .03em;
+  text-shadow: 0 0 6px color-mix(in srgb, var(--m-accent) 35%, transparent);
+}
+
+/* The canopy: struts in the top corners and the dash's edge below, all
+   behind the page. */
+:root body::before,
+:root body::after {
+  content: "";
+  position: fixed;
+  top: 0;
+  width: 16vw;
+  height: 34vh;
+  z-index: -1;
+  pointer-events: none;
+  background: linear-gradient(to bottom right, #000 0 45%, transparent 45.3%);
+  filter: drop-shadow(0 0 1px var(--k-orange)) drop-shadow(0 0 6px color-mix(in srgb, var(--m-accent) 40%, transparent));
+  opacity: .9;
+}
+:root body::before { left: 0; clip-path: polygon(0 0, 100% 0, 0 100%); }
+:root body::after { right: 0; transform: scaleX(-1); clip-path: polygon(0 0, 100% 0, 0 100%); }
+html::after {
+  content: "";
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 2.2rem;
+  z-index: -1;
+  pointer-events: none;
+  background: linear-gradient(to bottom, transparent, rgba(0, 0, 0, .85) 40%);
+  border-top: 1px solid var(--k-line);
+  clip-path: polygon(0 100%, 0 40%, 18% 0, 82% 0, 100% 40%, 100% 100%);
+}
+
+::selection { background: var(--k-orange); color: #000; text-shadow: none; }
+
+/* The flight console across the top. */
+:root body > header {
+  position: relative;
+  z-index: 1;
+  margin-bottom: 2.2rem;
+  padding: 1rem 0 .8rem;
+  border-bottom: 2px solid var(--k-orange);
+}
+:root body > header::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  bottom: -9px;
+  width: 9rem;
+  height: 7px;
+  transform: translateX(-50%);
+  background: var(--k-orange);
+  clip-path: polygon(0 0, 100% 0, calc(100% - 7px) 100%, 7px 100%);
+}
+:root body > header .brand {
+  color: var(--k-orange);
+  font-weight: 700;
+  font-stretch: 125%;
+  letter-spacing: .22em;
+  text-transform: uppercase;
+  text-decoration: none;
+}
+:root body > header nav { gap: .3rem; }
+:root body > header nav a {
+  padding: .2rem .8rem;
+  color: var(--m-text);
+  font-size: .78rem;
+  font-weight: 600;
+  letter-spacing: .16em;
+  text-transform: uppercase;
+  text-decoration: none;
+  background: var(--k-dim);
+  clip-path: polygon(6px 0, calc(100% - 6px) 0, 100% 100%, 0 100%);
+}
+:root body > header nav a:hover { background: color-mix(in srgb, var(--m-accent) 30%, transparent); color: #fff; }
+:root body > header nav a.current { background: var(--k-orange); color: #000; text-shadow: none; }
+
+:root body :is(h1, h2, h3, h4) { font-family: var(--k-display); color: var(--k-orange); font-weight: 700; text-transform: uppercase; letter-spacing: .12em; }
+:root body h1 { font-size: 2.2rem; font-stretch: 125%; animation: k-flicker 1.2s steps(1) both; }
+@keyframes k-flicker { 0% { opacity: 0; } 10% { opacity: .9; } 14% { opacity: .2; } 22% { opacity: 1; } 60% { opacity: .85; } 100% { opacity: 1; } }
+:root body h2 { margin-top: 2.6rem; font-size: 1.25rem; display: flex; align-items: center; gap: .8rem; }
+:root body h2::after { content: ""; flex: 1; height: 1px; background: linear-gradient(90deg, var(--k-line), transparent); }
+:root body h3 { font-size: 1rem; color: var(--m-text); }
+:root body h3::before { content: "\25B8 "; color: var(--k-orange); }
+:root body :is(.mt-api, .mt-card, .mt-details, .mt-callout, .mt-tabs, .mt-api-card) h2 { display: block; }
+:root body :is(.mt-api, .mt-card, .mt-details, .mt-callout, .mt-tabs, .mt-api-card) :is(h2::after, h3::before) { content: none; }
+
+:root body a { color: var(--k-ice); text-decoration: none; text-shadow: 0 0 6px color-mix(in srgb, var(--m-accent2) 40%, transparent); }
+:root body a:hover { color: #fff; }
+:root body main p a { border-bottom: 1px dotted var(--k-ice); }
+:root body :is(.lead, .meta, small) { color: var(--m-muted); }
+:root body strong { color: var(--k-orange); }
+:root body hr { border: 0; height: 2px; background: linear-gradient(90deg, transparent, var(--k-orange) 30%, var(--k-orange) 70%, transparent); }
+:root body mark { background: var(--k-orange); color: #000; text-shadow: none; }
+
+/* Console panels. */
+:root body :is(pre, .toc-box, .mt-card, .mt-details, .mt-figure, .mt-code, .mt-api-op, .mt-api-schema, .mt-api-card, .mt-callout, .pager .prev, .pager .next) {
+  border: 1px solid var(--k-line);
+  border-top: 3px solid var(--k-orange);
+  border-radius: 0;
+  background: var(--k-panel);
+  clip-path: var(--k-bevel);
+}
+:root body pre { padding: 1rem 1.2rem; background: rgba(8, 4, 0, .92); color: var(--m-text); }
+:root body .mt-code pre { border: 0; clip-path: none; }
+:root body .mt-code-title { background: var(--k-dim); color: var(--k-orange); letter-spacing: .14em; text-transform: uppercase; }
+:root body code { font-family: var(--k-mono); text-shadow: none; }
+:root body :not(pre) > code { padding: 0 .35rem; background: var(--k-dim); color: #ffd2a3; border-radius: 0; }
+:root body .hl-keyword { color: var(--k-orange); }
+:root body :is(.hl-literal, .hl-number) { color: var(--k-ice); }
+:root body .hl-string { color: #ffe0a8; }
+:root body .hl-comment { color: #8a5a2b; font-style: italic; }
+:root body .hl-builtin { color: var(--k-ice); }
+
+:root body .toc-box strong { color: var(--k-orange); letter-spacing: .25em; text-transform: uppercase; font-size: .72rem; }
+
+:root body .mt-callout { border-top-color: var(--mt-tone); }
+:root body .mt-callout-title { text-transform: uppercase; letter-spacing: .2em; font-size: .78rem; }
+
+:root body table { border-collapse: collapse; }
+:root body :is(th, td) { border: 0; border-bottom: 1px solid var(--k-dim); }
+:root body th { background: var(--k-dim); color: var(--k-orange); text-transform: uppercase; letter-spacing: .14em; font-size: .76rem; }
+:root body tbody tr:hover { background: color-mix(in srgb, var(--m-accent) 7%, transparent); }
+:root body blockquote { border-left: 3px solid var(--k-ice); background: color-mix(in srgb, var(--m-accent2) 6%, transparent); color: #d6ecff; text-shadow: none; }
+
+:root body :is(.tag, .mt-badge) { background: none; border: 1px solid var(--k-orange); border-radius: 0; color: var(--k-orange); text-transform: uppercase; font-size: .72rem; letter-spacing: .12em; clip-path: polygon(4px 0, calc(100% - 4px) 0, 100% 100%, 0 100%); }
+:root body .mt-kbd { background: #000; color: var(--k-orange); border: 1px solid var(--k-orange); border-radius: 0; box-shadow: 0 2px 0 var(--k-line); }
+:root body .mt-method { border-radius: 0; text-shadow: none; }
+:root body .mt-steps li::before { border-radius: 0; background: var(--k-orange); color: #000; text-shadow: none; clip-path: polygon(0 0, 100% 0, 100% 70%, 70% 100%, 0 100%); }
+:root body .mt-steps li { border-left: 1px solid var(--k-line); }
+:root body .mt-actions a { border: 1px solid var(--k-orange); border-radius: 0; color: var(--k-orange); text-transform: uppercase; letter-spacing: .16em; font-size: .82rem; text-decoration: none; clip-path: var(--k-bevel); }
+:root body .mt-actions a:first-of-type { background: var(--k-orange); color: #000; text-shadow: none; }
+:root body .mt-actions a:hover { filter: brightness(1.2); }
+:root body .mt-tab-label { border-radius: 0; text-transform: uppercase; letter-spacing: .1em; }
+
+:root body .wiki-nav-title { color: var(--k-orange); letter-spacing: .3em; }
+:root body .wiki-nav a { color: var(--m-text); border-radius: 0; }
+:root body .wiki-nav a:hover { background: var(--k-dim); }
+:root body .wiki-nav a.current { background: var(--k-orange); color: #000; text-shadow: none; clip-path: polygon(0 0, calc(100% - 8px) 0, 100% 50%, calc(100% - 8px) 100%, 0 100%); }
+:root body .wiki-nav ul ul { border-left-color: var(--k-line); }
+:root body .breadcrumbs, :root body .breadcrumbs a { color: var(--m-muted); text-transform: uppercase; letter-spacing: .14em; font-size: .72rem; }
+:root body .breadcrumbs .here { color: var(--k-orange); }
+:root body .pager a { text-decoration: none; padding: .7rem 1rem; }
+:root body .pager small { color: var(--k-orange); text-transform: uppercase; letter-spacing: .2em; }
+:root body .posts li { list-style: none; border-left: 3px solid var(--k-line); padding-left: .8rem; }
+:root body .posts li:hover { border-left-color: var(--k-orange); }
+
+:root body > footer {
+  position: relative;
+  z-index: 1;
+  margin-bottom: 2.4rem;
+  border-top: 1px solid var(--k-line);
+  color: var(--m-muted);
+  text-transform: uppercase;
+  letter-spacing: .14em;
+  font-size: .76rem;
+  opacity: 1;
+}
+:root body > footer p::before { content: "FSD CHARGED \00b7  "; color: var(--k-ice); }
+
+/* Narrow windows have no room for the canopy. */
+@media (max-width: 900px) {
+  :root body::before, :root body::after { display: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  :root body *, :root body *::before, :root body *::after { animation: none !important; transition: none !important; }
+}
+@media (max-width: 760px) {
+  :root body .toc-box { float: none; margin: 0 0 1rem; }
+  :root body h1 { font-stretch: 100%; }
+}

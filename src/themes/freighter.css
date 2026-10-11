@@ -1,0 +1,192 @@
+/* Mortise theme "freighter": the mainframe terminal of an old commercial
+   hauler. Uppercase monospace on a graph-paper screen, inverse-video
+   section labels, thick ruled boxes, hazard stripes and amber alerts.
+   Colors come from the --m- design tokens; no fonts, images or scripts.
+   Motion stops under prefers-reduced-motion. */
+
+:root {
+  --f-amber: var(--m-accent2);
+  --f-line: var(--m-border);
+  --f-mono: "Cascadia Mono", "Consolas", "Lucida Console", "DejaVu Sans Mono", ui-monospace, monospace;
+  --f-hazard: repeating-linear-gradient(-45deg, var(--m-accent2) 0 10px, #0b0b0b 10px 20px);
+  --mt-border: var(--m-border);
+  --mt-surface: var(--m-surface);
+  --mt-subtle: color-mix(in srgb, var(--m-text) 6%, transparent);
+  --mt-muted: var(--m-muted);
+  --mt-accent: var(--m-text);
+  --mt-note: var(--m-text);
+  --mt-tip: var(--m-text);
+  --mt-important: var(--m-accent);
+  --mt-warning: var(--m-accent2);
+  --mt-caution: var(--m-danger);
+  --mt-radius: 0;
+}
+
+html {
+  scrollbar-color: var(--m-border) var(--m-bg);
+  background:
+    linear-gradient(color-mix(in srgb, var(--m-text) 5%, transparent) 1px, transparent 1px) 0 0 / 24px 24px,
+    linear-gradient(90deg, color-mix(in srgb, var(--m-text) 5%, transparent) 1px, transparent 1px) 0 0 / 24px 24px,
+    var(--m-bg);
+}
+
+:root body {
+  color: var(--m-text);
+  background: transparent;
+  font-family: var(--f-mono);
+  font-size: 15px;
+  line-height: 1.7;
+  letter-spacing: .06em;
+  text-shadow: 0 0 6px color-mix(in srgb, var(--m-text) 35%, transparent);
+}
+:root body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 2147483000;
+  pointer-events: none;
+  background: repeating-linear-gradient(to bottom, rgba(0, 0, 0, .2) 0 2px, transparent 2px 4px);
+}
+::selection { background: var(--m-text); color: var(--m-bg); text-shadow: none; }
+
+/* The console header: hazard strip, ship designation, system lights. */
+:root body > header {
+  position: relative;
+  padding: 1.6rem 0 .9rem;
+  border-bottom: 2px solid var(--m-text);
+}
+:root body > header::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 6px;
+  background: var(--f-hazard);
+  opacity: .85;
+}
+:root body > header .brand {
+  padding: .1rem .6rem;
+  background: var(--m-text);
+  color: var(--m-bg);
+  text-shadow: none;
+  font-weight: 700;
+  letter-spacing: .3em;
+  text-transform: uppercase;
+  text-decoration: none;
+}
+:root body > header .brand::after {
+  content: "";
+  display: inline-block;
+  width: .5rem;
+  height: .5rem;
+  margin-left: .8rem;
+  background: var(--f-amber);
+  box-shadow: .8rem 0 var(--m-bg), 1.6rem 0 var(--f-amber);
+  animation: f-status 2.4s steps(1) infinite;
+}
+@keyframes f-status { 50% { opacity: .25; } }
+:root body > header nav { gap: .25rem .6rem; }
+:root body > header nav a {
+  padding: 0 .4rem;
+  color: var(--m-text);
+  font-size: .85rem;
+  text-transform: uppercase;
+  text-decoration: none;
+  letter-spacing: .14em;
+}
+:root body > header nav a:hover { outline: 1px solid var(--m-text); }
+:root body > header nav a.current { background: var(--m-text); color: var(--m-bg); text-shadow: none; }
+
+/* Headings: inverse-video labels. */
+:root body :is(h1, h2, h3, h4) { font-family: var(--f-mono); color: var(--m-accent); font-weight: 700; text-transform: uppercase; letter-spacing: .2em; line-height: 1.3; }
+:root body h1 { font-size: 1.7rem; padding-bottom: .4rem; border-bottom: 2px solid var(--m-text); }
+:root body h1::before { content: "INTERFACE // "; color: var(--m-muted); font-size: .55em; letter-spacing: .3em; display: block; }
+:root body h2 {
+  display: inline-block;
+  margin-top: 2.4rem;
+  padding: .1rem .7rem;
+  font-size: 1rem;
+  background: var(--m-text);
+  color: var(--m-bg);
+  text-shadow: none;
+}
+:root body h3 { font-size: .95rem; border-left: 6px solid var(--m-text); padding-left: .6rem; }
+:root body :is(.mt-api, .mt-card, .mt-details, .mt-callout, .mt-tabs, .mt-api-card) :is(h2, h3) { display: block; background: none; color: var(--m-accent); padding: 0; border: 0; text-shadow: inherit; }
+
+:root body a { color: var(--m-accent); text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 4px; }
+:root body a:hover { background: var(--m-accent); color: var(--m-bg); text-decoration: none; text-shadow: none; }
+:root body :is(.lead, .meta, small) { color: var(--m-muted); }
+:root body p { text-transform: none; }
+:root body hr { border: 0; height: 6px; background: var(--f-hazard); opacity: .5; }
+:root body mark { background: var(--f-amber); color: #000; text-shadow: none; }
+
+/* Boxes: ruled frames with a label tab. */
+:root body :is(pre, .toc-box, .mt-card, .mt-details, .mt-figure, .mt-code, .mt-api-op, .mt-api-schema, .mt-api-card, .mt-callout, .pager .prev, .pager .next) {
+  border: 2px solid var(--m-border);
+  border-radius: 0;
+  background: color-mix(in srgb, var(--m-surface) 90%, transparent);
+  box-shadow: 4px 4px 0 color-mix(in srgb, var(--m-text) 10%, transparent);
+}
+:root body pre { padding: 1rem; color: var(--m-text); }
+:root body .mt-code pre { border: 0; box-shadow: none; }
+:root body .mt-code-title { background: var(--m-border); color: var(--m-accent); text-transform: uppercase; letter-spacing: .15em; }
+:root body code { font-family: var(--f-mono); letter-spacing: 0; }
+:root body :not(pre) > code { padding: 0 .3rem; border: 1px solid var(--m-border); background: none; border-radius: 0; color: var(--m-accent); }
+:root body .hl-keyword { color: var(--m-accent); font-weight: 700; }
+:root body :is(.hl-literal, .hl-number) { color: var(--f-amber); }
+:root body .hl-string { color: #8fd9b0; }
+:root body .hl-comment { color: var(--m-muted); }
+:root body .hl-builtin { color: var(--f-amber); }
+
+:root body .toc-box strong { display: block; margin: -.75rem -1rem .5rem; padding: .1rem 1rem; background: var(--m-border); color: var(--m-accent); text-transform: uppercase; letter-spacing: .2em; font-size: .8rem; }
+
+:root body .mt-callout { border-color: var(--mt-tone); border-left-width: 10px; }
+:root body .mt-callout-title { text-transform: uppercase; letter-spacing: .25em; }
+:root body .mt-callout:is(.mt-callout-warning, .mt-callout-caution) { border-image: var(--f-hazard) 0 0 0 10; border-left-width: 10px; }
+
+:root body table { border-collapse: collapse; border: 2px solid var(--m-border); }
+:root body :is(th, td) { border: 1px solid var(--m-border); }
+:root body th { background: var(--m-border); color: var(--m-accent); text-transform: uppercase; letter-spacing: .15em; font-size: .8rem; }
+:root body blockquote { border-left: 6px solid var(--f-amber); color: var(--f-amber); background: color-mix(in srgb, var(--m-accent2) 6%, transparent); }
+
+:root body :is(.tag, .mt-badge) { border: 1px solid var(--m-text); border-radius: 0; background: none; color: var(--m-text); text-transform: uppercase; font-size: .75rem; letter-spacing: .15em; }
+:root body .mt-kbd { border: 2px solid var(--m-text); border-radius: 0; background: var(--m-surface); color: var(--m-accent); box-shadow: none; }
+:root body .mt-method { border-radius: 0; }
+:root body .mt-steps li::before { border-radius: 0; background: var(--m-text); color: var(--m-bg); text-shadow: none; }
+:root body .mt-steps li { border-left: 2px solid var(--m-border); }
+:root body .mt-actions a { border: 2px solid var(--m-text); border-radius: 0; background: none; color: var(--m-text); text-transform: uppercase; letter-spacing: .2em; text-decoration: none; }
+:root body .mt-actions a:first-of-type,
+:root body .mt-actions a:hover { background: var(--m-text); color: var(--m-bg); text-shadow: none; }
+:root body .mt-tab-label { border-radius: 0; text-transform: uppercase; letter-spacing: .12em; }
+
+:root body .wiki-nav-title { color: var(--m-bg); background: var(--m-text); padding: 0 .5rem; letter-spacing: .3em; text-transform: uppercase; text-shadow: none; }
+:root body .wiki-nav a { color: var(--m-text); border-radius: 0; text-decoration: none; text-transform: uppercase; font-size: .85rem; }
+:root body .wiki-nav a:hover { outline: 1px solid var(--m-text); background: none; }
+:root body .wiki-nav a.current { background: var(--m-text); color: var(--m-bg); text-shadow: none; }
+:root body .wiki-nav ul ul { border-left: 2px solid var(--m-border); }
+:root body .breadcrumbs, :root body .breadcrumbs a { color: var(--m-muted); text-transform: uppercase; font-size: .78rem; }
+:root body .breadcrumbs .here { color: var(--m-accent); }
+:root body .pager a { text-decoration: none; padding: .6rem .9rem; text-transform: uppercase; }
+:root body .pager small { color: var(--f-amber); letter-spacing: .2em; }
+:root body .posts li { padding-left: .6rem; border-left: 6px solid var(--m-border); }
+:root body .posts li:hover { border-left-color: var(--m-text); }
+
+:root body > footer {
+  position: relative;
+  padding-top: 1.2rem;
+  border-top: 2px solid var(--m-text);
+  color: var(--m-muted);
+  text-transform: uppercase;
+  font-size: .78rem;
+  opacity: 1;
+}
+:root body > footer p::before { content: "STATUS: ALL SYSTEMS NOMINAL // "; color: var(--m-text); }
+
+@media (prefers-reduced-motion: reduce) {
+  :root body *, :root body *::before, :root body *::after { animation: none !important; transition: none !important; }
+}
+@media (max-width: 760px) {
+  :root body .toc-box { float: none; margin: 0 0 1rem; }
+  :root body { letter-spacing: .03em; }
+}

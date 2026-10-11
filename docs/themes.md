@@ -1,10 +1,12 @@
 # Themes
 
-Mortise has two built-in themes. Pick one in `_config.yml`:
+Mortise has eight built-in themes. Pick one in `_config.yml`:
 
 ```yaml
-theme: visor   # or: lcars
+theme: visor   # or: lcars, phosphor, cyberdeck, freighter, grid, codex, cockpit
 ```
+
+To see them all, build the [theme gallery](#theme-gallery).
 
 The build then writes the theme's stylesheet to `/theme.css`, and
 templates can read the name as `site.theme`. Link the stylesheet after
@@ -21,11 +23,13 @@ quickest way to tweak a theme: copy it into the site and edit it while
 `serve` swaps your changes in live. An unknown theme name fails the build
 with the config line and the list of themes.
 
-Themes are CSS plus a few images that Mortise's [renderer](rendering.md)
-draws during the build, written to `/theme/`. They add no web fonts or
-scripts, and every animation stops when the visitor asks for reduced
-motion. A site's own file at a `/theme/` path replaces the rendered one;
-the specs are in `src/themes/visor/` and `src/themes/lcars/`.
+Themes are CSS, sometimes with a few images that Mortise's
+[renderer](rendering.md) draws during the build, written to `/theme/`.
+They add no web fonts or scripts; each names a stack of fonts common on
+Windows, macOS and Linux and falls back to the system's. Every animation
+stops when the visitor asks for reduced motion. A site's own file at a
+`/theme/` path replaces the rendered one; the specs are in
+`src/themes/visor/` and `src/themes/lcars/`.
 
 ## visor
 
@@ -62,6 +66,92 @@ A starship computer console, inspired by sci-fi television.
 - The wiki sidebar becomes a stack of console buttons.
 - A strip of blinking cells in the footer, as if the console were
   thinking.
+
+## phosphor
+
+A monochrome CRT terminal.
+
+- Every element in one monospace face, glowing green on a dark tube, with
+  scanlines, a slow refresh band, and darkened, curved corners.
+- The header reads like a prompt (`user@Site:~$`) and nav links like
+  paths (`./docs`); the current one is shown in inverse video.
+- Headings keep the text size and are marked with `##` and `###`; `h1`
+  types itself out and ends in a blinking block cursor.
+- Boxes are text-mode frames, lists use `*`, rules are rows of dashes,
+  quotes start with `>`, and syntax colors become brightness and style.
+- Retint it with the `text`, `muted` and `accent` tokens: amber
+  (`#ffb000`) and white (`#e8e8e8`) monitors work as well as green.
+
+## cyberdeck
+
+A hacker's deck in a neon city.
+
+- Magenta and cyan light on a violet-black field crossed by faint
+  diagonal lines, with a yellow accent strip under the header.
+- Nav links are notched tabs; hovering one, or a button, glitches it.
+- `h1` arrives with a short glitch and split color edges; each `h2` gets a
+  hex section code (`0x01`) and a magenta-to-cyan underline.
+- Panels have two corners cut off and a gradient neon edge. Tags, badges
+  and buttons share the notch.
+
+## freighter
+
+The mainframe terminal of an old commercial hauler.
+
+- Uppercase, widely tracked monospace on a graph-paper screen, with
+  scanlines and a hazard-striped strip above the header.
+- The ship's name is an inverse-video plate followed by blinking status
+  lights.
+- `h1` carries an `INTERFACE //` label; `h2` headings are inverse-video
+  labels.
+- Boxes are thick ruled frames with a hard shadow; warnings and cautions
+  get a hazard-striped edge. Amber marks numbers, quotes and alerts.
+
+## grid
+
+The inside of a computer world, drawn in light.
+
+- A glowing floor grid in perspective runs to a horizon at the bottom of
+  the window and slowly scrolls towards the reader.
+- Thin, widely tracked uppercase headings; a light trail draws itself
+  under `h1`.
+- Panels, tables, buttons and nav links are rounded and traced in cyan
+  light; orange marks tags, `h3` headings, numbers and highlights.
+
+## codex
+
+The encyclopedia of a starship's computer.
+
+- Holographic blue on deep navy over a faint hexagon lattice, with thin
+  headings that resolve into place.
+- Rules end in glowing nodes; each `h2` sits on one.
+- Entry panels have a cut top-left corner and a lit top edge. Orange
+  marks the current page, buttons and quotes.
+- The wiki sidebar reads as the codex index.
+
+## cockpit
+
+The flight deck of a trading ship.
+
+- Orange vector light on black, framed by canopy struts in the top
+  corners (on windows wider than 900 pixels) and the edge of the dash
+  along the bottom.
+- Extended uppercase readouts; `h1` flickers on like a powering display,
+  and each `h2` runs into a fading line.
+- Console panels with an orange top edge and bevelled lower corners;
+  ice blue for links and quotes.
+
+## Theme gallery
+
+`zig build theme-gallery` builds the showcase with every built-in theme
+into `zig-out/theme-gallery/NAME/` and writes an index that previews them
+side by side, with links to each theme's pages. Each copy is built under
+the base URL `/NAME`, so serve the folder as a site root:
+
+```sh
+zig build theme-gallery
+zig-out/bin/mortise serve zig-out/theme-gallery
+```
 
 ## What themes style
 
@@ -103,7 +193,10 @@ theme_tokens:
 Every theme defines `bg`, `surface`, `text`, `muted`, `accent` and
 `border`; `visor` adds `accent2`, `success`, `important` and `danger`, and
 `lcars` its console palette (`peach`, `gold`, `lilac`, `violet`, `blue`,
-`success`, `danger`). Your own CSS can use them too:
+`success`, `danger`). Of the others, `cyberdeck`, `freighter`, `grid`, `codex`
+and `cockpit` use `accent2` for their second color, `cyberdeck` adds
+`warning` and `success`, and `phosphor`, `freighter`, `cyberdeck` and `cockpit`
+add `danger`. Your own CSS can use them too:
 `color: var(--m-accent)`. New names in `theme_tokens` become new
 properties.
 

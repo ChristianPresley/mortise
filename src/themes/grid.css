@@ -1,0 +1,189 @@
+/* Mortise theme "grid": the inside of a computer world, drawn in light.
+   Black space over a glowing floor grid that runs to the horizon, thin
+   wide-tracked type, rounded panels traced in cyan with orange for what
+   stands out. Colors come from the --m- design tokens; no fonts, images
+   or scripts. Motion stops under prefers-reduced-motion. */
+
+:root {
+  --g-cyan: var(--m-accent);
+  --g-orange: var(--m-accent2);
+  --g-glow: color-mix(in srgb, var(--m-accent) 60%, transparent);
+  --g-trace: 0 0 0 1px var(--g-cyan), 0 0 10px var(--g-glow), inset 0 0 12px color-mix(in srgb, var(--m-accent) 18%, transparent);
+  --g-display: "Segoe UI Variable Display", "Bahnschrift", "Helvetica Neue", system-ui, sans-serif;
+  --g-mono: "Cascadia Code", ui-monospace, SFMono-Regular, Consolas, monospace;
+  --mt-border: color-mix(in srgb, var(--m-accent) 40%, transparent);
+  --mt-surface: color-mix(in srgb, var(--m-surface) 85%, transparent);
+  --mt-subtle: color-mix(in srgb, var(--m-accent) 7%, transparent);
+  --mt-muted: var(--m-muted);
+  --mt-accent: var(--m-accent);
+  --mt-note: var(--m-accent);
+  --mt-tip: var(--m-accent);
+  --mt-important: var(--m-accent2);
+  --mt-warning: var(--m-accent2);
+  --mt-caution: var(--m-accent2);
+  --mt-radius: 10px;
+}
+
+html {
+  scrollbar-color: var(--m-border) var(--m-bg);
+  background: linear-gradient(to bottom, var(--m-bg), color-mix(in srgb, var(--m-bg), var(--m-accent) 6%) 70%, var(--m-bg)) fixed, var(--m-bg);
+}
+
+:root body {
+  color: var(--m-text);
+  background: transparent;
+  font-family: var(--g-display);
+  font-size: 17px;
+  font-weight: 350;
+  letter-spacing: .02em;
+}
+
+/* The floor: a grid in perspective, with a glow along the horizon. */
+:root body::before {
+  content: "";
+  position: fixed;
+  left: -50vw;
+  right: -50vw;
+  bottom: 0;
+  height: 34vh;
+  z-index: -1;
+  pointer-events: none;
+  background:
+    linear-gradient(to bottom, var(--m-bg), transparent 30%),
+    linear-gradient(color-mix(in srgb, var(--m-accent) 40%, transparent) 2px, transparent 2px) 0 0 / 100% 70px,
+    linear-gradient(90deg, color-mix(in srgb, var(--m-accent) 40%, transparent) 2px, transparent 2px) 50% 0 / 70px 100%;
+  transform: perspective(300px) rotateX(62deg);
+  transform-origin: 50% 100%;
+  mask-image: linear-gradient(to top, #000 10%, transparent 90%);
+  animation: g-ride 3s linear infinite;
+}
+@keyframes g-ride { to { background-position: 0 0, 0 70px, 50% 0; } }
+:root body::after {
+  content: "";
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 33vh;
+  height: 2px;
+  z-index: -1;
+  pointer-events: none;
+  background: linear-gradient(90deg, transparent, var(--g-cyan) 20%, var(--g-cyan) 80%, transparent);
+  box-shadow: 0 0 22px 4px var(--g-glow);
+  opacity: .3;
+}
+
+::selection { background: var(--g-cyan); color: var(--m-bg); }
+
+:root body > header { padding: 1.2rem 0; margin-bottom: 2.2rem; border-bottom: 1px solid color-mix(in srgb, var(--m-accent) 30%, transparent); }
+:root body > header .brand {
+  color: #fff;
+  font-weight: 300;
+  letter-spacing: .45em;
+  text-transform: uppercase;
+  text-decoration: none;
+  text-shadow: 0 0 10px var(--g-glow);
+}
+:root body > header nav { gap: .4rem; }
+:root body > header nav a {
+  padding: .25rem .9rem;
+  border-radius: 99px;
+  color: var(--g-cyan);
+  font-size: .8rem;
+  letter-spacing: .2em;
+  text-transform: uppercase;
+  text-decoration: none;
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--m-accent) 35%, transparent);
+  transition: box-shadow .2s, color .2s;
+}
+:root body > header nav a:hover { box-shadow: var(--g-trace); color: #fff; }
+:root body > header nav a.current { background: var(--g-cyan); color: var(--m-bg); font-weight: 600; box-shadow: 0 0 14px var(--g-glow); }
+
+:root body :is(h1, h2, h3, h4) { font-family: var(--g-display); color: #fff; font-weight: 300; text-transform: uppercase; letter-spacing: .25em; }
+:root body h1 {
+  position: relative;
+  font-size: 2.1rem;
+  padding-bottom: .6rem;
+  text-shadow: 0 0 16px var(--g-glow);
+}
+/* A light trail drawn along the title. */
+:root body h1::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  height: 2px;
+  width: 100%;
+  background: linear-gradient(90deg, var(--g-cyan), color-mix(in srgb, var(--m-accent) 10%, transparent));
+  box-shadow: 0 0 10px var(--g-glow);
+  transform-origin: left;
+  animation: g-trail 1.1s cubic-bezier(.2, .8, .2, 1) both;
+}
+@keyframes g-trail { from { transform: scaleX(0); } }
+:root body h2 { margin-top: 2.6rem; font-size: 1.25rem; color: var(--g-cyan); text-shadow: 0 0 10px var(--g-glow); }
+:root body h3 { font-size: 1rem; color: var(--g-orange); letter-spacing: .2em; }
+
+:root body a { color: var(--g-cyan); text-decoration: none; border-bottom: 1px solid color-mix(in srgb, var(--m-accent) 40%, transparent); }
+:root body a:hover { color: #fff; border-bottom-color: var(--g-cyan); text-shadow: 0 0 8px var(--g-glow); }
+:root body :is(header, .wiki-nav, .pager, .breadcrumbs, .mt-actions, h1, h2, h3) a { border-bottom: 0; }
+:root body :is(.lead, .meta, small) { color: var(--m-muted); }
+:root body strong { color: #fff; font-weight: 600; }
+:root body hr { border: 0; height: 1px; background: linear-gradient(90deg, transparent, var(--g-cyan), transparent); box-shadow: 0 0 8px var(--g-glow); }
+:root body mark { background: none; color: var(--g-orange); text-shadow: 0 0 8px var(--g-orange); }
+
+/* Panels: rounded, traced in light. */
+:root body :is(pre, .toc-box, .mt-card, .mt-details, .mt-figure, .mt-code, .mt-api-op, .mt-api-schema, .mt-api-card, .mt-callout, .pager .prev, .pager .next) {
+  border: 0;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--m-surface) 88%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--m-accent) 45%, transparent), 0 0 14px color-mix(in srgb, var(--m-accent) 14%, transparent);
+}
+:root body :is(.mt-card, .pager .prev, .pager .next):hover { box-shadow: var(--g-trace); }
+:root body pre { padding: 1rem 1.2rem; background: color-mix(in srgb, #000 92%, var(--m-accent)); color: var(--m-text); }
+:root body .mt-code pre { box-shadow: none; border-radius: 0; }
+:root body .mt-code-title { color: var(--g-cyan); letter-spacing: .15em; }
+:root body code { font-family: var(--g-mono); }
+:root body :not(pre) > code { padding: .05rem .4rem; border-radius: 6px; background: color-mix(in srgb, var(--m-accent) 10%, transparent); color: var(--g-cyan); }
+:root body .hl-keyword { color: var(--g-cyan); }
+:root body :is(.hl-literal, .hl-number) { color: var(--g-orange); }
+:root body .hl-string { color: #b5f5ff; }
+:root body .hl-comment { color: #4f7a88; font-style: italic; }
+:root body .hl-builtin { color: var(--g-orange); }
+
+:root body .toc-box strong { color: var(--g-orange); letter-spacing: .25em; text-transform: uppercase; font-size: .75rem; font-weight: 400; }
+:root body .mt-callout { box-shadow: 0 0 0 1px var(--mt-tone), 0 0 14px color-mix(in srgb, var(--mt-tone) 25%, transparent); }
+:root body .mt-callout-title { letter-spacing: .25em; text-transform: uppercase; font-size: .78rem; font-weight: 400; }
+
+:root body table { border-collapse: separate; border-spacing: 0; border-radius: 10px; box-shadow: 0 0 0 1px color-mix(in srgb, var(--m-accent) 40%, transparent); overflow: hidden; }
+:root body :is(th, td) { border: 0; border-bottom: 1px solid color-mix(in srgb, var(--m-accent) 18%, transparent); }
+:root body th { color: var(--g-cyan); font-weight: 400; letter-spacing: .2em; text-transform: uppercase; font-size: .75rem; background: color-mix(in srgb, var(--m-accent) 8%, transparent); }
+:root body blockquote { border-left: 2px solid var(--g-orange); box-shadow: -4px 0 12px -6px var(--g-orange); background: none; color: var(--m-text); }
+
+:root body :is(.tag, .mt-badge) { border-radius: 99px; background: none; color: var(--g-orange); box-shadow: 0 0 0 1px var(--g-orange); border: 0; font-size: .72rem; letter-spacing: .15em; text-transform: uppercase; }
+:root body .mt-kbd { border-radius: 6px; background: none; color: #fff; border: 0; box-shadow: var(--g-trace); }
+:root body .mt-steps li::before { background: none; color: var(--g-cyan); box-shadow: var(--g-trace); }
+:root body .mt-steps li { border-left: 1px solid color-mix(in srgb, var(--m-accent) 30%, transparent); }
+:root body .mt-actions a { border: 0; border-radius: 99px; color: var(--g-cyan); box-shadow: 0 0 0 1px var(--g-cyan); text-transform: uppercase; letter-spacing: .2em; font-size: .82rem; text-decoration: none; }
+:root body .mt-actions a:first-of-type { background: var(--g-cyan); color: var(--m-bg); box-shadow: 0 0 16px var(--g-glow); }
+:root body .mt-actions a:hover { box-shadow: var(--g-trace); }
+
+:root body .wiki-nav-title { color: var(--g-orange); letter-spacing: .3em; }
+:root body .wiki-nav a { color: var(--m-text); border-radius: 99px; }
+:root body .wiki-nav a:hover { background: none; color: #fff; box-shadow: 0 0 0 1px color-mix(in srgb, var(--m-accent) 40%, transparent); }
+:root body .wiki-nav a.current { background: none; color: var(--g-cyan); box-shadow: var(--g-trace); }
+:root body .wiki-nav ul ul { border-left-color: color-mix(in srgb, var(--m-accent) 25%, transparent); }
+:root body .breadcrumbs, :root body .breadcrumbs a { color: var(--m-muted); letter-spacing: .15em; text-transform: uppercase; font-size: .72rem; }
+:root body .breadcrumbs .here { color: var(--g-cyan); }
+:root body .pager a { text-decoration: none; padding: .7rem 1rem; }
+:root body .pager small { color: var(--g-orange); letter-spacing: .2em; text-transform: uppercase; }
+:root body .posts li { list-style: none; position: relative; }
+:root body .posts li::before { content: ""; position: absolute; left: -1rem; top: .7em; width: .4rem; height: .4rem; border-radius: 50%; background: var(--g-cyan); box-shadow: 0 0 8px var(--g-glow); }
+
+:root body > footer { border-top: 1px solid color-mix(in srgb, var(--m-accent) 30%, transparent); color: var(--m-muted); letter-spacing: .15em; font-size: .78rem; text-transform: uppercase; opacity: 1; }
+
+@media (prefers-reduced-motion: reduce) {
+  :root body *, :root body *::before, :root body *::after, :root body::before { animation: none !important; transition: none !important; }
+}
+@media (max-width: 760px) {
+  :root body .toc-box { float: none; margin: 0 0 1rem; }
+  :root body :is(h1, h2) { letter-spacing: .12em; }
+}

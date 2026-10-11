@@ -1,0 +1,11 @@
+# Design tokens for the phosphor theme: green P1 phosphor on a dark tube.
+# For an amber monitor, set accent "#ffcc66", text "#ffb000" and muted
+# "#b07a10" in theme_tokens.
+scheme: dark
+bg: "#020803"
+surface: "#051208"
+text: "#6dff8f"
+muted: "#2f9e4c"
+accent: "#c8ffd4"
+border: "#1d6b33"
+danger: "#ff6b5a"

@@ -1,0 +1,11 @@
+# Design tokens for the freighter theme: an old commercial ship's
+# mainframe terminal.
+scheme: dark
+bg: "#04070a"
+surface: "#0a1116"
+text: "#b9efe6"
+muted: "#5f8f88"
+accent: "#f4fbf9"
+accent2: "#ffb000"
+border: "#2b4a47"
+danger: "#ff4d3d"

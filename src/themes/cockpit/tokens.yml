@@ -1,0 +1,10 @@
+# Design tokens for the cockpit theme: a trader's ship flight deck.
+scheme: dark
+bg: "#020202"
+surface: "#120a03"
+text: "#ffb066"
+muted: "#a86a2c"
+accent: "#ff8000"
+accent2: "#9fd8ff"
+border: "#5a3009"
+danger: "#ff3b2f"

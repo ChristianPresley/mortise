@@ -217,6 +217,19 @@ job:
   rendered width, and inline markup is dropped.
 - `seo` writes no `<title>`, `hreflang`, robots or author meta tags.
 
+## Themes
+
+- Themes name fonts that are common on each system but ship none, so
+  type looks somewhat different on Windows, macOS and Linux; `cockpit`,
+  `cyberdeck` and `visor` look best with Bahnschrift (Windows).
+- `grid`'s floor and `cockpit`'s canopy are fixed behind the page; very
+  short windows show little of them, and `cockpit` hides its struts below
+  900 pixels wide.
+- `phosphor` and `freighter` add scanlines over the whole page, which
+  slightly dims images.
+- The theme gallery's previews are scaled-down frames of the real pages,
+  so it loads every theme's home page at once.
+
 ## Syntax highlighting
 
 - Highlighting is lexical: keywords, literals, strings, numbers, comments,

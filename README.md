@@ -18,6 +18,7 @@ zig build                         # builds zig-out/bin/mortise
 zig build test                    # unit, fixture, and end-to-end tests
 zig build -Doptimize=ReleaseFast  # optimized binary
 zig build render-gallery          # renders example graphics to zig-out/render-gallery
+zig build theme-gallery           # builds the showcase in every theme to zig-out/theme-gallery
 ```
 
 ### Working on Mortise itself
@@ -162,10 +163,12 @@ my-site/
   draws an image at `/PATH.png` during the build: starfields, HUD panel
   frames for CSS `border-image`, radar scopes, planets, and hologram
   wireframes, with sprite-sheet CSS animations for the animated ones.
-- Two built-in [themes](docs/themes.md), picked with `theme:` in
-  `_config.yml`: `visor`, a helmet heads-up display with a shield meter
-  and HUD panel frames, and `lcars`, a starship console frame. Both draw
-  their art with the built-in renderer and add no fonts or scripts.
+- Eight built-in [themes](docs/themes.md), picked with `theme:` in
+  `_config.yml`: `visor` (a helmet HUD), `lcars` (a starship console),
+  `phosphor` (a CRT terminal), `cyberdeck` (neon hacker deck), `freighter`
+  (an old ship's mainframe), `grid` (a world drawn in light), `codex` (a
+  starship encyclopedia) and `cockpit` (a flight deck). They add no fonts
+  or scripts; `zig build theme-gallery` previews them all.
   Their colors are [design tokens](docs/themes.md#design-tokens) you can
   override with `theme_tokens:`; token pairs give light and dark modes
   with `{{ site.scheme_toggle }}`, and the build warns about WCAG
