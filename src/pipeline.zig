@@ -29,6 +29,7 @@ const openapi = @import("openapi.zig");
 const themes = @import("themes.zig");
 const assets = @import("assets.zig");
 const redirects = @import("redirects.zig");
+const git = @import("git.zig");
 const Value = template.Value;
 const Entry = template.Entry;
 
@@ -165,6 +166,7 @@ const State = struct {
     site_url: ?[]const u8,
     options: Options,
     data: Value,
+    history: History,
     /// Every page and post, in `pageOrder`.
     pages: []const Page,
     /// Files copied unchanged.
@@ -205,10 +207,13 @@ const Page = struct {
     /// Old URLs from frontmatter `aliases`, without the baseurl, each
     /// with the output path of its redirect page.
     aliases: []const AliasPath = &.{},
-    /// `YYYY-MM-DD` of the last change, from frontmatter `updated`, or "".
+    /// `YYYY-MM-DD` of the last change, from frontmatter `updated`, else
+    /// from Git history with `git_dates: true`, or "".
     updated: []const u8 = "",
     /// Files the Markdown includes with `<<< path`.
     included_files: []const []const u8 = &.{},
+    /// The page's `edit_url` from the config, with `{path}` filled in.
+    edit_url: []const u8 = "",
     sources: []const []const u8 = &.{},
     reads_collections: bool = false,
 };
@@ -243,6 +248,7 @@ const Builder = struct {
     options: Options = .{},
     /// Heading anchors and copy buttons, from `_config.yml`.
     markdown_options: markdown.Options = .{},
+    history: History = .{},
     /// `site.data`, from the files in `_data/`.
     data: Value = .{ .object = .{} },
     /// The `paginator` variable while rendering one page of a paginated
@@ -336,6 +342,7 @@ pub fn buildWith(arena: Allocator, src: SiteDir, options: Options, diag: *Diagno
     b.site_url = try siteUrl(&b, config_fields);
     b.markdown_options = try markdownOptions(&b, config_fields);
     b.future = try showFuture(&b, config_fields);
+    b.history = try loadHistory(&b, config_fields, listing.files);
     b.data = try loadData(&b, listing.files);
 
     for (listing.files) |path| {
@@ -383,7 +390,7 @@ pub fn buildWith(arena: Allocator, src: SiteDir, options: Options, diag: *Diagno
 /// overflow. The result shares memory with `prev`.
 pub fn rebuild(arena: Allocator, src: SiteDir, prev: *const Site, changed: []const []const u8, diag: *Diagnostic) Error!Site {
     const st = prev.state;
-    var b: Builder = .{ .arena = arena, .src = src, .diag = diag, .baseurl = st.baseurl, .site_url = st.site_url, .data = st.data, .options = st.options, .skipped = st.skipped };
+    var b: Builder = .{ .arena = arena, .src = src, .diag = diag, .baseurl = st.baseurl, .site_url = st.site_url, .data = st.data, .options = st.options, .skipped = st.skipped, .history = st.history };
     b.markdown_options = try markdownOptions(&b, st.config_fields);
     b.future = try showFuture(&b, st.config_fields);
 
@@ -520,6 +527,57 @@ fn showFuture(b: *Builder, config_fields: frontmatter.Map) Error!bool {
     const v = config_fields.get("future") orelse return false;
     if (v != .boolean) return b.fail(config_path, 0, "'future' must be true or false", .{});
     return v.boolean;
+}
+
+/// What the site's Git repository says about its pages.
+const History = struct {
+    /// Source path to `YYYY-MM-DD` of its last commit, with
+    /// `git_dates: true`.
+    dates: std.StringHashMapUnmanaged([10]u8) = .empty,
+    /// The site directory's path inside the repository.
+    prefix: []const u8 = "",
+    /// `edit_url` from the config, with `{path}` to fill in.
+    edit_url: ?[]const u8 = null,
+};
+
+/// Reads `git_dates` and `edit_url`, and with `git_dates: true` the last
+/// commit date of every page in the repository holding the site. A site
+/// outside any repository gets no dates.
+fn loadHistory(b: *Builder, config_fields: frontmatter.Map, files: []const []const u8) Error!History {
+    var h: History = .{};
+    if (config_fields.get("edit_url")) |v| {
+        if (v != .string or std.mem.indexOf(u8, v.string, "{path}") == null) {
+            return b.fail(config_path, 0, "'edit_url' must be a URL containing {{path}}, such as https://github.com/me/site/edit/main/{{path}}", .{});
+        }
+        h.edit_url = v.string;
+    }
+    const want_dates = if (config_fields.get("git_dates")) |v| blk: {
+        if (v != .boolean) return b.fail(config_path, 0, "'git_dates' must be true or false", .{});
+        break :blk v.boolean;
+    } else false;
+    if (!want_dates and h.edit_url == null) return h;
+
+    const io = b.src.io;
+    const abs = b.src.dir.realPathFileAlloc(io, ".", b.arena) catch return h;
+    var found = (git.discover(b.arena, io, abs) catch |err| return gitFail(b, err)) orelse return h;
+    defer found.repo.close();
+    h.prefix = found.prefix;
+    if (!want_dates) return h;
+
+    var wanted: std.ArrayList([]const u8) = .empty;
+    for (files) |f| {
+        const ext = sitepath.extension(f);
+        if (std.mem.eql(u8, ext, ".md") or std.mem.eql(u8, ext, ".html")) try wanted.append(b.arena, f);
+    }
+    h.dates = git.lastChanged(&found.repo, found.prefix, .{ .wanted = wanted.items }) catch |err| return gitFail(b, err);
+    return h;
+}
+
+fn gitFail(b: *Builder, err: git.Error) Error {
+    return switch (err) {
+        error.OutOfMemory => error.OutOfMemory,
+        else => b.fail(config_path, 0, "cannot read the Git history for git_dates: {s}; set git_dates: false to build without it", .{@errorName(err)}),
+    };
 }
 
 /// Reads and normalizes `url` from the config, or null when unset.
@@ -753,7 +811,7 @@ fn finish(b: *Builder, config_fields: frontmatter.Map, pages: []Page, statics: [
         .full = render == null,
         .baseurl = b.baseurl,
         .skipped = b.skipped,
-        .state = .{ .skipped = b.skipped, .config_fields = config_fields, .baseurl = b.baseurl, .site_url = b.site_url, .options = b.options, .data = b.data, .pages = pages, .statics = statics },
+        .state = .{ .skipped = b.skipped, .config_fields = config_fields, .baseurl = b.baseurl, .site_url = b.site_url, .options = b.options, .data = b.data, .history = b.history, .pages = pages, .statics = statics },
     };
 }
 
@@ -878,6 +936,12 @@ fn loadPage(b: *Builder, path: []const u8, is_post: bool) Error!?Page {
             return b.fail(path, fieldLine(data, "updated"), "'updated' must look like YYYY-MM-DD", .{});
         }
         page.updated = d.string[0..10];
+    } else if (b.history.dates.get(path)) |d| {
+        page.updated = try arena.dupe(u8, &d);
+    }
+    if (b.history.edit_url) |tpl| {
+        const repo_path = if (b.history.prefix.len == 0) path else try std.fmt.allocPrint(arena, "{s}/{s}", .{ b.history.prefix, path });
+        page.edit_url = try std.mem.replaceOwned(u8, arena, tpl, "{path}", repo_path);
     }
     if (doc.fields.get("aliases")) |al| {
         const line = fieldLine(data, "aliases");
@@ -1098,6 +1162,13 @@ fn pageObject(arena: Allocator, p: *const Page) Allocator.Error!template.Object 
     }
     try entries.append(arena, .{ .key = "url", .value = .{ .string = p.url } });
     try entries.append(arena, .{ .key = "path", .value = .{ .string = p.source } });
+    // `updated` from Git history; frontmatter `updated` is already a field.
+    if (p.updated.len > 0 and p.fields.get("updated") == null) {
+        try entries.append(arena, .{ .key = "updated", .value = .{ .string = p.updated } });
+    }
+    if (p.edit_url.len > 0 and p.fields.get("edit_url") == null) {
+        try entries.append(arena, .{ .key = "edit_url", .value = .{ .string = p.edit_url } });
+    }
     if (p.is_post) {
         const base = sitepath.basename(p.source);
         if (p.fields.get("date") == null) {
@@ -2455,4 +2526,47 @@ test "future posts wait for their date and expired pages are left out" {
     try testing.expectEqual(Skipped{ .drafts = 1 }, (try buildWith(a, src, .{}, &diag)).skipped);
 
     try expectBuildError(&.{.{ "a.md", "---\nexpires: never\n---\n" }}, "a.md", 2, "'expires' must look like YYYY-MM-DD");
+}
+
+test "git_dates and edit_url come from the repository holding the site" {
+    var tmp = testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    const io = testing.io;
+    try tmp.dir.createDirPath(io, "repo/.git/objects");
+    var objects = try tmp.dir.openDir(io, "repo/.git/objects", .{});
+    defer objects.close(io);
+    var site_dir = try tmp.dir.createDirPathOpen(io, "repo/site", .{ .open_options = .{ .iterate = true } });
+    defer site_dir.close(io);
+    const site = SiteDir.borrow(io, site_dir);
+    const config = "url: https://example.com\ngit_dates: true\nedit_url: https://github.com/me/r/edit/main/{path}\n";
+    const page = "---\nlayout: x\n---\nA\n";
+    const pinned = "---\nupdated: 2025-05-05\n---\nB\n";
+    try site.writeFile("_config.yml", config);
+    try site.writeFile("_layouts/x.html", "{{ page.updated }}|{{ page.edit_url }}");
+    try site.writeFile("a.md", page);
+    try site.writeFile("b.md", pinned);
+
+    // One commit on 2024-01-01 holding the site as it is on disk.
+    const blob_a = try git.writeLoose(a, objects, "blob", page);
+    const blob_b = try git.writeLoose(a, objects, "blob", pinned);
+    const site_tree = try git.writeLoose(a, objects, "tree", try git.treeData(a, &.{ .{ "100644", "a.md", blob_a }, .{ "100644", "b.md", blob_b } }));
+    const root = try git.writeLoose(a, objects, "tree", try git.treeData(a, &.{.{ "40000", "site", site_tree }}));
+    const commit = try git.writeLoose(a, objects, "commit", try std.fmt.allocPrint(a, "tree {x}\ncommitter A <a@x> 1704110400 +0000\n\nc\n", .{&root}));
+    try tmp.dir.writeFile(io, .{ .sub_path = "repo/.git/HEAD", .data = try std.fmt.allocPrint(a, "{x}\n", .{&commit}) });
+
+    var diag: Diagnostic = .{};
+    const built = build(a, site, &diag) catch |err| {
+        std.debug.print("{f}\n", .{diag});
+        return err;
+    };
+    try testing.expectEqualStrings("2024-01-01|https://github.com/me/r/edit/main/site/a.md", built.find("a/index.html").?.data.bytes);
+    const map = built.find("sitemap.xml").?.data.bytes;
+    try testing.expect(std.mem.indexOf(u8, map, "<loc>https://example.com/a/</loc><lastmod>2024-01-01</lastmod>") != null);
+    // Frontmatter `updated` wins over the history.
+    try testing.expect(std.mem.indexOf(u8, map, "<loc>https://example.com/b/</loc><lastmod>2025-05-05</lastmod>") != null);
+
+    try expectBuildError(&.{.{ "_config.yml", "edit_url: https://x/edit\n" }}, "_config.yml", 0, "'edit_url' must be a URL containing {path}");
 }

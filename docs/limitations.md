@@ -87,6 +87,22 @@ job:
 - The generated `robots.txt` allows every crawler; write your own
   `robots.txt` for anything else. Like the sitemap, it needs `url`.
 
+## Git dates
+
+- `git_dates` reads `.git` directly and supports SHA-1 repositories with
+  loose objects and version 2 pack indexes, including linked worktrees.
+  SHA-256 repositories, commit-graph and bitmap shortcuts, and partial
+  clones with missing objects are not supported; a missing parent commit
+  (a shallow clone) ends the history there.
+- Dates follow the first parent only, like `git log --first-parent`: a
+  file changed on a merged branch is dated by the merge commit.
+- Uncommitted changes do not count; a page edited but not committed keeps
+  its last commit's date.
+- Only `.md` and `.html` pages get dates; the history is read once per full
+  build, so `serve` picks up new commits on the next full rebuild.
+- Pack files are read into memory whole, which suits documentation
+  repositories but not multi-gigabyte ones.
+
 ## Redirects
 
 - Alias pages redirect with `<meta http-equiv="refresh">`, which works on

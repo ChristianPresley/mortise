@@ -184,6 +184,14 @@ my-site/
   and the build writes a `_redirects` file (`/old-url/ /new-url/ 301`) for
   hosts such as Netlify and Cloudflare Pages that redirect at the server.
   `redirects: false` in `_config.yml` skips that file.
+- `git_dates: true` in `_config.yml` dates each page by its last commit:
+  Mortise reads the Git repository holding the site (no `git` program
+  needed) and sets `page.updated`, which also becomes the sitemap
+  `lastmod`. Frontmatter `updated:` still wins. `edit_url:
+  https://github.com/me/site/edit/main/{path}` gives every page a
+  `page.edit_url`, with `{path}` the source file's path in the repository.
+  In CI, check out the full history (`fetch-depth: 0`); a shallow clone
+  dates every page by its newest commit.
 - Templates see `site` (config values plus `site.posts`, newest first, and
   `site.pages`), `page` (frontmatter plus `url`, `path`, and for posts `date`
   and `slug`), and in layouts `content`.
@@ -207,6 +215,7 @@ See the [Markdown subset](docs/markdown.md),
 | `src/watch.zig`       | Native file watchers                              |
 | `src/server.zig`      | Dev server and Server-Sent Events live reload     |
 | `src/check.zig`       | `mortise check` link and anchor checker           |
+| `src/git.zig`         | Git history reader for `git_dates`                |
 | `src/main.zig`        | Command-line entry point                          |
 | `src/restart.zig`     | `serve --restart-on-rebuild` supervisor           |
 | `src/themes/`         | Built-in themes (`theme:` in `_config.yml`)       |

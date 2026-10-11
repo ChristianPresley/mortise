@@ -55,3 +55,4 @@ footer { color: var(--muted); font-size: .9rem; border-top: 1px solid #e5e5e5; }
 .hl-string { color: #50a14f; }
 .hl-comment { color: #a0a1a7; font-style: italic; }
 .hl-builtin { color: #4078f2; }
+.page-meta { margin: 2rem 0 1rem; font-size: .85rem; color: var(--muted); }

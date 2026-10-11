@@ -6,3 +6,6 @@ author: The Mortise authors
 url: https://example.com
 # Optional built-in theme: visor (helmet HUD) or lcars (starship console).
 theme: visor
+# Last-updated dates from the Git history, and an edit link on every page.
+git_dates: true
+edit_url: https://github.com/ChristianPresley/mortise/edit/main/{path}

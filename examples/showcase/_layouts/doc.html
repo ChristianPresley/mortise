@@ -22,6 +22,7 @@ layout: base
 {% if page.breadcrumbs %}<nav class="breadcrumbs" aria-label="Breadcrumbs">{% for crumb in page.breadcrumbs %}<a href="{{ crumb.url }}">{{ crumb.title }}</a><span>›</span>{% endfor %}<span class="here">{{ page.title }}</span></nav>{% endif %}
 {% if page.toc %}<nav class="toc-box"><strong>On this page</strong>{{ page.toc }}</nav>{% endif %}
 {{ content }}
+<p class="page-meta">{% if page.updated %}Last updated {{ page.updated | date }} · {% endif %}<a href="{{ page.edit_url }}">Edit this page</a></p>
 <nav class="pager">
 {%- if page.previous %}<a class="prev" href="{{ page.previous.url }}"><small>Previous</small>{{ page.previous.title }}</a>{% else %}<span></span>{% endif %}
 {%- if page.next %}<a class="next" href="{{ page.next.url }}"><small>Next</small>{{ page.next.title }}</a>{% endif %}
