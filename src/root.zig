@@ -21,6 +21,7 @@ pub const openapi = @import("openapi.zig");
 pub const themes = @import("themes.zig");
 pub const assets = @import("assets.zig");
 pub const check = @import("check.zig");
+pub const redirects = @import("redirects.zig");
 pub const scaffold = @import("scaffold.zig");
 pub const watch = @import("watch.zig");
 pub const server = @import("server.zig");

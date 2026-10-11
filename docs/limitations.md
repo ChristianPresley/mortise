@@ -72,7 +72,18 @@ job:
 - Feed content is the post's rendered Markdown; relative links in it are
   not rewritten to absolute ones.
 - The sitemap has no `changefreq` or `priority`, and `lastmod` only for
-  posts.
+  posts and pages with `updated:` in their frontmatter.
+- The generated `robots.txt` allows every crawler; write your own
+  `robots.txt` for anything else. Like the sitemap, it needs `url`.
+
+## Redirects
+
+- Alias pages redirect with `<meta http-equiv="refresh">`, which works on
+  any static host but is a client-side redirect: the old URL answers
+  `200 OK`, not `301`. The `_redirects` file gives a real `301` only on
+  hosts that read it (Netlify, Cloudflare Pages); GitHub Pages ignores it.
+- Aliases are paths on this site; they cannot redirect to other sites, and
+  `_redirects` lists exact paths without wildcards or splats.
 
 ## Rendered graphics
 

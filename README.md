@@ -162,7 +162,17 @@ my-site/
   page at `sitemap.xml`. Set `feed: false` or `sitemap: false` to skip one,
   or `sitemap: false` in a page's frontmatter to leave that page out. A file
   of your own at either path takes precedence. The feed's author is
-  `author` from the config, or the site title.
+  `author` from the config, or the site title. A page's `updated:
+  YYYY-MM-DD` becomes its sitemap `lastmod` (otherwise a post's date).
+  The same `url` also writes `robots.txt`, allowing all crawlers and
+  naming the sitemap; `robots: false` skips it and a `robots.txt` of your
+  own replaces it.
+- `aliases: [/old-url/, /old.html]` in a page's frontmatter keeps old links
+  working: each alias gets a small page that redirects to the page (with a
+  canonical link and `noindex`, so search engines keep only the new URL),
+  and the build writes a `_redirects` file (`/old-url/ /new-url/ 301`) for
+  hosts such as Netlify and Cloudflare Pages that redirect at the server.
+  `redirects: false` in `_config.yml` skips that file.
 - Templates see `site` (config values plus `site.posts`, newest first, and
   `site.pages`), `page` (frontmatter plus `url`, `path`, and for posts `date`
   and `slug`), and in layouts `content`.

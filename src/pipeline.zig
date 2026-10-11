@@ -28,6 +28,7 @@ const data_files = @import("data.zig");
 const openapi = @import("openapi.zig");
 const themes = @import("themes.zig");
 const assets = @import("assets.zig");
+const redirects = @import("redirects.zig");
 const Value = template.Value;
 const Entry = template.Entry;
 
@@ -169,6 +170,11 @@ const Page = struct {
     output: []const u8 = "",
     /// Pages 2 and up of a paginated page.
     extra_outputs: []const Output = &.{},
+    /// Old URLs from frontmatter `aliases`, without the baseurl, each
+    /// with the output path of its redirect page.
+    aliases: []const AliasPath = &.{},
+    /// `YYYY-MM-DD` of the last change, from frontmatter `updated`, or "".
+    updated: []const u8 = "",
     sources: []const []const u8 = &.{},
     reads_collections: bool = false,
 };
@@ -561,13 +567,23 @@ fn addGenerated(b: *Builder, outputs: *std.ArrayList(Output), config_fields: fro
         };
         if (p.is_post) try posts.append(arena, entry);
         const opted_out = if (p.fields.get("sitemap")) |v| v == .boolean and !v.boolean else false;
-        if (!opted_out and !std.mem.eql(u8, p.out_path, "404.html")) try listed.append(arena, entry);
+        if (!opted_out and !std.mem.eql(u8, p.out_path, "404.html")) {
+            var listed_entry = entry;
+            // The sitemap's lastmod is the last change, when known.
+            if (p.updated.len > 0) listed_entry.date = p.updated;
+            try listed.append(arena, listed_entry);
+        }
     }
     if (try enabled(b, config_fields, "feed") and posts.items.len > 0 and !hasOutput(outputs.items, feeds.feed_path)) {
         try outputs.append(arena, .{ .path = feeds.feed_path, .source = config_path, .data = .{ .bytes = try feeds.atom(arena, site, posts.items) } });
     }
-    if (try enabled(b, config_fields, "sitemap") and !hasOutput(outputs.items, feeds.sitemap_path)) {
+    const has_sitemap = try enabled(b, config_fields, "sitemap");
+    if (has_sitemap and !hasOutput(outputs.items, feeds.sitemap_path)) {
         try outputs.append(arena, .{ .path = feeds.sitemap_path, .source = config_path, .data = .{ .bytes = try feeds.sitemap(arena, site, listed.items) } });
+    }
+    if (try enabled(b, config_fields, "robots") and !hasOutput(outputs.items, redirects.robots_path)) {
+        const sitemap_url = if (has_sitemap) try std.fmt.allocPrint(arena, "{s}{s}/{s}", .{ url, b.baseurl, feeds.sitemap_path }) else null;
+        try outputs.append(arena, .{ .path = redirects.robots_path, .source = config_path, .data = .{ .bytes = try redirects.robots(arena, sitemap_url) } });
     }
 }
 
@@ -646,6 +662,7 @@ fn finish(b: *Builder, config_fields: frontmatter.Map, pages: []Page, statics: [
     if (tag_pages) try addTagPages(b, &outputs, tags.list);
     try addComponentsCss(b, &outputs, config_fields, pages);
     try addThemeCss(b, &outputs, config_fields);
+    try addAliases(b, &outputs, config_fields, pages);
     if (b.site_url) |url| try addGenerated(b, &outputs, config_fields, pages, url);
 
     std.mem.sortUnstable(Output, outputs.items, {}, outputOrder);
@@ -758,7 +775,62 @@ fn loadPage(b: *Builder, path: []const u8, is_post: bool) Error!?Page {
         else => return b.fail(path, fieldLine(data, "permalink"), "invalid output path '{s}': {s}", .{ out_raw, @errorName(err) }),
     };
     if (b.baseurl.len > 0) page.url = try std.mem.concat(arena, u8, &.{ b.baseurl, page.url });
+
+    if (doc.fields.get("updated")) |d| {
+        if (d != .string or template.parseDate(d.string) == null) {
+            return b.fail(path, fieldLine(data, "updated"), "'updated' must look like YYYY-MM-DD", .{});
+        }
+        page.updated = d.string[0..10];
+    }
+    if (doc.fields.get("aliases")) |al| {
+        const line = fieldLine(data, "aliases");
+        const items: []const frontmatter.Value = switch (al) {
+            .list => |l| l,
+            .string => &.{al},
+            else => return b.fail(path, line, "'aliases' must be a list of paths such as [/old-url/]", .{}),
+        };
+        var aliases: std.ArrayList(AliasPath) = .empty;
+        for (items) |item| {
+            if (item != .string) return b.fail(path, line, "'aliases' must be a list of paths such as [/old-url/]", .{});
+            if (redirects.invalidAlias(item.string)) |msg| return b.fail(path, line, "{s}: '{s}'", .{ msg, item.string });
+            const raw = if (std.mem.endsWith(u8, item.string, "/"))
+                try std.fmt.allocPrint(arena, "{s}index.html", .{item.string})
+            else if (std.mem.endsWith(u8, item.string, ".html"))
+                item.string
+            else
+                try std.fmt.allocPrint(arena, "{s}/index.html", .{item.string});
+            const out = sitepath.normalize(arena, raw[1..]) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => return b.fail(path, line, "invalid alias '{s}': {s}", .{ item.string, @errorName(err) }),
+            };
+            try aliases.append(arena, .{ .url = item.string, .out_path = out });
+        }
+        page.aliases = aliases.items;
+    }
     return page;
+}
+
+const AliasPath = struct {
+    /// As written in frontmatter, such as `/old-url/`.
+    url: []const u8,
+    out_path: []const u8,
+};
+
+/// Writes a redirect page for every alias, and `_redirects` listing them
+/// unless `redirects: false`.
+fn addAliases(b: *Builder, outputs: *std.ArrayList(Output), config_fields: frontmatter.Map, pages: []const Page) Error!void {
+    const arena = b.arena;
+    var all: std.ArrayList(redirects.Alias) = .empty;
+    for (pages) |p| {
+        for (p.aliases) |a| {
+            const canonical = if (b.site_url) |u| try std.mem.concat(arena, u8, &.{ u, p.url }) else p.url;
+            try outputs.append(arena, .{ .path = a.out_path, .source = p.source, .data = .{ .bytes = try redirects.stub(arena, p.url, canonical) } });
+            try all.append(arena, .{ .from = try std.mem.concat(arena, u8, &.{ b.baseurl, a.url }), .to = p.url });
+        }
+    }
+    if (all.items.len > 0 and try enabled(b, config_fields, "redirects") and !hasOutput(outputs.items, redirects.redirects_path)) {
+        try outputs.append(arena, .{ .path = redirects.redirects_path, .source = config_path, .data = .{ .bytes = try redirects.redirectsFile(arena, all.items) } });
+    }
 }
 
 /// Turns `_api/NAME.json` into a page at `/api/NAME/` holding the rendered
@@ -2057,4 +2129,42 @@ test "a frontmatter date overrides the file name date" {
     try testing.expectEqualStrings("/2024/06/01/a/ /2024/03/01/b/ ", site.find("index.html").?.data.bytes);
 
     try expectBuildError(&.{.{ "_posts/2024-01-05-a.md", "---\ndate: soon\n---\n" }}, "_posts/2024-01-05-a.md", 2, "'date' must look like YYYY-MM-DD");
+}
+
+test "aliases write redirect pages and a _redirects file" {
+    var t: TestSite = try .init(&.{
+        .{ "_config.yml", "url: https://example.com\nbaseurl: /blog\n" },
+        .{ "new.md", "---\ntitle: New\naliases: [/old/, /older.html, /oldest]\nupdated: 2024-03-01\n---\nN\n" },
+    });
+    defer t.deinit();
+    var diag: Diagnostic = .{};
+    const site = try t.build(&diag);
+    const stub = site.find("old/index.html").?.data.bytes;
+    try testing.expect(std.mem.indexOf(u8, stub, "content=\"0; url=/blog/new/\"") != null);
+    try testing.expect(std.mem.indexOf(u8, stub, "<link rel=\"canonical\" href=\"https://example.com/blog/new/\">") != null);
+    try testing.expect(site.find("older.html") != null);
+    try testing.expect(site.find("oldest/index.html") != null);
+    try testing.expectEqualStrings(
+        "# Generated by Mortise from frontmatter aliases.\n/blog/old/ /blog/new/ 301\n/blog/older.html /blog/new/ 301\n/blog/oldest /blog/new/ 301\n",
+        site.find("_redirects").?.data.bytes,
+    );
+    try testing.expectEqualStrings("User-agent: *\nAllow: /\n\nSitemap: https://example.com/blog/sitemap.xml\n", site.find("robots.txt").?.data.bytes);
+    try testing.expect(std.mem.indexOf(u8, site.find("sitemap.xml").?.data.bytes, "<lastmod>2024-03-01</lastmod>") != null);
+
+    // Switches turn the generated files off.
+    var t2: TestSite = try .init(&.{
+        .{ "_config.yml", "url: https://example.com\nredirects: false\nrobots: false\n" },
+        .{ "new.md", "---\naliases: /old/\n---\nN\n" },
+    });
+    defer t2.deinit();
+    const s2 = try t2.build(&diag);
+    try testing.expect(s2.find("old/index.html") != null);
+    try testing.expect(s2.find("_redirects") == null and s2.find("robots.txt") == null);
+
+    try expectBuildError(&.{.{ "a.md", "---\naliases: [old/]\n---\n" }}, "a.md", 2, "must be a path starting with '/'");
+    try expectBuildError(&.{.{ "a.md", "---\nupdated: soon\n---\n" }}, "a.md", 2, "'updated' must look like YYYY-MM-DD");
+    try expectBuildError(&.{
+        .{ "a.md", "---\naliases: [/b/]\n---\n" },
+        .{ "b.md", "B\n" },
+    }, "b.md", 0, "also writes to");
 }
