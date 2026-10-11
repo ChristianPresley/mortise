@@ -128,3 +128,35 @@ labels: [Markdown, Templates, Writing, Other]
 values: [38, 31, 22, 9]
 suffix: "%"
 ```
+
+## Diagrams
+
+A `mermaid` code block is drawn as an SVG diagram at build time, so the
+page needs no script; the same block also renders on GitHub.
+
+```mermaid
+graph TD
+  save[Save a file] --> watch{Watcher sees it}
+  watch -->|page| page[Re-render the page]
+  watch -->|layout| deps[Re-render pages that use it]
+  watch -.->|config| full[Rebuild everything]
+  page --> reload((Reload))
+  deps --> reload
+  full --> reload
+```
+
+```mermaid
+sequenceDiagram
+  participant E as Editor
+  participant M as mortise serve
+  actor B as Browser
+  E->>M: save index.md
+  M->>M: rebuild
+  alt build succeeded
+    M-->>B: reload event
+    B->>M: GET /
+  else build failed
+    M-->>B: error overlay
+  end
+  Note over M,B: about 11 ms
+```

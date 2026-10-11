@@ -1760,6 +1760,9 @@ fn loadPage(b: *Builder, path: []const u8, is_post: bool) Error!?Page {
         if (rendered.chart_error) |ce| {
             return b.fail(path, 0, "chart, line {d} of its block: {s}", .{ ce.line, ce.message });
         }
+        if (rendered.diagram_error) |de| {
+            return b.fail(path, 0, "diagram, line {d} of its block: {s}", .{ de.line, de.message });
+        }
     }
 
     if (is_post) {
@@ -4737,4 +4740,13 @@ test "math: true typesets dollar math, and bad math fails the build" {
         .{ "a.md", "Oops: $\\frac{1}$\n" },
     }, "a.md", 0, "math '\\frac{1}': missing argument");
     try expectBuildError(&.{.{ "_config.yml", "math: yes\n" }}, "_config.yml", 1, "'math' must be true or false");
+}
+
+test "mermaid blocks become SVG, and bad ones fail the build" {
+    var t: TestSite = try .init(&.{
+        .{ "a.md", "```mermaid\ngraph LR\nA --> B\n```\n" },
+    });
+    defer t.deinit();
+    try testing.expect(std.mem.startsWith(u8, try t.output("a/index.html"), "<figure class=\"mt-diagram mt-diagram-flowchart\">"));
+    try expectBuildError(&.{.{ "a.md", "```mermaid\ngraph TD\nA[open --> B\n```\n" }}, "a.md", 0, "diagram, line 2 of its block: node 'A' is missing ']'");
 }

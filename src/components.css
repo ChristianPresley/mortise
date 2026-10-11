@@ -443,3 +443,24 @@ pre:hover > .mt-copy, .mt-copy:focus-visible { opacity: 1; }
    stretch. */
 math { font-family: math, "Cambria Math", "STIX Two Math", "Latin Modern Math", serif; }
 math[display="block"] { margin: 1rem 0; overflow-x: auto; overflow-y: hidden; }
+
+/* Diagrams from mermaid blocks: SVG colored only through these classes.
+   Nodes are outlined in the accent color on a faint fill. */
+.mt-diagram { margin: 1.5rem 0; overflow-x: auto; }
+.mt-diagram svg { display: block; max-width: 100%; height: auto; margin: 0 auto; font: 14px system-ui, sans-serif; overflow: visible; }
+.mt-diagram text { fill: currentColor; }
+.mt-diagram-node :is(rect, path, circle) { fill: color-mix(in srgb, var(--mt-accent) 10%, Canvas); stroke: var(--mt-accent); stroke-width: 1.5; }
+.mt-diagram-node .mt-diagram-rim { fill: none; }
+.mt-diagram-edge { fill: none; stroke: currentColor; stroke-opacity: .7; stroke-width: 1.5; }
+.mt-diagram-dotted { stroke-dasharray: 4 4; }
+.mt-diagram-thick { stroke-width: 3; }
+.mt-diagram-head { fill: currentColor; fill-opacity: .7; }
+.mt-diagram-open { fill: none; stroke: currentColor; stroke-opacity: .7; stroke-width: 1.5; }
+.mt-diagram-label { font-size: 12px; fill-opacity: .85; }
+.mt-diagram-label-bg { fill: Canvas; }
+.mt-diagram-lifeline { stroke: currentColor; stroke-opacity: .3; stroke-dasharray: 3 4; }
+.mt-diagram-note rect { fill: color-mix(in srgb, var(--mt-warning) 18%, Canvas); stroke: var(--mt-warning); }
+.mt-diagram-frame { fill: none; stroke: currentColor; stroke-opacity: .4; }
+.mt-diagram-frame-label rect { fill: color-mix(in srgb, currentColor 12%, Canvas); stroke: currentColor; stroke-opacity: .4; }
+.mt-diagram-frame-label text { font-size: 12px; font-weight: 600; }
+.mt-diagram-divider { stroke: currentColor; stroke-opacity: .4; stroke-dasharray: 4 3; }

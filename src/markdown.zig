@@ -11,6 +11,7 @@ const highlight = @import("highlight.zig");
 const snippet = @import("snippet.zig");
 const chart = @import("chart.zig");
 const tex = @import("tex.zig");
+const diagram = @import("diagram.zig");
 
 pub const Error = Allocator.Error || Writer.Error;
 
@@ -41,6 +42,8 @@ pub const Document = struct {
     chart_error: ?chart.Diagnostic = null,
     /// The first math that could not be typeset: its source and why.
     math_error: ?MathError = null,
+    /// The first `mermaid` block that could not be drawn, if any.
+    diagram_error: ?diagram.Diagnostic = null,
 };
 
 pub const IncludeError = struct {
@@ -129,7 +132,7 @@ pub fn toDocumentWith(arena: Allocator, src: []const u8, options: Options) Alloc
     // Every component's markup carries an mt- class; math needs the math
     // font rule.
     const uses = std.mem.indexOf(u8, html, "class=\"mt-") != null or std.mem.indexOf(u8, html, "<math") != null;
-    return .{ .html = html, .headings = r.headings.items, .uses_components = uses, .include_error = r.include_error, .chart_error = r.chart_error, .math_error = r.math_error };
+    return .{ .html = html, .headings = r.headings.items, .uses_components = uses, .include_error = r.include_error, .chart_error = r.chart_error, .math_error = r.math_error, .diagram_error = r.diagram_error };
 }
 
 /// Renders `src` to HTML on `w`. Scratch memory comes from `arena`.
@@ -1039,6 +1042,8 @@ const Renderer = struct {
     chart_error: ?chart.Diagnostic = null,
     inline_opts: InlineOptions = .{},
     math_error: ?MathError = null,
+    /// Set by the first `mermaid` block that cannot be drawn.
+    diagram_error: ?diagram.Diagnostic = null,
 
     /// A unique id for a heading whose plain text is `text` (see
     /// `slugify`). Repeats get `-1`, `-2`, and so on.
@@ -1311,6 +1316,16 @@ fn renderBlock(r: *Renderer, b: Block, tight: bool, w: *Writer) Error!void {
                 error.WriteFailed => return error.WriteFailed,
                 error.InvalidChart => if (r.chart_error == null) {
                     r.chart_error = diag;
+                },
+            };
+        } else if (std.mem.eql(u8, c.info, "mermaid")) {
+            var diag: diagram.Diagnostic = .{};
+            diagram.render(arena, c.text, w, &diag) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                error.WriteFailed => return error.WriteFailed,
+                error.InvalidDiagram => {
+                    if (r.diagram_error == null) r.diagram_error = diag;
+                    try renderCode(arena, c, r.options.copy_buttons, w);
                 },
             };
         } else if (std.mem.eql(u8, c.info, "math")) {

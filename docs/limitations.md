@@ -112,6 +112,18 @@ job:
 - `...` must sit inside one paragraph: a blank line inside it ends the
   math. Use a `math` code block for long display math.
 
+## Diagrams
+
+- Only Mermaid flowcharts and sequence diagrams are drawn; other kinds
+  (class, state, Gantt, pie, ...) and flowchart subgraphs fail the build.
+- Styling lines (`classDef`, `style`, ...) are ignored, as are click handlers,
+  `activate` and `autonumber`.
+- Flowchart layout is a simple layered layout: links between nodes in the
+  same layer, and links from a node to itself, are not drawn well, and big
+  charts can have crossings a better layout would avoid.
+- Text sizes are estimated, since SVG text cannot be measured at build
+  time; very long labels can overflow their boxes. Labels are one line.
+
 ## Data files
 
 - Changing anything in `_data/` rebuilds the whole site, since any page may

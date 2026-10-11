@@ -205,6 +205,9 @@ my-site/
 - [Math](docs/markdown.md#math): TeX in `math` code blocks, and with
   `math: true` between dollar signs, becomes MathML at build time, so
   browsers typeset it without scripts or web fonts.
+- [Diagrams](docs/components.md#diagrams): `mermaid` code blocks with
+  flowcharts or sequence diagrams are drawn as SVG at build time, with no
+  script in the page.
 - Fenced code in Zig, C/C++, Rust, Go, JavaScript/TypeScript, Python,
   shell, JSON, and YAML is syntax-highlighted at build time with
   `hl-*` classes for your stylesheet; see the
@@ -311,6 +314,7 @@ See the [Markdown subset](docs/markdown.md),
 | `src/markdown.zig`    | Markdown subset to HTML                           |
 | `src/chart.zig`       | SVG charts from `chart` code blocks               |
 | `src/tex.zig`         | TeX math to MathML                                |
+| `src/diagram.zig`     | Flowcharts and sequence diagrams as SVG           |
 | `src/frontmatter.zig` | Restricted YAML frontmatter                       |
 | `src/template.zig`    | Template engine                                   |
 | `src/pipeline.zig`    | Source tree to output files                       |

@@ -15,6 +15,7 @@ pub const highlight = @import("highlight.zig");
 pub const snippet = @import("snippet.zig");
 pub const chart = @import("chart.zig");
 pub const tex = @import("tex.zig");
+pub const diagram = @import("diagram.zig");
 pub const frontmatter = @import("frontmatter.zig");
 pub const template = @import("template.zig");
 pub const pipeline = @import("pipeline.zig");

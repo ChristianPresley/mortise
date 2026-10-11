@@ -229,6 +229,56 @@ A bad setting, a label count that does not match the values, or a value
 that is not a number fails the build with the file and the line within
 the block.
 
+## Diagrams
+
+A fenced code block with the language `mermaid` is drawn as an SVG
+diagram during the build, so pages need no script. The syntax is a subset
+of [Mermaid](https://mermaid.js.org/)'s, so the same block also renders
+on GitHub and other sites that run Mermaid.
+
+**Flowcharts** start with `graph` or `flowchart` and a direction: `TD`
+(or `TB`), `BT`, `LR` or `RL`.
+
+````markdown
+```mermaid
+graph TD
+  save[Save a file] --> watch{Changed?}
+  watch -->|yes| build(Rebuild)
+  watch -.->|no| idle((Wait))
+```
+````
+
+| Syntax                         | Meaning                                  |
+| ------------------------------ | ---------------------------------------- |
+| `A[text]`, `A(text)`, `A([text])`, `A{text}`, `A((text))`, `A[(text)]` | Box, rounded box, stadium, diamond, circle, cylinder |
+| `A --> B`, `A --- B`           | Arrow, plain line                        |
+| `A -.-> B`, `A ==> B`          | Dotted, thick                            |
+| `A -->\|label\| B`, `A -- label --> B` | A labeled link                   |
+| `A --> B --> C`                | A chain of links                         |
+| `;` or a new line              | Ends a statement; `%%` starts a comment  |
+
+Nodes are placed in layers along the direction, ordered to keep links
+from crossing; links that skip layers bend around the nodes between.
+`classDef`, `class`, `style`, `linkStyle` and `click` lines are accepted
+and ignored.
+
+**Sequence diagrams** start with `sequenceDiagram`:
+
+| Syntax                                  | Meaning                               |
+| --------------------------------------- | ------------------------------------- |
+| `participant A as Alice`, `actor B`     | A column (actors have rounded boxes)  |
+| `A->>B: text`, `A-->>B: text`           | Solid and dashed messages             |
+| `A->B`, `A-->B`, `A-)B`, `A-xB`         | Other arrow styles                    |
+| `A->>A: text`                           | A message to itself                   |
+| `Note right of A: text`, `Note over A,B: text` | Notes                          |
+| `loop`, `alt`/`else`, `opt`, `par`/`and`, `critical`, `break` ... `end` | Labeled frames |
+
+The figure is `<figure class="mt-diagram mt-diagram-flowchart">` (or
+`-sequence`). It has no colors of its own: text and lines follow the
+text color and nodes are outlined in `--mt-accent`, so themes restyle
+diagrams through `mortise.css`. A diagram the build cannot read fails it
+with the file and the line within the block.
+
 ## Theming
 
 `mortise.css` mixes its neutral colors from the surrounding text color, so

@@ -92,6 +92,9 @@ Unknown options are ignored.
 
 A block whose language is `chart` is not code: it is drawn as a chart (see
 [components](components.md#charts)).
+A block whose language is `mermaid` is drawn as a diagram instead (see
+[components](components.md#diagrams)).
+
 
 ````markdown
 ```zig
@@ -309,5 +312,5 @@ These render as plain paragraph text:
 - Reference-style links and link reference definitions.
 - HTML entities and numeric character references (`&amp;` renders as
   `&amp;amp;`).
-- Extensions other than tables, strikethrough, highlight, wikilinks, math, task lists, footnotes,
+- Extensions other than tables, strikethrough, highlight, wikilinks, math, diagrams, task lists, footnotes,
   definition lists, and the [components](components.md).
