@@ -105,6 +105,9 @@ pub const Server = struct {
     /// renders specs that changed. Builds run one at a time, so it needs
     /// no lock.
     render_cache: assets.Cache,
+    /// The watcher `watch` was given. The server frees it only after the
+    /// watch loop has stopped using it.
+    watcher: ?Watcher = null,
 
     pub const InitError = Io.Dir.OpenError || Io.net.IpAddress.ListenError || Allocator.Error;
 
@@ -159,6 +162,7 @@ pub const Server = struct {
         if (address.connect(io, .{ .mode = .stream })) |stream| stream.close(io) else |_| {}
         s.tasks.await(io) catch {};
 
+        if (s.watcher) |*w| w.deinit();
         s.listener.deinit(io);
         if (s.snapshot) |snap| s.release(snap);
         s.clearFailure();
@@ -324,9 +328,12 @@ pub const Server = struct {
     }
 
     /// Rebuilds whenever `watcher` reports a change, until the server stops.
-    /// Runs in the background; `deinit` waits for it.
-    pub fn watch(s: *Server, watcher: *Watcher) Io.ConcurrentError!void {
-        try s.tasks.concurrent(s.io, watchLoop, .{ s, watcher });
+    /// Runs in the background. The server takes `watcher` over, even when
+    /// this fails, and `deinit` frees it after the loop has ended.
+    pub fn watch(s: *Server, watcher: Watcher) Io.ConcurrentError!void {
+        std.debug.assert(s.watcher == null);
+        s.watcher = watcher;
+        try s.tasks.concurrent(s.io, watchLoop, .{ s, &s.watcher.? });
     }
 
     fn isStopping(s: *Server) bool {
@@ -853,10 +860,8 @@ test "live reload: saving a source file sends a reload event" {
 
     const server = try Server.init(testing.allocator, io, root, .{ .port = 0 });
     defer server.deinit();
-    var watcher = try Watcher.init(testing.allocator, io, root);
-    defer watcher.deinit();
+    try server.watch(try Watcher.init(testing.allocator, io, root));
     try server.start();
-    try server.watch(&watcher);
 
     var c = try TestClient.connect(io, server.port);
     defer c.close();
@@ -906,10 +911,8 @@ test "build errors reach the browser and the last good build keeps serving" {
     var log: Io.Writer = .fixed(&log_buf);
     const server = try Server.init(testing.allocator, io, root, .{ .port = 0, .log = &log });
     defer server.deinit();
-    var watcher = try Watcher.init(testing.allocator, io, root);
-    defer watcher.deinit();
+    try server.watch(try Watcher.init(testing.allocator, io, root));
     try server.start();
-    try server.watch(&watcher);
 
     var events = try TestClient.connect(io, server.port);
     defer events.close();
@@ -957,10 +960,8 @@ test "one atomic save causes exactly one rebuild" {
 
     const server = try Server.init(testing.allocator, io, root, .{ .port = 0 });
     defer server.deinit();
-    var watcher = try Watcher.init(testing.allocator, io, root);
-    defer watcher.deinit();
+    try server.watch(try Watcher.init(testing.allocator, io, root));
     try server.start();
-    try server.watch(&watcher);
 
     var events = try TestClient.connect(io, server.port);
     defer events.close();
@@ -1025,10 +1026,8 @@ test "a stylesheet-only change sends a css event instead of a reload" {
 
     const server = try Server.init(testing.allocator, io, root, .{ .port = 0 });
     defer server.deinit();
-    var watcher = try Watcher.init(testing.allocator, io, root);
-    defer watcher.deinit();
+    try server.watch(try Watcher.init(testing.allocator, io, root));
     try server.start();
-    try server.watch(&watcher);
 
     var events = try TestClient.connect(io, server.port);
     defer events.close();

@@ -252,26 +252,26 @@ fn cmdServe(ctx: Ctx, argv: []const [:0]const u8) u8 {
     };
     defer server.deinit();
 
-    var watcher = mortise.watch.Watcher.init(ctx.gpa, io, args.dir) catch |e| {
+    const watcher = mortise.watch.Watcher.init(ctx.gpa, io, args.dir) catch |e| {
         ctx.err.print("mortise: cannot watch '{s}' for changes: {s}\n", .{ args.dir, @errorName(e) }) catch {};
         return 1;
     };
-    defer watcher.deinit();
     if (watcher.fallback_reason) |reason| {
         ctx.out.print("warning: native file watching is unavailable ({s}); polling for changes instead\n", .{@errorName(reason)}) catch {};
     }
 
+    // The server owns the watcher from here on, and frees it in `deinit`.
+    server.watch(watcher) catch |e| {
+        ctx.err.print("mortise: cannot start watching: {s}\n", .{@errorName(e)}) catch {};
+        return 1;
+    };
     server.start() catch |e| {
         ctx.err.print("mortise: cannot start the server: {s}\n", .{@errorName(e)}) catch {};
         return 1;
     };
-    server.watch(&watcher) catch |e| {
-        ctx.err.print("mortise: cannot start watching: {s}\n", .{@errorName(e)}) catch {};
-        return 1;
-    };
     ctx.out.print("Serving {s} at ", .{args.dir}) catch {};
     server.writeUrl(ctx.out) catch {};
-    ctx.out.print(" (watching with {s}). Press Ctrl+C to stop.\n", .{watcher.backendName()}) catch {};
+    ctx.out.print(" (watching with {s}). Press Ctrl+C to stop.\n", .{server.watcher.?.backendName()}) catch {};
     ctx.out.flush() catch {};
     if (args.restarted_from) |exe| {
         var poll = io.concurrent(restart.exitWhenChanged, .{ io, exe }) catch |e| {
