@@ -126,6 +126,7 @@ const files = [_]struct { []const u8, []const u8 }{
         \\html { background: var(--m-bg, #fff); }
         \\body { max-width: 42rem; margin: 2rem auto; padding: 0 1rem; font: 17px/1.6 system-ui, sans-serif; color: var(--m-text, #1d1d1f); }
         \\a { color: var(--m-accent, #0b57d0); }
+        \\img { max-width: 100%; height: auto; }
         \\header { display: flex; flex-wrap: wrap; gap: .5rem 1rem; justify-content: space-between; align-items: baseline; padding-bottom: .75rem; border-bottom: 1px solid var(--m-border, #e5e5e5); }
         \\header .brand { font-weight: 700; color: inherit; text-decoration: none; }
         \\header nav a { margin-left: 1rem; color: var(--m-muted, #6e6e73); text-decoration: none; }

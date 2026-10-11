@@ -18,3 +18,7 @@ search: true
 taxonomies: [categories]
 # page.related lists up to this many posts sharing tags or categories.
 related: 3
+# Image tags get width/height and lazy loading; JPEG and PNG images also get
+# resized copies at these widths for srcset.
+images:
+  widths: [480, 960]

@@ -224,6 +224,7 @@ html { background: var(--m-bg); }
 }
 :root body h1::after { content: ""; flex: 1; min-width: 3rem; height: 1rem; border-radius: 999px; background: linear-gradient(90deg, var(--l-orange) 0 70%, #000 70% calc(70% + .3rem), var(--l-gold) calc(70% + .3rem)); }
 :root body main { counter-reset: l-sec; }
+:root body main img { max-width: 100%; height: auto; }
 :root body h2:not(.mt-api-card *) {
   display: flex;
   align-items: center;

@@ -55,6 +55,12 @@ pub fn readFile(self: SiteDir, arena: Allocator, sp: []const u8) Io.Dir.ReadFile
     return self.dir.readFileAlloc(self.io, sp, arena, .limited(max_file_size));
 }
 
+/// Size, modification time and other metadata of a file.
+pub fn stat(self: SiteDir, sp: []const u8) Io.Dir.StatFileError!Io.File.Stat {
+    std.debug.assert(sitepath.isNormalized(sp));
+    return self.dir.statFile(self.io, sp, .{});
+}
+
 pub const WriteError = Io.Dir.CreateDirPathError || Io.Dir.WriteFileError;
 
 /// Writes `data` to `sp`, creating parent directories as needed and

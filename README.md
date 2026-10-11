@@ -151,6 +151,10 @@ my-site/
   `page.breadcrumbs`, `page.previous`/`page.next`, and `site.nav` for
   wiki-style navigation. See [components](docs/components.md) and
   [templates](docs/templates.md#navigation).
+- [Images](docs/images.md): `<img>` tags get `width`, `height` and lazy
+  loading, and with `images: widths: [480, 960]` in `_config.yml`, PNG and
+  JPEG files get resized copies and a `srcset`. The PNG and JPEG codecs are
+  part of Mortise.
 - [Rendered graphics](docs/rendering.md): each `_render/PATH.yml` spec
   draws an image at `/PATH.png` during the build: starfields, HUD panel
   frames for CSS `border-image`, radar scopes, planets, and hologram
@@ -274,6 +278,7 @@ See the [Markdown subset](docs/markdown.md),
 | `src/main.zig`        | Command-line entry point                          |
 | `src/restart.zig`     | `serve --restart-on-rebuild` supervisor           |
 | `src/themes/`         | Built-in themes (`theme:` in `_config.yml`)       |
+| `src/images.zig`     | `<img>` sizes, lazy loading and `srcset` copies     |
 | `render/`             | CPU renderer for build-time graphics; see [render/README.md](render/README.md) |
 | `test/`               | Fixture and end-to-end tests and their inputs     |
 | `bench/`              | Save-to-reload latency benchmark and results      |

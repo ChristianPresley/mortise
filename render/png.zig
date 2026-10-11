@@ -1,4 +1,4 @@
-//! PNG encoding and decoding, for 8-bit images only. Compression is the
+//! PNG encoding (8-bit RGBA) and decoding (every standard format). Compression is the
 //! standard library's deflate; everything else (chunks, CRCs, row filters)
 //! is here.
 
@@ -162,19 +162,50 @@ pub const Image = struct {
 pub const DecodeError = Allocator.Error || error{
     NotPng,
     Corrupt,
-    /// Valid PNG, but not 8-bit, non-interlaced gray, RGB, gray+alpha or RGBA.
+    /// A valid PNG using a feature outside the specification's core, such
+    /// as an unknown color type.
     Unsupported,
 };
 
-/// Decodes an 8-bit, non-interlaced PNG into RGBA. Enough to read back what
-/// `encode` writes and most simple assets; palettes, 16-bit channels and
-/// interlacing are rejected as `Unsupported`.
+/// The image layout from a PNG's IHDR chunk.
+const Header = struct {
+    width: u32,
+    height: u32,
+    depth: u8,
+    color: u8,
+    interlaced: bool,
+
+    fn channels(h: Header) u8 {
+        return switch (h.color) {
+            0 => 1,
+            2 => 3,
+            3 => 1,
+            4 => 2,
+            6 => 4,
+            else => unreachable,
+        };
+    }
+
+    /// Bytes per complete pixel, at least 1: the distance filters look back.
+    fn filterStep(h: Header) usize {
+        return @max(1, @as(usize, h.channels()) * h.depth / 8);
+    }
+
+    fn rowBytes(h: Header, width: usize) usize {
+        return (width * h.channels() * h.depth + 7) / 8;
+    }
+};
+
+/// Decodes any standard PNG into 8-bit RGBA: gray, RGB, palette, gray with
+/// alpha and RGBA, at every bit depth (16-bit channels keep their high
+/// byte), with `tRNS` transparency and Adam7 interlacing. Gamma and color
+/// profile chunks are ignored.
 pub fn decode(gpa: Allocator, bytes: []const u8) DecodeError!Image {
     if (!std.mem.startsWith(u8, bytes, signature)) return error.NotPng;
     var pos: usize = signature.len;
-    var width: u32 = 0;
-    var height: u32 = 0;
-    var channels: usize = 0;
+    var header: ?Header = null;
+    var palette: []const u8 = "";
+    var trns: []const u8 = "";
     var idat: std.ArrayList(u8) = .empty;
     defer idat.deinit(gpa);
 
@@ -193,63 +224,179 @@ pub fn decode(gpa: Allocator, bytes: []const u8) DecodeError!Image {
 
         if (std.mem.eql(u8, kind, "IHDR")) {
             if (len != 13) return error.Corrupt;
-            width = std.mem.readInt(u32, data[0..4], .big);
-            height = std.mem.readInt(u32, data[4..8], .big);
-            if (width == 0 or height == 0) return error.Corrupt;
-            if (data[8] != 8 or data[10] != 0 or data[11] != 0 or data[12] != 0) return error.Unsupported;
-            channels = switch (data[9]) {
-                0 => 1,
-                2 => 3,
-                4 => 2,
-                6 => 4,
+            const hd: Header = .{
+                .width = std.mem.readInt(u32, data[0..4], .big),
+                .height = std.mem.readInt(u32, data[4..8], .big),
+                .depth = data[8],
+                .color = data[9],
+                .interlaced = data[12] == 1,
+            };
+            if (hd.width == 0 or hd.height == 0) return error.Corrupt;
+            if (data[10] != 0 or data[11] != 0 or data[12] > 1) return error.Unsupported;
+            const depth_ok = switch (hd.color) {
+                0 => hd.depth == 1 or hd.depth == 2 or hd.depth == 4 or hd.depth == 8 or hd.depth == 16,
+                3 => hd.depth == 1 or hd.depth == 2 or hd.depth == 4 or hd.depth == 8,
+                2, 4, 6 => hd.depth == 8 or hd.depth == 16,
                 else => return error.Unsupported,
             };
+            if (!depth_ok) return error.Corrupt;
+            // Refuse sizes whose pixels would not fit in memory anyway.
+            if (@as(u64, hd.width) * hd.height > 1 << 28) return error.Unsupported;
+            header = hd;
+        } else if (std.mem.eql(u8, kind, "PLTE")) {
+            if (len % 3 != 0 or len == 0) return error.Corrupt;
+            palette = data;
+        } else if (std.mem.eql(u8, kind, "tRNS")) {
+            trns = data;
         } else if (std.mem.eql(u8, kind, "IDAT")) {
             try idat.appendSlice(gpa, data);
         } else if (std.mem.eql(u8, kind, "IEND")) {
             break;
         }
     }
-    if (channels == 0) return error.Corrupt;
+    const hd = header orelse return error.Corrupt;
+    if (hd.color == 3 and palette.len == 0) return error.Corrupt;
 
-    const stride = @as(usize, width) * channels;
+    // The decompressed size is known from the header.
+    var expected: usize = 0;
+    for (passes(hd)) |p| {
+        if (p.w > 0 and p.h > 0) expected += (hd.rowBytes(p.w) + 1) * p.h;
+    }
     var in: std.Io.Reader = .fixed(idat.items);
     var z: flate.Decompress = .init(&in, .zlib, &.{});
-    const raw = z.reader.allocRemaining(gpa, .limited((stride + 1) * height + 1)) catch |e| switch (e) {
+    const raw = z.reader.allocRemaining(gpa, .limited(expected + 1)) catch |e| switch (e) {
         error.OutOfMemory => return error.OutOfMemory,
         else => return error.Corrupt,
     };
     defer gpa.free(raw);
-    if (raw.len != (stride + 1) * height) return error.Corrupt;
+    if (raw.len != expected) return error.Corrupt;
 
-    // Undo the filters in place, row by row.
-    const pixels = try gpa.alloc(u8, stride * height);
-    errdefer gpa.free(pixels);
-    for (0..height) |y| {
-        const f = std.enums.fromInt(Filter, raw[y * (stride + 1)]) orelse return error.Corrupt;
-        const src = raw[y * (stride + 1) + 1 ..][0..stride];
-        const row = pixels[y * stride ..][0..stride];
-        for (0..stride) |i| {
-            const a: u8 = if (i >= channels) row[i - channels] else 0;
-            const b: u8 = if (y > 0) pixels[(y - 1) * stride + i] else 0;
-            const c: u8 = if (y > 0 and i >= channels) pixels[(y - 1) * stride + i - channels] else 0;
-            row[i] = src[i] +% predict(f, a, b, c);
+    const rgba = try gpa.alloc(u8, @as(usize, hd.width) * hd.height * 4);
+    errdefer gpa.free(rgba);
+    const step = hd.filterStep();
+    var offset: usize = 0;
+    var prev_buf: std.ArrayList(u8) = .empty;
+    defer prev_buf.deinit(gpa);
+    for (passes(hd)) |p| {
+        if (p.w == 0 or p.h == 0) continue;
+        const stride = hd.rowBytes(p.w);
+        try prev_buf.resize(gpa, stride * 2);
+        const prev = prev_buf.items[0..stride];
+        const row = prev_buf.items[stride..][0..stride];
+        @memset(prev, 0);
+        for (0..p.h) |py| {
+            const f = std.enums.fromInt(Filter, raw[offset]) orelse return error.Corrupt;
+            const src = raw[offset + 1 ..][0..stride];
+            offset += stride + 1;
+            for (0..stride) |i| {
+                const a: u8 = if (i >= step) row[i - step] else 0;
+                const c: u8 = if (i >= step) prev[i - step] else 0;
+                row[i] = src[i] +% predict(f, a, prev[i], c);
+            }
+            for (0..p.w) |px| {
+                const x = p.x0 + px * p.dx;
+                const y = p.y0 + py * p.dy;
+                rgba[(y * hd.width + x) * 4 ..][0..4].* = try pixel(hd, row, px, palette, trns);
+            }
+            @memcpy(prev, row);
         }
     }
-    if (channels == 4) return .{ .width = width, .height = height, .rgba = pixels };
+    return .{ .width = hd.width, .height = hd.height, .rgba = rgba };
+}
 
-    defer gpa.free(pixels);
-    const rgba = try gpa.alloc(u8, @as(usize, width) * height * 4);
-    for (0..@as(usize, width) * height) |i| {
-        const p = pixels[i * channels ..][0..channels];
-        rgba[i * 4 ..][0..4].* = switch (channels) {
-            1 => .{ p[0], p[0], p[0], 255 },
-            2 => .{ p[0], p[0], p[0], p[1] },
-            3 => .{ p[0], p[1], p[2], 255 },
-            else => unreachable,
+const Pass = struct { x0: usize, y0: usize, dx: usize, dy: usize, w: usize, h: usize };
+
+/// The seven Adam7 passes, or one pass covering the image followed by
+/// empty ones.
+fn passes(hd: Header) [7]Pass {
+    const W: usize = hd.width;
+    const H: usize = hd.height;
+    var out: [7]Pass = @splat(.{ .x0 = 0, .y0 = 0, .dx = 1, .dy = 1, .w = 0, .h = 0 });
+    if (!hd.interlaced) {
+        out[0] = .{ .x0 = 0, .y0 = 0, .dx = 1, .dy = 1, .w = W, .h = H };
+        return out;
+    }
+    const adam7 = [7][4]usize{ .{ 0, 0, 8, 8 }, .{ 4, 0, 8, 8 }, .{ 0, 4, 4, 8 }, .{ 2, 0, 4, 4 }, .{ 0, 2, 2, 4 }, .{ 1, 0, 2, 2 }, .{ 0, 1, 1, 2 } };
+    for (adam7, &out) |a, *p| {
+        p.* = .{
+            .x0 = a[0],
+            .y0 = a[1],
+            .dx = a[2],
+            .dy = a[3],
+            .w = if (W > a[0]) (W - a[0] + a[2] - 1) / a[2] else 0,
+            .h = if (H > a[1]) (H - a[1] + a[3] - 1) / a[3] else 0,
         };
     }
-    return .{ .width = width, .height = height, .rgba = rgba };
+    return out;
+}
+
+/// Sample `i` of a row at the header's bit depth, as stored.
+fn sample(hd: Header, row: []const u8, i: usize) u16 {
+    return switch (hd.depth) {
+        16 => std.mem.readInt(u16, row[i * 2 ..][0..2], .big),
+        8 => row[i],
+        else => blk: {
+            const bit = i * hd.depth;
+            const shift: u3 = @intCast(8 - hd.depth - bit % 8);
+            const mask: u8 = @intCast((@as(u16, 1) << @intCast(hd.depth)) - 1);
+            break :blk (row[bit / 8] >> shift) & mask;
+        },
+    };
+}
+
+/// A stored sample scaled to 8 bits.
+fn to8(hd: Header, v: u16) u8 {
+    return switch (hd.depth) {
+        16 => @intCast(v >> 8),
+        8 => @intCast(v),
+        else => @intCast(v * 255 / ((@as(u16, 1) << @intCast(hd.depth)) - 1)),
+    };
+}
+
+fn pixel(hd: Header, row: []const u8, x: usize, palette: []const u8, trns: []const u8) DecodeError![4]u8 {
+    const n = hd.channels();
+    switch (hd.color) {
+        0 => {
+            const g = sample(hd, row, x);
+            const clear = trns.len >= 2 and std.mem.readInt(u16, trns[0..2], .big) == g;
+            const v = to8(hd, g);
+            return .{ v, v, v, if (clear) 0 else 255 };
+        },
+        2 => {
+            const r = sample(hd, row, x * n);
+            const g = sample(hd, row, x * n + 1);
+            const b = sample(hd, row, x * n + 2);
+            const clear = trns.len >= 6 and std.mem.readInt(u16, trns[0..2], .big) == r and
+                std.mem.readInt(u16, trns[2..4], .big) == g and std.mem.readInt(u16, trns[4..6], .big) == b;
+            return .{ to8(hd, r), to8(hd, g), to8(hd, b), if (clear) 0 else 255 };
+        },
+        3 => {
+            const i = sample(hd, row, x);
+            if (@as(usize, i) * 3 + 3 > palette.len) return error.Corrupt;
+            const a: u8 = if (i < trns.len) trns[i] else 255;
+            return .{ palette[i * 3], palette[i * 3 + 1], palette[i * 3 + 2], a };
+        },
+        4 => {
+            const v = to8(hd, sample(hd, row, x * 2));
+            return .{ v, v, v, to8(hd, sample(hd, row, x * 2 + 1)) };
+        },
+        6 => return .{
+            to8(hd, sample(hd, row, x * 4)),
+            to8(hd, sample(hd, row, x * 4 + 1)),
+            to8(hd, sample(hd, row, x * 4 + 2)),
+            to8(hd, sample(hd, row, x * 4 + 3)),
+        },
+        else => unreachable,
+    }
+}
+
+/// The width and height in a PNG's header, without decoding it.
+pub fn size(bytes: []const u8) ?[2]u32 {
+    if (bytes.len < 24 or !std.mem.startsWith(u8, bytes, signature) or !std.mem.eql(u8, bytes[12..16], "IHDR")) return null;
+    const w = std.mem.readInt(u32, bytes[16..20], .big);
+    const h = std.mem.readInt(u32, bytes[20..24], .big);
+    if (w == 0 or h == 0) return null;
+    return .{ w, h };
 }
 
 const testing = std.testing;
@@ -313,4 +460,68 @@ test "paeth predictor matches the specification" {
     try testing.expectEqual(@as(u8, 20), paeth(10, 20, 9));
     try testing.expectEqual(@as(u8, 20), paeth(10, 30, 20));
     try testing.expectEqual(@as(u8, 10), paeth(10, 12, 30));
+}
+
+/// A PNG with the given header fields, extra chunks before IDAT, and raw
+/// (filter byte plus row) scanlines, for decoder tests.
+fn testPng(gpa: Allocator, w: u32, h: u32, depth: u8, color: u8, interlace: u8, chunks: []const struct { *const [4]u8, []const u8 }, raw: []const u8) ![]u8 {
+    var aw: Writer.Allocating = .init(gpa);
+    defer aw.deinit();
+    try aw.writer.writeAll(signature);
+    var ihdr: [13]u8 = undefined;
+    std.mem.writeInt(u32, ihdr[0..4], w, .big);
+    std.mem.writeInt(u32, ihdr[4..8], h, .big);
+    ihdr[8..13].* = .{ depth, color, 0, 0, interlace };
+    try writeChunk(&aw.writer, "IHDR", &ihdr);
+    for (chunks) |c| try writeChunk(&aw.writer, c[0], c[1]);
+    var z_out: Writer.Allocating = try .initCapacity(gpa, 256);
+    defer z_out.deinit();
+    const window = try gpa.alloc(u8, flate.max_window_len);
+    defer gpa.free(window);
+    const z = try gpa.create(flate.Compress);
+    defer gpa.destroy(z);
+    z.* = try flate.Compress.init(&z_out.writer, window, .zlib, .default);
+    try z.writer.writeAll(raw);
+    try z.finish();
+    try writeChunk(&aw.writer, "IDAT", z_out.written());
+    try writeChunk(&aw.writer, "IEND", "");
+    return aw.toOwnedSlice();
+}
+
+test "decode palettes, low and high bit depths, and transparency" {
+    const gpa = testing.allocator;
+    // 2-bit palette, 3x1: indices 0, 1, 2 packed as 00 01 10 00.
+    const pal = try testPng(gpa, 3, 1, 2, 3, 0, &.{ .{ "PLTE", "\xff\x00\x00\x00\xff\x00\x00\x00\xff" }, .{ "tRNS", "\x80" } }, "\x00\x18");
+    defer gpa.free(pal);
+    var a = try decode(gpa, pal);
+    defer a.deinit(gpa);
+    try testing.expectEqualSlices(u8, &.{ 255, 0, 0, 128, 0, 255, 0, 255, 0, 0, 255, 255 }, a.rgba);
+
+    // 16-bit gray, 2x1, with the second value marked transparent.
+    const gray = try testPng(gpa, 2, 1, 16, 0, 0, &.{.{ "tRNS", "\x12\x34" }}, "\x00\xff\xff\x12\x34");
+    defer gpa.free(gray);
+    var b = try decode(gpa, gray);
+    defer b.deinit(gpa);
+    try testing.expectEqualSlices(u8, &.{ 255, 255, 255, 255, 0x12, 0x12, 0x12, 0 }, b.rgba);
+
+    // 1-bit gray scales to 0 and 255.
+    const bits = try testPng(gpa, 3, 1, 1, 0, 0, &.{}, "\x00\xa0");
+    defer gpa.free(bits);
+    var c = try decode(gpa, bits);
+    defer c.deinit(gpa);
+    try testing.expectEqualSlices(u8, &.{ 255, 255, 255, 255, 0, 0, 0, 255, 255, 255, 255, 255 }, c.rgba);
+    try testing.expectEqual(@as(?[2]u32, .{ 3, 1 }), size(bits));
+}
+
+test "decode Adam7 interlaced images" {
+    const gpa = testing.allocator;
+    // A 3x3 8-bit gray image with pixel (x, y) = 10 * (3 * y + x).
+    // Pass 1: (0,0). Pass 4: (2,0). Pass 5: (0,2), (2,2). Pass 6: (1,0),
+    // (1,2). Pass 7: row 1, all three pixels. Passes 2 and 3 are empty.
+    const raw = "\x00\x00" ++ "\x00\x14" ++ "\x00\x3c\x50" ++ "\x00\x0a" ++ "\x00\x46" ++ "\x00\x1e\x28\x32";
+    const file = try testPng(gpa, 3, 3, 8, 0, 1, &.{}, raw);
+    defer gpa.free(file);
+    var img = try decode(gpa, file);
+    defer img.deinit(gpa);
+    for (0..9) |i| try testing.expectEqual(@as(u8, @intCast(10 * i)), img.rgba[i * 4]);
 }

@@ -23,6 +23,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const Writer = std.Io.Writer;
 const r = @import("render");
+const images = @import("images.zig");
 const frontmatter = @import("frontmatter.zig");
 const sitepath = @import("path.zig");
 const Color = r.Color;
@@ -549,13 +550,15 @@ pub fn parseColor(text: []const u8) ?Color {
 }
 
 /// Rendered assets kept across builds, keyed by spec contents, so a dev
-/// server renders each version of a spec once. Owns its memory.
+/// server renders each version of a spec once, plus resized site images.
+/// Owns its memory.
 pub const Cache = struct {
     gpa: Allocator,
     entries: std.AutoHashMapUnmanaged(u64, Rendered) = .empty,
+    images: images.Cache,
 
     pub fn init(gpa: Allocator) Cache {
-        return .{ .gpa = gpa };
+        return .{ .gpa = gpa, .images = .init(gpa) };
     }
 
     pub fn deinit(c: *Cache) void {
@@ -565,6 +568,7 @@ pub const Cache = struct {
             if (v.css) |css| c.gpa.free(css);
         }
         c.entries.deinit(c.gpa);
+        c.images.deinit();
         c.* = undefined;
     }
 

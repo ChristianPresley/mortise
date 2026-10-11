@@ -152,6 +152,28 @@ job:
 - The web manifest names the site and its icons only; it has no
   `description`, `scope`, shortcuts or screenshots.
 
+## Images
+
+- Only PNG and JPEG files are resized. GIF and WebP images get sizes and
+  lazy loading but no `srcset`; SVG images get only lazy loading.
+- The JPEG decoder reads 8-bit Huffman-coded baseline and progressive
+  files. Arithmetic-coded, lossless, 12-bit and CMYK JPEGs cannot be
+  resized, and fail the build when `widths` is set.
+- Resized copies drop all metadata, including ICC color profiles, so a
+  wide-gamut (Display P3 or Adobe RGB) photo's copies show less saturated
+  colors than the original. Copies are always treated as sRGB.
+- The JPEG decoder upsamples chroma by repeating samples, which can show
+  slight color fringes along sharp edges in subsampled originals before
+  they are scaled down.
+- Only `<img>` tags in rendered pages are completed. `<picture>` sources,
+  CSS backgrounds, and images in HTML files copied unchanged are not.
+- `mortise build` resizes every image on every run; a site with many
+  large photos builds slowly. `mortise serve` keeps the copies between
+  rebuilds.
+- A copy's name (`photo.480w.jpg`) can collide with a file of the same
+  name in the site; the site's own file wins and no copy is made.
+- The page's first image is never lazy, even when it is far down the page.
+
 ## Rendered graphics
 
 - `mortise build` renders every `_render/` spec and theme asset from scratch

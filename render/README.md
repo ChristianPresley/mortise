@@ -88,7 +88,9 @@ scene built from meshes.
 | `SpriteSheet.zig`| Frame packing and CSS `steps` animation                        |
 | `text.zig`       | A built-in stroke font: measuring, drawing, wrapping with ellipsis |
 | `card.zig`       | 1200x630 social cards in plain, visor and lcars styles         |
-| `png.zig`        | PNG encoder and a decoder for 8-bit images                     |
+| `png.zig`        | PNG encoder (8-bit RGBA) and a decoder for every standard PNG     |
+| `jpeg.zig`       | JPEG decoder (baseline and progressive) and baseline encoder    |
+| `resize.zig`     | Area-averaging downscaler in linear light                       |
 
 ## How it works
 

@@ -46,3 +46,8 @@ pub fn main() !void {
 ---
 
 Images work too: ![the Mortise logo](/images/logo.svg "Logo")
+
+Photos get their size, lazy loading, and resized copies for smaller
+screens, because `_config.yml` sets `images: widths: [480, 960]`:
+
+![A planet drawn by the built-in renderer](/images/planet.jpg)

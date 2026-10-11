@@ -37,6 +37,7 @@ const assets = @import("assets.zig");
 const redirects = @import("redirects.zig");
 const git = @import("git.zig");
 const seo = @import("seo.zig");
+const images = @import("images.zig");
 const Value = template.Value;
 const Entry = template.Entry;
 
@@ -238,6 +239,8 @@ const Page = struct {
     search_sections: []const search.Section = &.{},
     /// Static files the page's templates named with the `asset` filter.
     assets_used: []const []const u8 = &.{},
+    /// Resized images its `<img>` tags refer to.
+    image_variants: []const images.Variant = &.{},
 };
 
 const Layout = struct {
@@ -306,6 +309,14 @@ const Builder = struct {
     fingerprint: bool = false,
     /// `site.menus`, which generated pages also see as `page.menus`.
     menus: Value = .{ .object = .{} },
+    /// `images:` from the config.
+    images: images.Config = .{},
+    /// Static outputs by path, for completing `<img>` tags.
+    static_outputs: std.StringHashMapUnmanaged(Output) = .empty,
+    /// Image headers read during this build, by output path.
+    image_infos: std.StringHashMapUnmanaged(?images.Info) = .empty,
+    /// Resized images the page being rendered refers to.
+    page_variants: std.ArrayList(images.Variant) = .empty,
 
     fn fail(b: *Builder, path: []const u8, line: usize, comptime fmt: []const u8, args: anytype) Error {
         b.diag.* = .{
@@ -493,6 +504,7 @@ pub fn rebuild(arena: Allocator, src: SiteDir, prev: *const Site, changed: []con
                 return buildWith(arena, src, st.options, diag);
             }
             // Pages that link it with the asset filter show its hash.
+            // Pages showing an image depend on its size.
             try dirty_templates.append(arena, path);
             continue;
         }
@@ -1103,12 +1115,12 @@ fn iconConfig(b: *Builder, config_fields: frontmatter.Map) Error!?icons.Config {
 fn addIcons(b: *Builder, outputs: *std.ArrayList(Output), c: icons.Config) Error!void {
     const arena = b.arena;
     if (!hasOutput(outputs.items, icons.ico_path)) {
-        var images: [icons.ico_sizes.len]@import("render").icon.IcoImage = undefined;
-        for (icons.ico_sizes, &images) |size, *im| {
+        var ico_images: [icons.ico_sizes.len]@import("render").icon.IcoImage = undefined;
+        for (icons.ico_sizes, &ico_images) |size, *im| {
             const name = try std.fmt.allocPrint(arena, "favicon-{d}", .{size});
             im.* = .{ .size = size, .png = (try renderIcon(b, name, try icons.spec(arena, c, size))).png };
         }
-        const ico = try @import("render").icon.ico(arena, &images);
+        const ico = try @import("render").icon.ico(arena, &ico_images);
         try outputs.append(arena, .{ .path = icons.ico_path, .source = config_path, .data = .{ .bytes = ico } });
     }
     for (icons.pngs) |p| {
@@ -1279,6 +1291,8 @@ fn finish(b: *Builder, config_fields: frontmatter.Map, pages: []Page, statics: [
     const taxonomy_index = try taxonomyIndex(arena, pages, taxonomies, if (term_pages) b.baseurl else null);
     try site_entries.append(arena, .{ .key = "taxonomies", .value = taxonomy_index });
     b.site = .{ .entries = site_entries.items };
+    b.images = try imageConfig(b, config_fields);
+    for (statics) |s| try b.static_outputs.put(arena, s.path, s);
 
     var rendered: usize = 0;
     var outputs: std.ArrayList(Output) = .empty;
@@ -1291,6 +1305,7 @@ fn finish(b: *Builder, config_fields: frontmatter.Map, pages: []Page, statics: [
             b.reads_collections = false;
             b.reads_seo = false;
             b.page_assets = .empty;
+            b.page_variants = .empty;
             try b.addDep(p.source);
             for (p.included_files) |f| try b.addDep(f);
             try renderPaginated(b, p, post_values.items);
@@ -1299,6 +1314,7 @@ fn finish(b: *Builder, config_fields: frontmatter.Map, pages: []Page, statics: [
             p.uses_seo = b.reads_seo;
             p.search_sections = if (has_search) try searchSections(arena, p) else &.{};
             p.assets_used = b.page_assets.items;
+            p.image_variants = b.page_variants.items;
             rendered += 1;
         }
         try outputs.append(arena, .{ .path = p.out_path, .source = p.source, .data = .{ .bytes = p.output } });
@@ -1308,6 +1324,8 @@ fn finish(b: *Builder, config_fields: frontmatter.Map, pages: []Page, statics: [
 
     // Tag pages may name assets too.
     b.page_assets = .empty;
+    // Generated pages collect their images here.
+    b.page_variants = .empty;
     if (tag_pages) try addTagPages(b, &outputs, tags.list);
     try addCards(b, &outputs, pages);
     try addTaxonomyPages(b, &outputs, taxonomy_index, term_pages, taxonomy_pages);
@@ -1325,6 +1343,7 @@ fn finish(b: *Builder, config_fields: frontmatter.Map, pages: []Page, statics: [
         }
     }
     if (b.site_url) |url| try addGenerated(b, &outputs, config_fields, pages, url);
+    try addImageVariants(b, &outputs, pages);
 
     std.mem.sortUnstable(Output, outputs.items, {}, outputOrder);
     for (outputs.items[0..outputs.items.len -| 1], outputs.items[@min(1, outputs.items.len)..]) |a, c| {
@@ -1349,6 +1368,63 @@ fn finish(b: *Builder, config_fields: frontmatter.Map, pages: []Page, statics: [
         .gzip = if (config_fields.get("gzip")) |v| (if (v == .boolean) v.boolean else return b.fail(config_path, fieldLine(try b.read(config_path), "gzip"), "'gzip' must be true or false", .{})) else false,
         .minify = try configFlag(b, config_fields, "minify", false),
     };
+}
+
+/// `images:` in the config: `false`, or a map of settings.
+fn imageConfig(b: *Builder, config_fields: frontmatter.Map) Error!images.Config {
+    const v = config_fields.get("images") orelse return .{};
+    const line = fieldLine(try b.read(config_path), "images");
+    switch (v) {
+        .boolean => |on| return if (on) .{} else .{ .dimensions = false, .lazy = false },
+        .map => {},
+        else => return b.fail(config_path, line, "'images' must be false or settings such as 'widths: [480, 960]'", .{}),
+    }
+    var cfg: images.Config = .{};
+    for (v.map.entries) |e| {
+        const key = e.key;
+        if (std.mem.eql(u8, key, "dimensions") or std.mem.eql(u8, key, "lazy")) {
+            if (e.value != .boolean) return b.fail(config_path, line, "'images.{s}' must be true or false", .{key});
+            if (key[0] == 'd') cfg.dimensions = e.value.boolean else cfg.lazy = e.value.boolean;
+        } else if (std.mem.eql(u8, key, "widths")) {
+            const items: []const frontmatter.Value = if (e.value == .list) e.value.list else &.{e.value};
+            var widths: std.ArrayList(u32) = .empty;
+            for (items) |w| {
+                if (w != .int or w.int < 16 or w.int > 8192) return b.fail(config_path, line, "'images.widths' must list widths in pixels from 16 to 8192", .{});
+                const n: u32 = @intCast(w.int);
+                if (std.mem.indexOfScalar(u32, widths.items, n) == null) try widths.append(b.arena, n);
+            }
+            std.mem.sortUnstable(u32, widths.items, {}, std.sort.asc(u32));
+            cfg.widths = widths.items;
+        } else if (std.mem.eql(u8, key, "quality")) {
+            if (e.value != .int or e.value.int < 1 or e.value.int > 100) return b.fail(config_path, line, "'images.quality' must be a JPEG quality from 1 to 100", .{});
+            cfg.quality = @intCast(e.value.int);
+        } else if (std.mem.eql(u8, key, "sizes")) {
+            if (e.value != .string) return b.fail(config_path, line, "'images.sizes' must be a string such as '(min-width: 60rem) 50vw, 100vw'", .{});
+            cfg.sizes = e.value.string;
+        } else {
+            return b.fail(config_path, line, "unknown image setting '{s}'; use dimensions, lazy, widths, sizes or quality", .{key});
+        }
+    }
+    return cfg;
+}
+
+/// Writes the resized images every page refers to, once each. A file of
+/// the site's own at a copy's path is kept instead.
+fn addImageVariants(b: *Builder, outputs: *std.ArrayList(Output), pages: []const Page) Error!void {
+    const arena = b.arena;
+    var unique: std.StringArrayHashMapUnmanaged(images.Variant) = .empty;
+    for (pages) |p| for (p.image_variants) |v| try unique.put(arena, v.path, v);
+    for (b.page_variants.items) |v| try unique.put(arena, v.path, v);
+    var list: std.ArrayList(images.Variant) = .empty;
+    for (unique.values()) |v| if (!b.static_outputs.contains(v.path)) try list.append(arena, v);
+    if (list.items.len == 0) return;
+    const cache = if (b.options.render_cache) |c| &c.images else null;
+    var failure: images.Failure = .{};
+    const files = images.resizeAll(arena, b.src.io, b.src, list.items, b.images.quality, cache, &failure) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.ImageFailed => return b.fail(failure.path, 0, "cannot resize this image for srcset ({s}); convert it to an 8-bit PNG or a baseline or progressive JPEG", .{failure.reason}),
+    };
+    for (list.items, files) |v, bytes| try outputs.append(arena, .{ .path = v.path, .source = v.source, .data = .{ .bytes = bytes } });
 }
 
 fn startsWithFrontmatter(b: *Builder, path: []const u8) Error!bool {
@@ -2523,7 +2599,46 @@ fn renderPage(b: *Builder, p: *const Page) Error![]const u8 {
     if (b.markdown_options.copy_buttons and std.mem.indexOf(u8, content, "class=\"mt-copy\"") != null) {
         content = try insertBeforeBodyEnd(b.arena, content, markdown.copy_script);
     }
-    return content;
+    if (!std.mem.endsWith(u8, p.out_path, ".html") and !std.mem.endsWith(u8, p.out_path, ".htm")) return content;
+    return images.rewrite(arena, content, p.url, b.baseurl, b.images, .{ .ctx = b, .infoFn = imageInfo }, &b.page_variants);
+}
+
+/// Whether path names an image `<img>` tags get sizes for.
+fn isImagePath(path: []const u8) bool {
+    const ext = sitepath.extension(path);
+    for ([_][]const u8{ ".png", ".jpg", ".jpeg", ".gif", ".webp" }) |e| {
+        if (std.ascii.eqlIgnoreCase(ext, e)) return true;
+    }
+    return false;
+}
+
+/// The header of image file path, through the dev server's cache when
+/// there is one. Unreadable files have none.
+fn readImageInfo(b: *Builder, path: []const u8) Allocator.Error!?images.Info {
+    const cache = if (b.options.render_cache) |c| &c.images else null;
+    const key = if (cache != null) images.fileKey(b.src, path) else null;
+    if (cache) |c| if (key) |k| if (c.infos.get(k)) |hit| return hit;
+    const bytes = b.src.readFile(b.arena, path) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return null,
+    };
+    const result = images.info(bytes);
+    if (cache) |c| if (key) |k| try c.infos.put(c.gpa, k, result);
+    return result;
+}
+
+fn imageInfo(ctx: *anyopaque, path: []const u8) Allocator.Error!?images.Info {
+    const b: *Builder = @ptrCast(@alignCast(ctx));
+    if (!isImagePath(path)) return null;
+    const out = b.static_outputs.get(path) orelse return null;
+    try b.addDep(out.source);
+    if (b.image_infos.get(path)) |i| return i;
+    const result: ?images.Info = switch (out.data) {
+        .bytes => |bytes| if (images.info(bytes)) |i| .{ .width = i.width, .height = i.height, .format = i.format, .resizable = false } else null,
+        .copy => try readImageInfo(b, out.source),
+    };
+    try b.image_infos.put(b.arena, path, result);
+    return result;
 }
 
 /// `html` with `snippet` inserted before its last `</body>`, or appended
@@ -4074,4 +4189,44 @@ test "named menus and section sort orders" {
     try expectBuildError(&.{.{ "a.md", "---\ntitle: A\nsort: size\n---\n" }}, "a.md", 3, "'sort' must be weight");
     try expectBuildError(&.{.{ "a.md", "---\nmenu: 3\n---\n" }}, "a.md", 2, "'menu' must be a menu name");
     try expectBuildError(&.{.{ "_data/menus.json", "{\"main\": [{\"title\": \"X\"}]}" }}, "_data/menus", 0, "must have a title and a url");
+}
+
+test "img tags get sizes, lazy loading and resized copies" {
+    const gpa = testing.allocator;
+    var rgba: [40 * 20 * 4]u8 = undefined;
+    @memset(&rgba, 200);
+    const wide = try @import("render").png.encodeAlloc(gpa, 40, 20, &rgba, .{});
+    defer gpa.free(wide);
+    const square = try @import("render").png.encodeAlloc(gpa, 10, 10, rgba[0 .. 10 * 10 * 4], .{});
+    defer gpa.free(square);
+
+    var t: TestSite = try .init(&.{
+        .{ "_config.yml", "images:\n  widths: [16, 32, 64]\n" },
+        .{ "img/wide.png", wide },
+        .{ "a/index.md", "![first](../img/wide.png)\n\n![second](/img/wide.png)\n" },
+    });
+    defer t.deinit();
+    const src = SiteDir.borrow(testing.io, t.tmp.dir);
+    var diag: Diagnostic = .{};
+    const first = t.build(&diag) catch |err| {
+        std.debug.print("{f}\n", .{diag});
+        return err;
+    };
+    try testing.expectEqualStrings(
+        \\<p><img src="../img/wide.png" alt="first" width="40" height="20" srcset="/img/wide.16w.png 16w, /img/wide.32w.png 32w, /img/wide.png 40w" sizes="(min-width: 40px) 40px, 100vw" /></p>
+        \\<p><img src="/img/wide.png" alt="second" loading="lazy" decoding="async" width="40" height="20" srcset="/img/wide.16w.png 16w, /img/wide.32w.png 32w, /img/wide.png 40w" sizes="auto, (min-width: 40px) 40px, 100vw" /></p>
+        \\
+    , first.find("a/index.html").?.data.bytes);
+    try testing.expectEqual(@as(?[2]u32, .{ 32, 16 }), @import("render").png.size(first.find("img/wide.32w.png").?.data.bytes));
+    try testing.expect(first.find("img/wide.64w.png") == null);
+
+    // Replacing the image re-renders the page with its new size.
+    try src.writeFile("img/wide.png", square);
+    const second = try rebuild(t.arena.allocator(), src, &first, &.{"img/wide.png"}, &diag);
+    try testing.expect(std.mem.indexOf(u8, second.find("a/index.html").?.data.bytes, "width=\"10\" height=\"10\"") != null);
+    try testing.expect(second.find("img/wide.16w.png") == null);
+
+    try expectBuildError(&.{.{ "_config.yml", "images:\n  widths: [4]\n" }}, "_config.yml", 1, "'images.widths' must list widths");
+    try expectBuildError(&.{.{ "_config.yml", "title: x\nimages:\n  quality: 0\n" }}, "_config.yml", 2, "'images.quality'");
+    try expectBuildError(&.{.{ "_config.yml", "images:\n  lazzy: false\n" }}, "_config.yml", 1, "unknown image setting 'lazzy'");
 }
