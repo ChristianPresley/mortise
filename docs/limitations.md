@@ -253,9 +253,19 @@ job:
   both.
 - Markdown content is not run through the template engine, so template tags
   inside a `.md` file appear literally.
-- `baseurl` is added to page URLs only. Links to static files in templates
-  must add it themselves, as in `{{ site.baseurl }}/css/site.css`, and
-  Markdown links are written out exactly as authored.
+- `baseurl` is added to page URLs and to static files linked with the
+  `asset` filter (`{{ "css/site.css" | asset }}`). Other links to static
+  files in templates must add it themselves, and Markdown links are
+  written out exactly as authored.
+- The `asset` filter names static files only; generated files such as
+  `theme.css`, `mortise.css` or rendered images cannot be fingerprinted.
+  Hashes are SHA-256 cut to 8 hex characters.
+- `minify: true` is conservative: it removes HTML comments and collapses
+  whitespace between tags (keeping `pre`, `textarea`, `script` and `style`
+  as they are) and strips CSS comments and spaces. Text in elements that a
+  stylesheet sets to `white-space: pre` outside `<pre>` loses its runs of
+  spaces. JavaScript and JSON are not minified, and `serve` does not
+  minify.
 - `build` deletes the whole `_site` directory before writing, so files
   placed there by hand are lost.
 - Layouts are found only as `_layouts/NAME.html`; includes only under

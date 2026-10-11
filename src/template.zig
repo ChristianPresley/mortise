@@ -159,6 +159,11 @@ pub const FilterKind = enum {
     last,
     /// Removes HTML tags, leaving the text.
     strip_html,
+    /// `"css/site.css" | asset`: the URL of a static file of the site, with
+    /// the baseurl and, in `build`, a content hash in its name.
+    asset,
+    /// `"js/app.js" | sri`: a Subresource Integrity hash for `integrity=`.
+    sri,
 
     /// The minimum and maximum number of arguments.
     fn arity(k: FilterKind) [2]usize {
@@ -817,6 +822,7 @@ const Renderer = struct {
     template: []const u8 = "",
     depth: usize = 0,
     strict: bool = false,
+    assets: ?Assets = null,
     /// The `extends` chain being rendered, most derived template first.
     /// Each block renders from the first template that defines it.
     chain: []const *const Template = &.{},
@@ -839,6 +845,18 @@ pub const RenderOptions = struct {
     /// and a loop over a variable whose first name is unknown. Conditions
     /// stay lenient, so `{% if page.subtitle %}` works on every page.
     strict: bool = false,
+    /// Answers the `asset` and `sri` filters; without one they fail.
+    assets: ?Assets = null,
+};
+
+/// Looks up static files for the `asset` and `sri` filters.
+pub const Assets = struct {
+    ctx: *anyopaque,
+    /// The answer for `path` (as written in the template), or null with a
+    /// reason in `why`.
+    lookupFn: *const fn (ctx: *anyopaque, path: []const u8, kind: Kind, why: *[]const u8) Allocator.Error!?[]const u8,
+
+    pub const Kind = enum { url, sri };
 };
 
 /// Renders `tpl` with `root` as the top-level variables.
@@ -848,7 +866,7 @@ pub fn render(arena: Allocator, tpl: *const Template, root: Object, loader: ?Loa
 
 /// `render` with options.
 pub fn renderWith(arena: Allocator, tpl: *const Template, root: Object, loader: ?Loader, options: RenderOptions, w: *Writer, diag: *Diagnostic) RenderError!void {
-    var r: Renderer = .{ .arena = arena, .loader = loader, .diag = diag, .root = root, .template = tpl.name, .strict = options.strict };
+    var r: Renderer = .{ .arena = arena, .loader = loader, .diag = diag, .root = root, .template = tpl.name, .strict = options.strict, .assets = options.assets };
     // Follow `extends` to the root template, which supplies the page; the
     // templates below it only fill its blocks.
     var chain: std.ArrayList(*const Template) = .empty;
@@ -1241,6 +1259,13 @@ fn applyFilter(r: *Renderer, f: Filter, v: Value, line: usize) RenderError!Value
         .strip_html => {
             const s = try textArg(r, f, v, line) orelse return v;
             return .{ .string = try plainText(r, s, true) };
+        },
+        .asset, .sri => {
+            const path = v.text() orelse return r.fail(line, "filter '{s}' expects a file path such as \"css/site.css\", got {s}", .{ @tagName(f.kind), v.typeName() });
+            const assets = r.assets orelse return r.fail(line, "filter '{s}' is not available here", .{@tagName(f.kind)});
+            var why: []const u8 = "";
+            const answer = try assets.lookupFn(assets.ctx, path, if (f.kind == .asset) .url else .sri, &why);
+            return .{ .string = answer orelse return r.fail(line, "filter '{s}': '{s}' {s}", .{ @tagName(f.kind), path, why }) };
         },
     }
 }

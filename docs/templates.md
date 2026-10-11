@@ -68,11 +68,29 @@ Lists:
 
 `key` may be a dotted path such as `"author.name"`.
 
+Assets:
+
+| Filter                     | Effect                                                    |
+| -------------------------- | --------------------------------------------------------- |
+| `"css/site.css" \| asset`  | The URL of a static file, with the site's `baseurl`. In `build` the file is also written under a name holding its content hash, `css/site.3aec6594.css`, and the URL points there |
+| `"js/app.js" \| sri`       | A Subresource Integrity hash (`sha384-...`) for `integrity=`; empty in `serve`, where stylesheets change live |
+
+```html
+<link rel="stylesheet" href="{{ "css/site.css" | asset }}" integrity="{{ "css/site.css" | sri }}">
+```
+
+Hashed names let a server cache files forever (`Cache-Control: immutable`),
+since any change gives a new name. The plain file is written too, for
+links that do not use the filter. Only static files of the site can be
+named (not rendered pages or generated files such as `theme.css`), and a
+page using one is rebuilt when the file changes. `fingerprint: false` in
+`_config.yml` keeps plain names in `build` too.
+
 Debugging and data:
 
 | Filter  | Effect                                                                   |
 | ------- | ------------------------------------------------------------------------ |
-| `json`  | The value as compact JSON, with `<`, `>` and `&` escaped as `<` and so on, so it is safe inside `<script>`. Not for HTML attributes |
+| `json`  | The value as compact JSON, with `<`, `>` and `&` escaped as `\u003c` and so on, so it is safe inside `<script>`. Not for HTML attributes |
 | `dump`  | The value as indented JSON in `<pre class="mortise-dump">`, to see what a template can read: `{{ page | dump }}` |
 
 ```html

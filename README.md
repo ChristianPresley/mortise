@@ -68,11 +68,17 @@ page or post with `expires: YYYY-MM-DD` is left out from that date on.
 `build` and `serve` report what they skipped, as in
 `Skipped 1 draft, 2 future posts, 1 expired page`.
 
-`build` deletes and rewrites `SITE_DIR/_site` on every run. With
-`gzip: true` in `_config.yml` it also writes a `NAME.gz` next to every
-HTML, CSS, JavaScript, JSON, XML, SVG and text file over 1 KiB, for
-servers that send precompressed files (nginx `gzip_static on`, Caddy
-`precompressed gzip`). The files are byte-for-byte reproducible.
+`build` deletes and rewrites `SITE_DIR/_site` on every run. Static files
+linked with `{{ "css/site.css" | asset }}` get the `baseurl` and, in
+`build`, a content hash in their name (`css/site.3aec6594.css`) for
+long-lived caching; `| sri` gives the matching `integrity=` hash (see
+[assets](docs/templates.md#filters)). `minify: true` in `_config.yml`
+makes `build` strip comments and extra whitespace from HTML and CSS. With
+`gzip: true` it also writes a `NAME.gz` next to every HTML, CSS,
+JavaScript, JSON, XML, SVG and text file over 1 KiB (of the minified text
+when `minify` is on), for servers that send precompressed files (nginx
+`gzip_static on`, Caddy `precompressed gzip`). The files are
+byte-for-byte reproducible.
 
 `serve` builds the site into memory, serves it on `127.0.0.1` only, and
 watches the source tree. After each save it rebuilds and the open browser

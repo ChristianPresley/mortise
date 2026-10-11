@@ -26,6 +26,7 @@ const template = @import("template.zig");
 const feeds = @import("feeds.zig");
 const gzip = @import("gzip.zig");
 const search = @import("search.zig");
+const minify = @import("minify.zig");
 const data_files = @import("data.zig");
 const openapi = @import("openapi.zig");
 const themes = @import("themes.zig");
@@ -107,6 +108,8 @@ pub const Site = struct {
     /// `gzip: true` in the config: writing the site also writes `.gz`
     /// copies of text files (see gzip.zig).
     gzip: bool = false,
+    /// `minify: true`: writing the site minifies HTML and CSS (minify.zig).
+    minify: bool = false,
     /// What `rebuild` needs to update this site. An incrementally rebuilt
     /// site shares memory with the site it came from, so that site's
     /// arena must outlive this one.
@@ -231,6 +234,8 @@ const Page = struct {
     /// The page's search sections, kept from the render that produced
     /// `output` (see search.zig).
     search_sections: []const search.Section = &.{},
+    /// Static files the page's templates named with the `asset` filter.
+    assets_used: []const []const u8 = &.{},
 };
 
 const Layout = struct {
@@ -284,6 +289,14 @@ const Builder = struct {
     /// The theme named by `theme:` and its bases, most derived first.
     theme_chain: []const ThemeLayer = &.{},
     warnings: std.ArrayList(Diagnostic) = .empty,
+    /// Files copied unchanged, for the `asset` filter.
+    statics: []const Output = &.{},
+    /// Hashes of static files named by the `asset` and `sri` filters.
+    asset_info: std.StringHashMapUnmanaged(AssetInfo) = .empty,
+    /// Static files the current page named with `asset`.
+    page_assets: std.ArrayList([]const u8) = .empty,
+    /// Write `asset` files under names with their content hash.
+    fingerprint: bool = false,
 
     fn fail(b: *Builder, path: []const u8, line: usize, comptime fmt: []const u8, args: anytype) Error {
         b.diag.* = .{
@@ -339,6 +352,11 @@ pub const Options = struct {
     /// Keeps rendered assets between builds. Without one, every build
     /// renders them again, which suits one-off builds.
     render_cache: ?*assets.Cache = null,
+    /// Name files linked with the `asset` filter by their content hash
+    /// (`css/site.3f9a1c2b.css`), unless `fingerprint: false` in the
+    /// config. `build` sets this; `serve` keeps plain names so stylesheet
+    /// hot-swapping works.
+    fingerprint: bool = false,
     /// Fail on undefined template variables (`--strict`). Null leaves it
     /// to `strict:` in `_config.yml`, then to `strict_by_default`.
     strict: ?bool = null,
@@ -459,6 +477,8 @@ pub fn rebuild(arena: Allocator, src: SiteDir, prev: *const Site, changed: []con
             if (std.mem.eql(u8, sitepath.extension(path), ".html") and try startsWithFrontmatter(&b, path)) {
                 return buildWith(arena, src, st.options, diag);
             }
+            // Pages that link it with the asset filter show its hash.
+            try dirty_templates.append(arena, path);
             continue;
         }
         // Unpublished files such as `_drafts/` never affect the output, as
@@ -630,8 +650,13 @@ fn stringField(m: frontmatter.Map, key: []const u8) ?[]const u8 {
 
 /// Whether config switch `key` (such as `feed: false`) is on. Defaults on.
 fn enabled(b: *Builder, config_fields: frontmatter.Map, key: []const u8) Error!bool {
-    const v = config_fields.get(key) orelse return true;
-    if (v != .boolean) return b.fail(config_path, 0, "'{s}' must be true or false", .{key});
+    return configFlag(b, config_fields, key, true);
+}
+
+/// A true/false setting from the config, `default` when absent.
+fn configFlag(b: *Builder, config_fields: frontmatter.Map, key: []const u8, default: bool) Error!bool {
+    const v = config_fields.get(key) orelse return default;
+    if (v != .boolean) return b.fail(config_path, fieldLine(try b.read(config_path), key), "'{s}' must be true or false", .{key});
     return v.boolean;
 }
 
@@ -1116,6 +1141,8 @@ fn addGenerated(b: *Builder, outputs: *std.ArrayList(Output), config_fields: fro
 /// site. `pages` must be in `pageOrder`.
 fn finish(b: *Builder, config_fields: frontmatter.Map, pages: []Page, statics: []const Output, render: ?[]const bool) Error!Site {
     const arena = b.arena;
+    b.statics = statics;
+    b.fingerprint = b.options.fingerprint and try enabled(b, config_fields, "fingerprint");
     b.strict = b.options.strict orelse blk: {
         const v = config_fields.get("strict") orelse break :blk b.options.strict_by_default;
         if (v != .boolean) return b.fail(config_path, 0, "'strict' must be true or false", .{});
@@ -1185,6 +1212,7 @@ fn finish(b: *Builder, config_fields: frontmatter.Map, pages: []Page, statics: [
             b.deps = .empty;
             b.reads_collections = false;
             b.reads_seo = false;
+            b.page_assets = .empty;
             try b.addDep(p.source);
             for (p.included_files) |f| try b.addDep(f);
             try renderPaginated(b, p, post_values.items);
@@ -1192,6 +1220,7 @@ fn finish(b: *Builder, config_fields: frontmatter.Map, pages: []Page, statics: [
             p.reads_collections = b.reads_collections;
             p.uses_seo = b.reads_seo;
             p.search_sections = if (has_search) try searchSections(arena, p) else &.{};
+            p.assets_used = b.page_assets.items;
             rendered += 1;
         }
         try outputs.append(arena, .{ .path = p.out_path, .source = p.source, .data = .{ .bytes = p.output } });
@@ -1199,8 +1228,11 @@ fn finish(b: *Builder, config_fields: frontmatter.Map, pages: []Page, statics: [
         d.* = .{ .output = p.out_path, .sources = p.sources, .reads_collections = p.reads_collections };
     }
 
+    // Tag pages may name assets too.
+    b.page_assets = .empty;
     if (tag_pages) try addTagPages(b, &outputs, tags.list);
     try addCards(b, &outputs, pages);
+    try addFingerprinted(b, &outputs, pages, b.page_assets.items);
     try addComponentsCss(b, &outputs, config_fields, pages);
     try addThemeCss(b, &outputs);
     try addAliases(b, &outputs, config_fields, pages);
@@ -1229,6 +1261,7 @@ fn finish(b: *Builder, config_fields: frontmatter.Map, pages: []Page, statics: [
         .state = .{ .skipped = b.skipped, .config_fields = config_fields, .baseurl = b.baseurl, .site_url = b.site_url, .options = b.options, .data = b.data, .history = b.history, .pages = pages, .statics = statics },
         .warnings = b.warnings.items,
         .gzip = if (config_fields.get("gzip")) |v| (if (v == .boolean) v.boolean else return b.fail(config_path, fieldLine(try b.read(config_path), "gzip"), "'gzip' must be true or false", .{})) else false,
+        .minify = try configFlag(b, config_fields, "minify", false),
     };
 }
 
@@ -2082,7 +2115,7 @@ fn renderTemplate(b: *Builder, tpl: *const template.Template, p: *const Page, co
     const root: template.Object = .{ .entries = entries[0..n] };
     b.useTemplate(tpl);
     var td: template.Diagnostic = .{};
-    return template.renderAllocWith(b.arena, tpl, root, .{ .ctx = b, .loadFn = loadInclude, .extendsFn = loadExtends }, .{ .strict = b.strict }, &td) catch |err| switch (err) {
+    return template.renderAllocWith(b.arena, tpl, root, .{ .ctx = b, .loadFn = loadInclude, .extendsFn = loadExtends }, .{ .strict = b.strict, .assets = .{ .ctx = b, .lookupFn = lookupAsset } }, &td) catch |err| switch (err) {
         error.OutOfMemory => error.OutOfMemory,
         error.WriteFailed => error.OutOfMemory,
         error.TemplateRender, error.TemplateSyntax => b.templateFail(td),
@@ -2127,6 +2160,86 @@ fn loadLayout(b: *Builder, name: []const u8, used_by: []const u8) Error!Layout {
     const layout: Layout = .{ .tpl = tpl, .parent = parent };
     try b.layouts.put(arena, path, layout);
     return layout;
+}
+
+const AssetInfo = struct {
+    /// Where the file is written: its own path, or with `fingerprint` its
+    /// path with the content hash before the extension.
+    out_path: []const u8,
+    /// `sha384-...` for `integrity=`.
+    sri: []const u8,
+};
+
+/// Answers the `asset` and `sri` filters for a static file of the site,
+/// given as `css/site.css` or `/css/site.css`, and records it as a
+/// dependency of the page being rendered.
+fn lookupAsset(ctx: *anyopaque, raw: []const u8, kind: template.Assets.Kind, why: *[]const u8) Allocator.Error!?[]const u8 {
+    const b: *Builder = @ptrCast(@alignCast(ctx));
+    const arena = b.arena;
+    const trimmed = std.mem.trimStart(u8, raw, "/");
+    const path = sitepath.normalize(arena, if (trimmed.len == 0) "." else trimmed) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => {
+            why.* = "is not a path inside the site";
+            return null;
+        },
+    };
+    if (!findStatic(b.statics, path)) {
+        why.* = "is not a static file of the site (rendered pages and generated files have no fixed contents to hash)";
+        return null;
+    }
+    const info = (try assetInfo(b, path)) orelse {
+        why.* = "cannot be read";
+        return null;
+    };
+    try b.addDep(path);
+    for (b.page_assets.items) |a| {
+        if (std.mem.eql(u8, a, path)) break;
+    } else try b.page_assets.append(arena, path);
+    return switch (kind) {
+        .url => try std.fmt.allocPrint(arena, "{s}/{s}", .{ b.baseurl, info.out_path }),
+        // In serve, stylesheets are swapped live with new contents that an
+        // old hash would reject; an empty integrity attribute checks nothing.
+        .sri => if (b.options.fingerprint) info.sri else "",
+    };
+}
+
+fn assetInfo(b: *Builder, path: []const u8) Allocator.Error!?AssetInfo {
+    if (b.asset_info.get(path)) |i| return i;
+    const data = b.src.readFile(b.arena, path) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return null,
+    };
+    var sha256: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(data, &sha256, .{});
+    var sha384: [48]u8 = undefined;
+    std.crypto.hash.sha2.Sha384.hash(data, &sha384, .{});
+    var b64: [64]u8 = undefined;
+    const sri = try std.mem.concat(b.arena, u8, &.{ "sha384-", std.base64.standard.Encoder.encode(&b64, &sha384) });
+    var out_path = path;
+    if (b.fingerprint) {
+        const hex = std.fmt.bytesToHex(sha256[0..4].*, .lower);
+        const ext = sitepath.extension(path);
+        out_path = try std.mem.concat(b.arena, u8, &.{ path[0 .. path.len - ext.len], ".", &hex, ext });
+    }
+    const info: AssetInfo = .{ .out_path = out_path, .sri = sri };
+    try b.asset_info.put(b.arena, path, info);
+    return info;
+}
+
+/// Writes each fingerprinted file a page names with `asset`, next to its
+/// plain copy, which stays for links that do not use the filter.
+fn addFingerprinted(b: *Builder, outputs: *std.ArrayList(Output), pages: []const Page, more: []const []const u8) Error!void {
+    if (!b.fingerprint) return;
+    var seen: std.StringHashMapUnmanaged(void) = .empty;
+    for (pages) |p| for (p.assets_used) |a| try seen.put(b.arena, a, {});
+    for (more) |a| try seen.put(b.arena, a, {});
+    var it = seen.keyIterator();
+    while (it.next()) |path| {
+        const info = (try assetInfo(b, path.*)) orelse continue;
+        if (hasOutput(outputs.items, info.out_path)) continue;
+        try outputs.append(b.arena, .{ .path = info.out_path, .source = path.*, .data = .copy });
+    }
 }
 
 /// Loads the layout a `{% extends "NAME" %}` names: `_layouts/NAME`, with
@@ -2190,7 +2303,9 @@ fn loadInclude(ctx: *anyopaque, name: []const u8, diag: *template.Diagnostic) te
 /// `.gz` copies of text files when the site asks for them.
 pub fn writeSite(site: Site, src: SiteDir, out: SiteDir, diag: *Diagnostic) error{BuildFailed}!void {
     for (site.outputs) |o| {
-        const result = switch (o.data) {
+        const result = if (site.minify and minifiable(o.path))
+            writeMinified(o, src, out)
+        else switch (o.data) {
             .bytes => |bytes| out.writeFile(o.path, bytes),
             .copy => src.copyFileTo(o.source, out, o.path),
         };
@@ -2198,25 +2313,49 @@ pub fn writeSite(site: Site, src: SiteDir, out: SiteDir, diag: *Diagnostic) erro
             diag.* = .{ .path = o.path, .message = @errorName(err) };
             return error.BuildFailed;
         };
-        if (site.gzip) writeGzip(o, src, out) catch |err| {
+        if (site.gzip) writeGzip(o, src, out, site.minify and minifiable(o.path)) catch |err| {
             diag.* = .{ .path = o.path, .message = @errorName(err) };
             return error.BuildFailed;
         };
     }
 }
 
-/// Writes `PATH.gz` for a text output over the size threshold.
-fn writeGzip(o: Output, src: SiteDir, out: SiteDir) !void {
+fn minifiable(path: []const u8) bool {
+    const ext = sitepath.extension(path);
+    return std.mem.eql(u8, ext, ".html") or std.mem.eql(u8, ext, ".htm") or std.mem.eql(u8, ext, ".css");
+}
+
+fn minified(arena: Allocator, path: []const u8, data: []const u8) ![]const u8 {
+    if (std.mem.eql(u8, sitepath.extension(path), ".css")) return minify.css(arena, data);
+    return minify.html(arena, data);
+}
+
+fn writeMinified(o: Output, src: SiteDir, out: SiteDir) !void {
+    // One scratch arena per file keeps memory flat across a large site.
+    var arena_state: std.heap.ArenaAllocator = .init(std.heap.smp_allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const data = switch (o.data) {
+        .bytes => |bytes| bytes,
+        .copy => try src.readFile(arena, o.source),
+    };
+    try out.writeFile(o.path, try minified(arena, o.path, data));
+}
+
+/// Writes `PATH.gz` for a text output over the size threshold, compressing
+/// the minified text when `minify` says the output was minified.
+fn writeGzip(o: Output, src: SiteDir, out: SiteDir, minify_first: bool) !void {
     // Outputs are written one after another, so a scratch arena per file
     // keeps memory flat.
     var arena_state: std.heap.ArenaAllocator = .init(std.heap.smp_allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
     if (!gzip.wanted(o.path, gzip.min_size)) return;
-    const data = switch (o.data) {
+    var data = switch (o.data) {
         .bytes => |bytes| bytes,
         .copy => try src.readFile(arena, o.source),
     };
+    if (minify_first) data = try minified(arena, o.path, data);
     if (!gzip.wanted(o.path, data.len)) return;
     const gz_path = try std.mem.concat(arena, u8, &.{ o.path, ".gz" });
     try out.writeFile(gz_path, try gzip.compress(arena, data));
@@ -3305,4 +3444,56 @@ test "site themes build on built-in themes" {
         .{ "_themes/a/theme.yml", "base: a\n" },
     }, "_config.yml", 1, "more than 8 deep");
     try expectBuildError(&.{.{ "_config.yml", "title: T\ntheme: core\n" }}, "_config.yml", 2, "unknown theme 'core'");
+}
+
+test "the asset filter fingerprints static files and gives SRI hashes" {
+    var t: TestSite = try .init(&.{
+        .{ "_config.yml", "baseurl: /blog\n" },
+        .{ "css/site.css", "body { color: red; }\n" },
+        .{ "index.html", "---\n---\n<link href=\"{{ \"css/site.css\" | asset }}\" integrity=\"{{ \"/css/site.css\" | sri }}\">" },
+    });
+    defer t.deinit();
+    const src = SiteDir.borrow(testing.io, t.tmp.dir);
+    var diag: Diagnostic = .{};
+    const a = t.arena.allocator();
+
+    // build: hashed name, next to the plain copy.
+    const site = try buildWith(a, src, .{ .fingerprint = true }, &diag);
+    const html = site.find("index.html").?.data.bytes;
+    var sha: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash("body { color: red; }\n", &sha, .{});
+    const hashed = try std.fmt.allocPrint(a, "css/site.{s}.css", .{&std.fmt.bytesToHex(sha[0..4].*, .lower)});
+    try testing.expect(std.mem.indexOf(u8, html, try std.fmt.allocPrint(a, "href=\"/blog/{s}\"", .{hashed})) != null);
+    try testing.expect(std.mem.indexOf(u8, html, "integrity=\"sha384-") != null);
+    try testing.expect(site.find(hashed).?.data == .copy);
+    try testing.expect(site.find("css/site.css") != null);
+
+    // serve: plain names, still with the baseurl.
+    const dev = try buildWith(a, src, .{}, &diag);
+    try testing.expect(std.mem.indexOf(u8, dev.find("index.html").?.data.bytes, "href=\"/blog/css/site.css\"") != null);
+    try testing.expect(std.mem.indexOf(u8, dev.find("index.html").?.data.bytes, "integrity=\"\"") != null);
+
+    // Editing the file re-renders the page with the new hash.
+    try src.writeFile("css/site.css", "body { color: blue; }\n");
+    const again = try rebuild(a, src, &site, &.{"css/site.css"}, &diag);
+    try testing.expectEqual(@as(usize, 1), again.rendered);
+    try testing.expect(again.find(hashed) == null);
+
+    try expectBuildError(&.{.{ "a.html", "---\n---\n{{ \"nope.css\" | asset }}" }}, "a.html", 3, "'nope.css' is not a static file");
+}
+
+test "minify: true shrinks HTML and CSS when writing" {
+    var t: TestSite = try .init(&.{
+        .{ "_config.yml", "minify: true\n" },
+        .{ "a.html", "---\n---\n<p>a   b</p>\n\n<!-- note -->\n<pre>  x  </pre>" },
+        .{ "s.css", "a {\n  color : red ;\n}\n" },
+    });
+    defer t.deinit();
+    const src = SiteDir.borrow(testing.io, t.tmp.dir);
+    var diag: Diagnostic = .{};
+    const site = try t.build(&diag);
+    try writeOutputDir(site, src, &diag);
+    const a = t.arena.allocator();
+    try testing.expectEqualStrings("<p>a b</p>\n<pre>  x  </pre>", try src.readFile(a, "_site/a.html"));
+    try testing.expectEqualStrings("a{color:red}", try src.readFile(a, "_site/s.css"));
 }
