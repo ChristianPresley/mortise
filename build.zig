@@ -29,6 +29,8 @@ comptime {
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
+    // Release archives leave out debug information (`-Dstrip`).
+    const strip = b.option(bool, "strip", "Leave debug information out of the mortise binary");
 
     // Mortise draws `_render/` assets with the renderer. That copy is always
     // optimized: unoptimized rendering is tens of times slower, which would
@@ -54,6 +56,7 @@ pub fn build(b: *std.Build) void {
             .root_source_file = b.path("src/main.zig"),
             .target = target,
             .optimize = optimize,
+            .strip = strip,
             .imports = &.{
                 .{ .name = "mortise", .module = mod },
             },

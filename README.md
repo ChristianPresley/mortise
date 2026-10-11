@@ -11,6 +11,10 @@ Jekyll and Hugo.
   and used by CI). Get it from <https://ziglang.org/download/>.
 - Nothing else. Mortise has no third-party dependencies.
 
+Or skip building: every [release](https://github.com/ChristianPresley/mortise/releases)
+has ready binaries for Linux (static, x86_64 and aarch64), macOS (x86_64
+and Apple silicon) and Windows (x86_64 and ARM64), with a `SHA256SUMS` file.
+
 ## Build and test
 
 ```sh
@@ -41,7 +45,7 @@ Most of that time goes to copying the 27 MB debug binary and starting it.
 ## Usage
 
 ```sh
-mortise new my-site                              # create a starter site
+mortise new my-site [--starter blog|docs|portfolio]  # create a starter site
 mortise build [SITE_DIR] [--drafts] [--future] [--strict]  # build SITE_DIR (default .) into SITE_DIR/_site
 mortise check [SITE_DIR] [--drafts]              # report broken links and accessibility problems
 mortise serve [SITE_DIR] [--port N] [--drafts] [--future]  # dev server on http://localhost:4000/
@@ -62,12 +66,23 @@ buttons without text or an `aria-label`, form controls without a label,
 frames without a `title`, heading levels that skip (`<h2>` then `<h4>`),
 and repeated ids. They are printed the same way and also fail the command.
 
-`new` writes a small working site: a layout, a post layout, a header
-include, a paginated home page, an about page, a welcome post, and a
-stylesheet with colors for highlighted code. `--drafts` publishes pages and
-posts marked `draft: true`. `--strict` makes an undefined template variable
-an error; `serve` is strict unless `--no-strict` or `strict: false` in
-`_config.yml` says otherwise (see [strict mode](docs/templates.md#strict-mode)).
+`new` writes a small working site from a starter:
+
+- `blog` (the default): a paginated home page of posts, a welcome post, a
+  post layout, and an about page.
+- `docs`: a home page with buttons and cards, and a `docs/` section with a
+  sidebar from `site.nav`, breadcrumbs, and previous/next links.
+- `portfolio`: a grid of project pages (`projects/*.md` with `layout:
+  project`) and an about page.
+
+Every starter also gets a stylesheet, a `.gitignore`, and
+`.github/workflows/pages.yml`, which builds the site with the matching
+Mortise release and publishes it to GitHub Pages on each push to `main`;
+see [deploying](docs/deploy.md). `--drafts` publishes pages and posts marked
+`draft: true`.
+`--strict` makes an undefined template variable an error; `serve` is strict
+unless `--no-strict` or `strict: false` in `_config.yml` says otherwise
+(see [strict mode](docs/templates.md#strict-mode)).
 
 Posts dated after today (UTC) are scheduled: they are left out until their
 date unless you pass `--future` or set `future: true` in `_config.yml`. A

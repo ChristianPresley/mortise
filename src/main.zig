@@ -19,6 +19,7 @@ const usage =
     \\
     \\Commands:
     \\  new       Create a new site in SITE_DIR (required; must be empty or missing)
+    \\            from a starter: --starter blog (default), docs or portfolio
     \\  build     Build SITE_DIR (default: the current directory) into SITE_DIR/_site
     \\  check     Build SITE_DIR in memory and report broken links and anchors and accessibility problems
     \\  serve     Serve SITE_DIR on localhost and reload the browser on every change
@@ -90,13 +91,31 @@ fn run(ctx: Ctx, args: []const [:0]const u8) u8 {
 }
 
 fn cmdNew(ctx: Ctx, rest: []const [:0]const u8) u8 {
-    if (rest.len != 1 or rest[0].len == 0 or rest[0][0] == '-') {
-        ctx.err.writeAll("mortise: 'new' needs exactly one directory, as in: mortise new my-site\n") catch {};
-        return 2;
+    const scaffold = mortise.scaffold;
+    const needs_dir = "mortise: 'new' needs exactly one directory, as in: mortise new my-site [--starter docs]\n";
+    var dir_arg: ?[]const u8 = null;
+    var starter: scaffold.Starter = .blog;
+    var i: usize = 0;
+    while (i < rest.len) : (i += 1) {
+        const arg = rest[i];
+        if (std.mem.eql(u8, arg, "--starter")) {
+            i += 1;
+            const name = if (i < rest.len) rest[i] else "";
+            starter = std.meta.stringToEnum(scaffold.Starter, name) orelse {
+                ctx.err.print("mortise: unknown starter '{s}'; the starters are: {s}\n", .{ name, scaffold.starter_names }) catch {};
+                return 2;
+            };
+        } else if (arg.len == 0 or arg[0] == '-' or dir_arg != null) {
+            ctx.err.writeAll(needs_dir) catch {};
+            return 2;
+        } else dir_arg = arg;
     }
-    const dir = rest[0];
+    const dir = dir_arg orelse {
+        ctx.err.writeAll(needs_dir) catch {};
+        return 2;
+    };
     var buf: [10]u8 = undefined;
-    mortise.scaffold.create(ctx.io, dir, mortise.scaffold.today(ctx.io, &buf)) catch |e| {
+    scaffold.create(ctx.io, dir, scaffold.today(ctx.io, &buf), starter) catch |e| {
         switch (e) {
             error.DirectoryNotEmpty => ctx.err.print("mortise: '{s}' is not empty\n", .{dir}) catch {},
             else => ctx.err.print("mortise: cannot create a site in '{s}': {s}\n", .{ dir, @errorName(e) }) catch {},

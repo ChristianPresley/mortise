@@ -20,6 +20,20 @@ job:
   run, so one workflow step uses the runner's shell (`curl`, a checksum
   check, and `tar` or `unzip`). Every other check (the exact Zig version,
   the empty dependency table) is enforced by `build.zig`.
+- **Release packaging.** The release workflow packs the binaries with the
+  runner's `tar`, `zip` and `sha256sum` and publishes them with `gh`. The
+  starters' Pages workflow downloads a release the same way.
+
+## Releases and starters
+
+- Release binaries are built for six targets only; other systems need a
+  build from source.
+- The starters' Pages workflow pins the Mortise version that created the
+  site. Raise `MORTISE_VERSION` in it to build with a newer release.
+- The Pages workflow does not set `baseurl`; a project site at
+  `https://USER.github.io/REPO/` needs `baseurl: /REPO` in `_config.yml`,
+  and Markdown links should be relative (`docs/`, `../configuration/`)
+  because `baseurl` is not added to them.
 
 ## Paths and files
 

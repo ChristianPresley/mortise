@@ -1,0 +1,76 @@
+name: release
+
+# Pushing a tag such as v0.2.0 tests the tagged commit, builds Mortise for
+# every supported system, and publishes the archives with a SHA256SUMS file
+# as a GitHub release. The tag must match the version in src/root.zig.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+env:
+  # Pinned toolchain. Keep in sync with ci.yml and build.zig.zon.
+  ZIG_VERSION: 0.16.0
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # The same bootstrap as ci.yml: the official release, checksum
+      # verified, no third-party actions. Zig cross-compiles every target
+      # from this one Linux runner.
+      - name: Install Zig ${{ env.ZIG_VERSION }}
+        run: |
+          name="zig-x86_64-linux-${ZIG_VERSION}"
+          file="$name.tar.xz"
+          curl -sSfL -o "$file" "https://ziglang.org/download/${ZIG_VERSION}/$file"
+          echo "70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00  $file" | sha256sum -c -
+          tar -xf "$file"
+          echo "$PWD/$name" >> "$GITHUB_PATH"
+
+      - name: Check the tag against the version
+        run: |
+          zig build
+          version="$(./zig-out/bin/mortise version)"
+          if [ "v${version#mortise }" != "$GITHUB_REF_NAME" ]; then
+            echo "tag $GITHUB_REF_NAME does not match '$version' (src/root.zig)"
+            exit 1
+          fi
+
+      - name: Test
+        run: zig build test
+
+      # Linux builds link musl statically, so they run on any distribution.
+      - name: Build the release archives
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          mkdir -p dist pkg
+          for target in x86_64-linux aarch64-linux x86_64-macos aarch64-macos x86_64-windows aarch64-windows; do
+            case "$target" in
+              *-linux) zig_target="$target-musl" ;;
+              *) zig_target="$target" ;;
+            esac
+            name="mortise-$version-$target"
+            zig build -Dtarget="$zig_target" -Doptimize=ReleaseSafe -Dstrip --prefix "out/$name"
+            mkdir "pkg/$name"
+            case "$target" in
+              *-windows) cp "out/$name/bin/mortise.exe" "pkg/$name/" ;;
+              *) cp "out/$name/bin/mortise" "pkg/$name/" ;;
+            esac
+            cp README.md LICENSE "pkg/$name/"
+            case "$target" in
+              *-windows) (cd pkg && zip -qr "../dist/$name.zip" "$name") ;;
+              *) tar -czf "dist/$name.tar.gz" -C pkg "$name" ;;
+            esac
+          done
+          (cd dist && sha256sum -- * > SHA256SUMS)
+          cat dist/SHA256SUMS
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/* --title "Mortise ${GITHUB_REF_NAME#v}" --generate-notes
