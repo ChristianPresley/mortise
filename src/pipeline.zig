@@ -30,6 +30,7 @@ const themes = @import("themes.zig");
 const assets = @import("assets.zig");
 const redirects = @import("redirects.zig");
 const git = @import("git.zig");
+const seo = @import("seo.zig");
 const Value = template.Value;
 const Entry = template.Entry;
 
@@ -216,6 +217,8 @@ const Page = struct {
     edit_url: []const u8 = "",
     sources: []const []const u8 = &.{},
     reads_collections: bool = false,
+    /// Whether the page's templates output `seo`, so it gets a card.
+    uses_seo: bool = false,
 };
 
 const Layout = struct {
@@ -241,6 +244,14 @@ const Builder = struct {
     skipped: Skipped = .{},
     /// Publish posts dated after `options.today`.
     future: bool = false,
+    /// Whether a template used by the current page reads `seo`.
+    reads_seo: bool = false,
+    seo_config: SeoConfig = .{},
+    /// The `seo` head tags of the page being rendered.
+    current_seo: []const u8 = "",
+    /// The URL of the page being rendered when it differs from the
+    /// page's own: page 2 and up of a paginated page.
+    page_url: ?[]const u8 = null,
     baseurl: []const u8 = "",
     /// Absolute site URL from `url` in the config, needed for the feed and
     /// sitemap; null when unset.
@@ -285,6 +296,7 @@ const Builder = struct {
 
     fn useTemplate(b: *Builder, tpl: *const template.Template) void {
         b.reads_collections = b.reads_collections or tpl.reads_collections;
+        b.reads_seo = b.reads_seo or tpl.reads_seo;
     }
 
     fn templateFail(b: *Builder, d: template.Diagnostic) Error {
@@ -648,6 +660,163 @@ fn addThemeAssets(b: *Builder, outputs: *std.ArrayList(Output), theme: themes.Th
     }
 }
 
+/// Site-wide settings for `{{ seo }}` and social cards.
+const SeoConfig = struct {
+    site_title: []const u8 = "",
+    description: []const u8 = "",
+    author: []const u8 = "",
+    twitter: []const u8 = "",
+    /// Draw a card for pages that output `seo` and set no `image`.
+    cards: bool = true,
+    card_style: []const u8 = "plain",
+};
+
+/// The directory social cards are written to.
+pub const cards_dir = "social";
+
+fn seoConfig(b: *Builder, config_fields: frontmatter.Map) Error!SeoConfig {
+    var c: SeoConfig = .{
+        .site_title = stringField(config_fields, "title") orelse "",
+        .description = stringField(config_fields, "description") orelse "",
+        .author = stringField(config_fields, "author") orelse "",
+        .cards = try enabled(b, config_fields, "social_cards"),
+    };
+    if (stringField(config_fields, "twitter")) |t| {
+        c.twitter = if (t.len > 0 and t[0] != '@') try std.mem.concat(b.arena, u8, &.{ "@", t }) else t;
+    }
+    // Cards match the theme when it has a card style of its own.
+    if (stringField(config_fields, "theme")) |t| {
+        if (std.meta.stringToEnum(@import("render").card.Style, t) != null) c.card_style = t;
+    }
+    if (config_fields.get("social_card_style")) |v| {
+        if (v != .string or std.meta.stringToEnum(@import("render").card.Style, v.string) == null) {
+            return b.fail(config_path, fieldLine(try b.read(config_path), "social_card_style"), "'social_card_style' must be plain, visor or lcars", .{});
+        }
+        c.card_style = v.string;
+    }
+    return c;
+}
+
+/// Whether `p` gets a generated social card.
+fn hasCard(b: *const Builder, p: *const Page) bool {
+    if (!b.seo_config.cards or p.fields.get("image") != null) return false;
+    if (p.fields.get("card")) |v| if (v == .boolean and !v.boolean) return false;
+    return !std.mem.eql(u8, p.out_path, "404.html");
+}
+
+/// `social/docs/install.png` for `docs/install/index.html`.
+fn cardPath(arena: Allocator, out_path: []const u8) Allocator.Error![]const u8 {
+    var stem = out_path;
+    if (std.mem.endsWith(u8, stem, "/index.html")) {
+        stem = stem[0 .. stem.len - "/index.html".len];
+    } else if (std.mem.endsWith(u8, stem, ".html")) {
+        stem = stem[0 .. stem.len - ".html".len];
+    }
+    if (std.mem.eql(u8, stem, "index.html") or stem.len == 0) stem = "index";
+    return std.fmt.allocPrint(arena, "{s}/{s}.png", .{ cards_dir, stem });
+}
+
+/// The `seo` head tags for `p`.
+fn seoFor(b: *Builder, p: *const Page) Error![]const u8 {
+    const arena = b.arena;
+    const c = b.seo_config;
+    var description = stringField(p.fields, "description") orelse "";
+    if (description.len == 0) {
+        if (p.html) |h| description = try seo.summarize(arena, firstParagraph(h) orelse h, 160);
+    }
+    if (description.len == 0) description = c.description;
+    var image: []const u8 = "";
+    var image_size: ?[2]u32 = null;
+    if (stringField(p.fields, "image")) |img| {
+        image = if (img.len > 0 and img[0] != '/' and std.mem.indexOf(u8, img, "://") == null)
+            try std.fmt.allocPrint(arena, "{s}/{s}", .{ b.baseurl, img })
+        else
+            img;
+    } else if (hasCard(b, p)) {
+        image = try std.fmt.allocPrint(arena, "{s}/{s}", .{ b.baseurl, try cardPath(arena, p.out_path) });
+        image_size = .{ 1200, 630 };
+    }
+    var crumbs: std.ArrayList(seo.Crumb) = .empty;
+    if (p.object.get("breadcrumbs")) |bc| if (bc == .list) for (bc.list) |item| {
+        if (item != .object) continue;
+        const t = item.object.get("title") orelse continue;
+        const u = item.object.get("url") orelse continue;
+        if (t != .string or u != .string) continue;
+        try crumbs.append(arena, .{ .title = t.string, .url = u.string });
+    };
+    const updated = if (p.object.get("updated")) |v| (if (v == .string) v.string else "") else "";
+    const title = stringField(p.fields, "title") orelse "";
+    return seo.head(arena, .{
+        .site_title = c.site_title,
+        .site_url = b.site_url,
+        .url = b.page_url orelse p.url,
+        .title = title,
+        .description = description,
+        .is_post = p.is_post,
+        .is_home = std.mem.eql(u8, p.out_path, "index.html") and b.page_url == null,
+        .published = p.date,
+        .modified = if (template.parseDate(updated) != null) updated[0..10] else "",
+        .author = stringField(p.fields, "author") orelse c.author,
+        .image = image,
+        .image_alt = stringField(p.fields, "image_alt") orelse title,
+        .image_size = image_size,
+        .twitter = c.twitter,
+        .breadcrumbs = crumbs.items,
+    });
+}
+
+/// Draws a social card for every page that outputs `seo` and has no
+/// `image` of its own.
+fn addCards(b: *Builder, outputs: *std.ArrayList(Output), pages: []const Page) Error!void {
+    const arena = b.arena;
+    var jobs: std.ArrayList(assets.Job) = .empty;
+    var sources: std.ArrayList([]const u8) = .empty;
+    for (pages) |*p| {
+        if (!p.uses_seo or !hasCard(b, p)) continue;
+        const path = try cardPath(arena, p.out_path);
+        if (hasOutput(outputs.items, path)) continue;
+        const title = stringField(p.fields, "title") orelse navTitle(p);
+        const label = if (p.is_post) p.date else if (b.site_url) |u| try std.mem.concat(arena, u8, &.{ hostOf(u), p.url }) else p.url;
+        var spec: std.ArrayList(u8) = .empty;
+        try spec.print(arena, "kind: card\nstyle: {s}\ntitle: ", .{b.seo_config.card_style});
+        try yamlString(arena, &spec, title);
+        try spec.appendSlice(arena, "\nsubtitle: ");
+        try yamlString(arena, &spec, b.seo_config.site_title);
+        try spec.appendSlice(arena, "\nlabel: ");
+        try yamlString(arena, &spec, label);
+        try spec.append(arena, '\n');
+        try jobs.append(arena, .{ .name = path[0 .. path.len - ".png".len], .source = spec.items });
+        try sources.append(arena, p.source);
+    }
+    // Cards are independent, so they render concurrently.
+    assets.renderMany(b.options.render_cache, arena, b.src.io, jobs.items) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.InvalidSpec => for (jobs.items, sources.items) |j, src| {
+            if (j.diag.message.len > 0) return b.fail(src, 0, "cannot draw the social card: {s}", .{j.diag.message});
+        } else return b.fail("", 0, "cannot draw a social card", .{}),
+    };
+    for (jobs.items, sources.items) |j, src| try appendRendered(b, outputs, src, j.name, j.result);
+}
+
+fn hostOf(url: []const u8) []const u8 {
+    const rest = url[(std.mem.indexOf(u8, url, "://") orelse return url) + 3 ..];
+    return rest[0 .. std.mem.indexOfScalar(u8, rest, '/') orelse rest.len];
+}
+
+/// `s` as a double-quoted frontmatter string.
+fn yamlString(arena: Allocator, out: *std.ArrayList(u8), s: []const u8) Allocator.Error!void {
+    try out.append(arena, '"');
+    for (s) |c| switch (c) {
+        '"', '\\' => {
+            try out.append(arena, '\\');
+            try out.append(arena, c);
+        },
+        '\n', '\r', '\t' => try out.append(arena, ' '),
+        else => try out.append(arena, c),
+    };
+    try out.append(arena, '"');
+}
+
 /// Renders the spec `spec` read from `source` into `NAME.png`, plus
 /// `NAME.css` for kinds that need it.
 fn addRendered(b: *Builder, outputs: *std.ArrayList(Output), source: []const u8, name: []const u8, spec: []const u8) Error!void {
@@ -771,15 +940,18 @@ fn finish(b: *Builder, config_fields: frontmatter.Map, pages: []Page, statics: [
     var outputs: std.ArrayList(Output) = .empty;
     try outputs.appendSlice(arena, statics);
     const deps = try arena.alloc(Deps, pages.len);
+    b.seo_config = try seoConfig(b, config_fields);
     for (pages, deps, 0..) |*p, *d, i| {
         if (render == null or render.?[i]) {
             b.deps = .empty;
             b.reads_collections = false;
+            b.reads_seo = false;
             try b.addDep(p.source);
             for (p.included_files) |f| try b.addDep(f);
             try renderPaginated(b, p, post_values.items);
             p.sources = b.deps.items;
             p.reads_collections = b.reads_collections;
+            p.uses_seo = b.reads_seo;
             rendered += 1;
         }
         try outputs.append(arena, .{ .path = p.out_path, .source = p.source, .data = .{ .bytes = p.output } });
@@ -788,6 +960,7 @@ fn finish(b: *Builder, config_fields: frontmatter.Map, pages: []Page, statics: [
     }
 
     if (tag_pages) try addTagPages(b, &outputs, tags.list);
+    try addCards(b, &outputs, pages);
     try addComponentsCss(b, &outputs, config_fields, pages);
     try addThemeCss(b, &outputs, config_fields);
     try addAliases(b, &outputs, config_fields, pages);
@@ -1519,6 +1692,8 @@ fn renderPaginated(b: *Builder, p: *Page, posts: []const Value) Error!void {
         b.paginator = .{ .entries = entries };
         // The paginator lists posts, so this page changes when any post does.
         b.reads_collections = true;
+        b.page_url = if (k > 1) try pageUrl(arena, p.url, k) else null;
+        defer b.page_url = null;
         const html = try renderPage(b, p);
         if (k == 1) {
             p.output = html;
@@ -1538,6 +1713,7 @@ fn pageUrl(arena: Allocator, base: []const u8, k: usize) Allocator.Error![]const
 
 fn renderPage(b: *Builder, p: *const Page) Error![]const u8 {
     const arena = b.arena;
+    b.current_seo = try seoFor(b, p);
     var content: []const u8 = undefined;
     if (p.html) |h| {
         content = h;
@@ -1612,9 +1788,11 @@ fn markdownOptions(b: *Builder, config_fields: frontmatter.Map) Error!markdown.O
 }
 
 fn renderTemplate(b: *Builder, tpl: *const template.Template, p: *const Page, content: ?[]const u8) Error![]const u8 {
-    var entries: [4]Entry = undefined;
+    var entries: [5]Entry = undefined;
     var n: usize = 0;
     entries[n] = .{ .key = "site", .value = .{ .object = b.site } };
+    n += 1;
+    entries[n] = .{ .key = "seo", .value = .{ .html = b.current_seo } };
     n += 1;
     entries[n] = .{ .key = "page", .value = .{ .object = p.object } };
     n += 1;
@@ -2569,4 +2747,40 @@ test "git_dates and edit_url come from the repository holding the site" {
     try testing.expect(std.mem.indexOf(u8, map, "<loc>https://example.com/b/</loc><lastmod>2025-05-05</lastmod>") != null);
 
     try expectBuildError(&.{.{ "_config.yml", "edit_url: https://x/edit\n" }}, "_config.yml", 0, "'edit_url' must be a URL containing {path}");
+}
+
+test "seo outputs head tags and pages that use it get a social card" {
+    var t: TestSite = try .init(&.{
+        .{ "_config.yml", "title: Site\nurl: https://example.com\ntwitter: handle\n" },
+        .{ "_layouts/base.html", "<head>{{ seo }}</head>{{ content }}" },
+        .{ "_layouts/bare.html", "{{ content }}" },
+        .{ "about.md", "---\ntitle: About us\nlayout: base\n---\nWe make *sites*.\n" },
+        .{ "photo.md", "---\ntitle: Photo\nlayout: base\nimage: img/p.jpg\n---\nP\n" },
+        .{ "plain.md", "---\nlayout: bare\n---\nNo head tags here.\n" },
+    });
+    defer t.deinit();
+    var diag: Diagnostic = .{};
+    const site = try t.build(&diag);
+    const about = site.find("about/index.html").?.data.bytes;
+    try testing.expect(std.mem.indexOf(u8, about, "<meta name=\"description\" content=\"We make sites.\">") != null);
+    try testing.expect(std.mem.indexOf(u8, about, "<link rel=\"canonical\" href=\"https://example.com/about/\">") != null);
+    try testing.expect(std.mem.indexOf(u8, about, "<meta property=\"og:image\" content=\"https://example.com/social/about.png\">") != null);
+    try testing.expect(std.mem.indexOf(u8, about, "<meta name=\"twitter:site\" content=\"@handle\">") != null);
+    // The card exists and is a PNG.
+    try testing.expect(std.mem.startsWith(u8, site.find("social/about.png").?.data.bytes, "\x89PNG"));
+    // A page's own image replaces the card; a page without seo gets none.
+    try testing.expect(std.mem.indexOf(u8, site.find("photo/index.html").?.data.bytes, "content=\"https://example.com/img/p.jpg\"") != null);
+    try testing.expect(site.find("social/photo.png") == null);
+    try testing.expect(site.find("social/plain.png") == null);
+
+    try expectBuildError(&.{.{ "_config.yml", "social_card_style: neon\n" }}, "_config.yml", 1, "'social_card_style' must be plain, visor or lcars");
+}
+
+test "cardPath" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    try testing.expectEqualStrings("social/index.png", try cardPath(a, "index.html"));
+    try testing.expectEqualStrings("social/docs/install.png", try cardPath(a, "docs/install/index.html"));
+    try testing.expectEqualStrings("social/rendering.png", try cardPath(a, "rendering.html"));
 }

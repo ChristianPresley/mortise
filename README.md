@@ -192,6 +192,10 @@ my-site/
   `page.edit_url`, with `{path}` the source file's path in the repository.
   In CI, check out the full history (`fetch-depth: 0`); a shallow clone
   dates every page by its newest commit.
+- `{{ seo }}` in a layout's `<head>` writes the description, canonical
+  link, Open Graph and Twitter tags, and JSON-LD structured data, and
+  gives every such page a social card image drawn by the build in the
+  theme's style; see [SEO and social cards](docs/templates.md#seo-and-social-cards).
 - Templates see `site` (config values plus `site.posts`, newest first, and
   `site.pages`), `page` (frontmatter plus `url`, `path`, and for posts `date`
   and `slug`), and in layouts `content`.

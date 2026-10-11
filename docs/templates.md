@@ -201,6 +201,42 @@ title is its `title`, else the last part of its URL.
 Templates cannot recurse, so a sidebar shows as many levels as its layout
 loops over.
 
+## SEO and social cards
+
+`{{ seo }}` in a layout's `<head>` writes the tags search engines and link
+previews read:
+
+- `<meta name="description">`: the page's `description`, else the start of
+  its first paragraph (about 160 characters), else the site's
+  `description`.
+- `<link rel="canonical">` with the absolute URL (needs `url` in
+  `_config.yml`).
+- Open Graph tags (`og:type` is `article` for posts, `og:title`,
+  `og:description`, `og:url`, `og:site_name`, `og:image`, and the post's
+  `article:published_time` and `article:modified_time` from `updated`).
+- Twitter card tags; `twitter: handle` in the config adds `twitter:site`.
+- JSON-LD structured data: `BlogPosting` for posts (with author, dates and
+  image), `WebSite` for the home page, `WebPage` for others, and a
+  `BreadcrumbList` from `page.breadcrumbs`.
+
+Keep your own `<title>`; `seo` does not write one.
+
+Every page whose layout outputs `seo` gets a **social card**: a 1200×630
+image at `/social/PATH.png` with the page title, the site title and the
+post date (or the page's address), drawn by the build. Cards follow the
+theme (`visor` or `lcars`) or are `plain`; set `social_card_style:` to
+choose. A page's own `image: /img/cover.jpg` (with optional `image_alt`)
+replaces its card, `card: false` leaves a page without one, and
+`social_cards: false` turns cards off for the whole site. See
+[card](rendering.md#card) for how they look.
+
+```html
+<head>
+<title>{{ page.title }} | {{ site.title }}</title>
+{{ seo }}
+</head>
+```
+
 ## Includes
 
 ```html

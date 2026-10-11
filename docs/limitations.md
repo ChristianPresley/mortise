@@ -126,6 +126,21 @@ job:
 - Specs choose from a fixed set of kinds and fields. Anything else means
   writing Zig against the `render` module (see render/README.md).
 
+## SEO and social cards
+
+- Social cards are drawn from scratch on every `build`, about 0.1 s each
+  in a release build (several at once on a multi-core machine) and several
+  times slower in a debug build. `serve` keeps them between rebuilds.
+- Card titles use the built-in stroke font: characters outside ASCII and
+  common accented Latin letters are drawn as boxes, so titles in other
+  scripts get unreadable cards. Set `image:` on such pages, or
+  `social_cards: false`.
+- Without `url` in `_config.yml`, Open Graph URLs and images stay
+  root-relative, which most link previews ignore.
+- Descriptions are cut from the first paragraph by characters, not by
+  rendered width, and inline markup is dropped.
+- `seo` writes no `<title>`, `hreflang`, robots or author meta tags.
+
 ## Syntax highlighting
 
 - Highlighting is lexical: keywords, literals, strings, numbers, comments,

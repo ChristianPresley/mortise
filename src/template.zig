@@ -209,6 +209,8 @@ pub const Template = struct {
     /// Whether any expression reads `site.posts`, `site.pages`, or
     /// `site.tags`, whose contents change whenever any page or post does.
     reads_collections: bool,
+    /// Whether any expression reads `seo`, the page's head tags.
+    reads_seo: bool = false,
 };
 
 pub const Diagnostic = struct {
@@ -238,6 +240,7 @@ const Parser = struct {
     pos: usize = 0,
     includes: std.ArrayList([]const u8) = .empty,
     reads_collections: bool = false,
+    reads_seo: bool = false,
 
     fn fail(p: *Parser, line: usize, comptime fmt: []const u8, args: anytype) ParseError {
         p.diag.* = .{
@@ -256,7 +259,7 @@ pub fn parse(arena: Allocator, name: []const u8, src: []const u8, diag: *Diagnos
     var end: ?Stmt = null;
     const nodes = try parseNodes(&p, &end);
     if (end) |e| return p.fail(e.line, "unexpected '{s}'", .{e.keyword});
-    return .{ .name = name, .nodes = nodes, .includes = p.includes.items, .reads_collections = p.reads_collections };
+    return .{ .name = name, .nodes = nodes, .includes = p.includes.items, .reads_collections = p.reads_collections, .reads_seo = p.reads_seo };
 }
 
 fn tokenize(p: *Parser, src: []const u8) ParseError![]const Token {
@@ -551,6 +554,11 @@ fn parseExpr(lx: *Lexer) ParseError!Expr {
                 (std.mem.eql(u8, path[1], "breadcrumbs") or std.mem.eql(u8, path[1], "previous") or
                     std.mem.eql(u8, path[1], "next")))
             {
+                lx.p.reads_collections = true;
+            }
+            // The head tags hold breadcrumbs, which depend on other pages.
+            if (std.mem.eql(u8, path[0], "seo")) {
+                lx.p.reads_seo = true;
                 lx.p.reads_collections = true;
             }
             break :blk .{ .path = path };

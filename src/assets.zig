@@ -317,7 +317,8 @@ fn card(gpa: Allocator, s: *Spec) Error!Rendered {
         .foreground = try s.optionalColor("foreground"),
     });
     defer c.deinit(gpa);
-    return .{ .png = try r.encodePng(gpa, c, .clamp), .css = null };
+    // Cards are large and plain; fast compression costs little in size.
+    return .{ .png = try r.encodePngWith(gpa, c, .clamp, .{ .level = .level_1 }), .css = null };
 }
 
 pub const Shape = enum { icosphere, sphere, cube, torus, gem };
@@ -576,6 +577,73 @@ pub const Cache = struct {
 pub fn renderCached(cache: ?*Cache, arena: Allocator, io: std.Io, name: []const u8, source: []const u8, diag: *Diagnostic) Error!Rendered {
     if (cache) |c| return c.get(arena, io, name, source, diag);
     return render(arena, arena, io, name, source, diag);
+}
+
+pub const Job = struct {
+    name: []const u8,
+    source: []const u8,
+    result: Rendered = undefined,
+    diag: Diagnostic = .{},
+};
+
+/// Renders many specs at once, concurrently on `io`, like `renderCached`
+/// for each. On `error.InvalidSpec`, the failed job's `diag` says why.
+/// Results live in the cache when there is one, else in `arena`.
+pub fn renderMany(cache: ?*Cache, arena: Allocator, io: std.Io, jobs: []Job) Error!void {
+    const fa = frame_allocator;
+    const Slot = struct { job: *Job, out: Error!Rendered = error.OutOfMemory, key: u64 };
+    var todo: std.ArrayList(Slot) = .empty;
+    for (jobs) |*j| {
+        const key = cacheKey(j.name, j.source);
+        if (cache) |c| if (c.entries.get(key)) |hit| {
+            j.result = hit;
+            continue;
+        };
+        try todo.append(arena, .{ .job = j, .key = key });
+    }
+    const Task = struct {
+        fn run(t_io: std.Io, slot: *Slot) void {
+            var task_arena: std.heap.ArenaAllocator = .init(std.heap.smp_allocator);
+            defer task_arena.deinit();
+            slot.out = render(std.heap.smp_allocator, task_arena.allocator(), t_io, slot.job.name, slot.job.source, &slot.job.diag);
+            // The diagnostic's message lives in the task's arena.
+            if (slot.out) |_| {} else |_| slot.job.diag.message = std.heap.smp_allocator.dupe(u8, slot.job.diag.message) catch "out of memory";
+        }
+    };
+    var group: std.Io.Group = .init;
+    for (todo.items) |*slot| group.async(io, Task.run, .{ io, slot });
+    group.await(io) catch {
+        group.cancel(io);
+        return error.OutOfMemory;
+    };
+    // Move each result where it must live, freeing the threads' copies.
+    var failed: ?Error = null;
+    for (todo.items) |*slot| {
+        const fresh = slot.out catch |e| {
+            const msg = slot.job.diag.message;
+            slot.job.diag.message = try arena.dupe(u8, msg);
+            if (msg.len > 0 and !std.mem.eql(u8, msg, "out of memory")) fa.free(msg);
+            if (failed == null) failed = e;
+            continue;
+        };
+        defer {
+            fa.free(fresh.png);
+            if (fresh.css) |css| fa.free(css);
+        }
+        const keep_gpa = if (cache) |c| c.gpa else arena;
+        const kept: Rendered = .{ .png = try keep_gpa.dupe(u8, fresh.png), .css = if (fresh.css) |css| try keep_gpa.dupe(u8, css) else null };
+        if (cache) |c| try c.entries.put(c.gpa, slot.key, kept);
+        slot.job.result = kept;
+    }
+    if (failed) |e| return e;
+}
+
+fn cacheKey(name: []const u8, source: []const u8) u64 {
+    var h: std.hash.Wyhash = .init(0);
+    h.update(name);
+    h.update(&.{0});
+    h.update(source);
+    return h.final();
 }
 
 const testing = std.testing;

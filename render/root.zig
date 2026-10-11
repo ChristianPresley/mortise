@@ -39,9 +39,14 @@ pub const card = @import("card.zig");
 
 /// Encodes a canvas as a PNG file in memory. The caller owns the result.
 pub fn encodePng(gpa: Allocator, c: Canvas, tone: Canvas.ToneMap) Allocator.Error![]u8 {
+    return encodePngWith(gpa, c, tone, .{});
+}
+
+/// `encodePng` with encoder options, such as a faster compression level.
+pub fn encodePngWith(gpa: Allocator, c: Canvas, tone: Canvas.ToneMap, options: png.EncodeOptions) Allocator.Error![]u8 {
     const rgba = try c.toRgba8(gpa, tone);
     defer gpa.free(rgba);
-    return png.encodeAlloc(gpa, c.width, c.height, rgba, .{});
+    return png.encodeAlloc(gpa, c.width, c.height, rgba, options);
 }
 
 /// Writes a canvas to `sub_path` in `dir` as a PNG file.
