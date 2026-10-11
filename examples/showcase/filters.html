@@ -36,7 +36,7 @@ description: Template filters at work on this site's own posts.
 {{ site.description | markdownify }}
 
 <h2 id="json">JSON for scripts</h2>
-<pre><code>{{ site.data.nav | limit(2) | json }}</code></pre>
+<pre><code>{{ site.menus.main | limit(2) | json }}</code></pre>
 
 <h2 id="dump">Dump</h2>
 <p><code>&#123;{ page | dump }&#125;</code> shows everything a template can read:</p>

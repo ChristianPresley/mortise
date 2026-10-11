@@ -286,6 +286,8 @@ job:
 - `page.related` scores pages only by how many tags and terms they share,
   not by their text, and comparing every pair of pages grows with the
   square of the page count.
+- Menus are flat lists; a menu item cannot have children. Errors in
+  `_data/menus` name the directory, not the file and line.
 - `build` deletes the whole `_site` directory before writing, so files
   placed there by hand are lost.
 - Layouts are found only as `_layouts/NAME.html`; includes only under

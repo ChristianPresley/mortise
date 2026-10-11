@@ -1,3 +1,4 @@
 <footer>
-<p>{{ site.description }} · <a href="{{ site.baseurl }}/feed.xml">Atom feed</a> · <a href="{{ site.baseurl }}/sitemap.xml">Sitemap</a></p>
+<p>{{ site.description }}
+{%- for item in page.menus.footer %} · <a href="{{ item.url }}">{{ item.title }}</a>{% endfor %} · <a href="{{ site.baseurl }}/feed.xml">Atom feed</a> · <a href="{{ site.baseurl }}/sitemap.xml">Sitemap</a></p>
 </footer>

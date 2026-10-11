@@ -1,0 +1,10 @@
+[
+  { "title": "Home", "url": "/", "weight": 1 },
+  { "title": "Docs", "url": "/docs/", "weight": 2 },
+  { "title": "Components", "url": "/components/", "weight": 3 },
+  { "title": "Code", "url": "/code/", "weight": 4 },
+  { "title": "Filters", "url": "/filters.html", "weight": 5 },
+  { "title": "Wiki", "url": "/wiki/", "weight": 6 },
+  { "title": "API", "url": "/api/", "weight": 7 },
+  { "title": "Tags", "url": "/tags/", "weight": 8 }
+]

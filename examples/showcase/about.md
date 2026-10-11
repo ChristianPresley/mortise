@@ -2,6 +2,7 @@
 title: About
 layout: base
 weight: 9
+menu: [main, footer]
 ---
 About this site
 ===============

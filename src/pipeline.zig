@@ -304,6 +304,8 @@ const Builder = struct {
     page_assets: std.ArrayList([]const u8) = .empty,
     /// Write `asset` files under names with their content hash.
     fingerprint: bool = false,
+    /// `site.menus`, which generated pages also see as `page.menus`.
+    menus: Value = .{ .object = .{} },
 
     fn fail(b: *Builder, path: []const u8, line: usize, comptime fmt: []const u8, args: anytype) Error {
         b.diag.* = .{
@@ -1218,6 +1220,14 @@ fn finish(b: *Builder, config_fields: frontmatter.Map, pages: []Page, statics: [
         if (v != .int or v.int < 1 or v.int > 50) return b.fail(config_path, fieldLine(try b.read(config_path), "related"), "'related' must be how many related pages to list, 1 to 50", .{});
         try addRelated(arena, pages, taxonomies, @intCast(v.int));
     }
+    b.menus = try menuIndex(b, pages);
+    const root = try std.fmt.allocPrint(arena, "{s}/", .{b.baseurl});
+    for (pages) |*p| {
+        var entries: std.ArrayList(Entry) = .empty;
+        try entries.appendSlice(arena, p.object.entries);
+        try entries.append(arena, .{ .key = "menus", .value = try pageMenus(arena, b.menus, p.url, root) });
+        p.object = .{ .entries = entries.items };
+    }
     for (pages) |*p| {
         if (p.is_post) {
             try post_values.append(arena, .{ .object = p.object });
@@ -1235,7 +1245,7 @@ fn finish(b: *Builder, config_fields: frontmatter.Map, pages: []Page, statics: [
     try site_entries.append(arena, .{ .key = "scheme_toggle", .value = .{ .html = toggle } });
     for (config_fields.entries) |e| {
         if (std.mem.eql(u8, e.key, "posts") or std.mem.eql(u8, e.key, "pages") or
-            std.mem.eql(u8, e.key, "data") or std.mem.eql(u8, e.key, "tags") or std.mem.eql(u8, e.key, "nav") or
+            std.mem.eql(u8, e.key, "data") or std.mem.eql(u8, e.key, "tags") or std.mem.eql(u8, e.key, "nav") or std.mem.eql(u8, e.key, "menus") or
             std.mem.eql(u8, e.key, "apis"))
         {
             return b.fail(config_path, 0, "'{s}' is set by Mortise; use another key", .{e.key});
@@ -1255,6 +1265,7 @@ fn finish(b: *Builder, config_fields: frontmatter.Map, pages: []Page, statics: [
     try site_entries.append(arena, .{ .key = "data", .value = b.data });
     try site_entries.append(arena, .{ .key = "nav", .value = try navTree(arena, pages, b.baseurl) });
     try site_entries.append(arena, .{ .key = "apis", .value = try apiIndex(arena, pages) });
+    try site_entries.append(arena, .{ .key = "menus", .value = b.menus });
     const tag_pages = b.exists(tag_layout);
     const tags = try tagIndex(arena, pages, if (tag_pages) b.baseurl else null);
     try site_entries.append(arena, .{ .key = "tags", .value = tags });
@@ -1373,6 +1384,22 @@ fn loadPage(b: *Builder, path: []const u8, is_post: bool) Error!?Page {
             b.skipped.expired += 1;
             return null;
         }
+    }
+
+    if (doc.fields.get("sort")) |s| {
+        if (s != .string or std.meta.stringToEnum(SortMode, s.string) == null) {
+            return b.fail(path, fieldLine(data, "sort"), "'sort' must be weight, title, date or url", .{});
+        }
+    }
+    if (doc.fields.get("menu")) |m| {
+        const ok = switch (m) {
+            .string => |s| s.len > 0,
+            .list => |l| for (l) |item| {
+                if (item != .string or item.string.len == 0) break false;
+            } else true,
+            else => false,
+        };
+        if (!ok) return b.fail(path, fieldLine(data, "menu"), "'menu' must be a menu name or a list of them, such as [main, footer]", .{});
     }
 
     const is_markdown = std.mem.eql(u8, sitepath.extension(path), ".md");
@@ -1850,7 +1877,7 @@ fn siblingPages(arena: Allocator, pages: []const Page, p: *const Page) Allocator
         if (q.is_post or isHiddenFromNav(q)) continue;
         if (std.mem.eql(u8, parentUrl(q.url), dir) and !std.mem.eql(u8, q.url, "/")) try out.append(arena, q);
     }
-    std.mem.sortUnstable(*const Page, out.items, {}, navLess);
+    std.mem.sortUnstable(*const Page, out.items, sectionSort(pages, dir), navLess);
     return out.items;
 }
 
@@ -1859,10 +1886,33 @@ fn isHiddenFromNav(p: *const Page) bool {
     return v == .boolean and !v.boolean;
 }
 
-fn navLess(_: void, a: *const Page, b: *const Page) bool {
-    const wa = navWeight(a);
-    const wb = navWeight(b);
-    if (wa != wb) return wa < wb;
+/// How a section's pages are ordered, set by `sort:` on its index page.
+const SortMode = enum { weight, title, date, url };
+
+/// The order of the pages in the URL directory `dir`.
+fn sectionSort(pages: []const Page, dir: []const u8) SortMode {
+    const index = pageAtUrl(pages, dir) orelse return .weight;
+    const s = stringField(index.fields, "sort") orelse return .weight;
+    return std.meta.stringToEnum(SortMode, s) orelse .weight;
+}
+
+/// Orders pages by `mode`, then by title. Weights and dates are optional;
+/// pages without one come last, and dates sort newest first.
+fn navLess(mode: SortMode, a: *const Page, b: *const Page) bool {
+    switch (mode) {
+        .weight => {
+            const wa = navWeight(a);
+            const wb = navWeight(b);
+            if (wa != wb) return wa < wb;
+        },
+        .title => {},
+        .date => {
+            const da = stringField(a.fields, "date") orelse "";
+            const db = stringField(b.fields, "date") orelse "";
+            if (!std.mem.eql(u8, da, db)) return std.mem.lessThan(u8, db, da);
+        },
+        .url => if (!std.mem.eql(u8, a.url, b.url)) return std.mem.lessThan(u8, a.url, b.url),
+    }
     return std.mem.lessThan(u8, navTitle(a), navTitle(b));
 }
 
@@ -1883,7 +1933,7 @@ fn navChildren(arena: Allocator, pages: []const Page, dir: []const u8) Allocator
         while (anc.len > dir.len and pageAtUrl(pages, anc) == null) anc = parentUrl(anc);
         if (std.mem.eql(u8, anc, dir)) try kids.append(arena, q);
     }
-    std.mem.sortUnstable(*const Page, kids.items, {}, navLess);
+    std.mem.sortUnstable(*const Page, kids.items, sectionSort(pages, dir), navLess);
     const out = try arena.alloc(Value, kids.items.len);
     for (kids.items, out) |q, *o| {
         const entries = try arena.alloc(Entry, 3);
@@ -2209,10 +2259,122 @@ fn renderGenerated(b: *Builder, outputs: *std.ArrayList(Output), layout: []const
     var entries: std.ArrayList(Entry) = .empty;
     try entries.appendSlice(arena, fields);
     try entries.append(arena, .{ .key = "url", .value = .{ .string = url } });
+    try entries.append(arena, .{ .key = "menus", .value = try pageMenus(arena, b.menus, url, try std.fmt.allocPrint(arena, "{s}/", .{b.baseurl})) });
     page.object = .{ .entries = entries.items };
     b.deps = .empty;
     const html = try renderPage(b, &page);
     try outputs.append(arena, .{ .path = out_path, .source = source, .data = .{ .bytes = html } });
+}
+
+/// `site.menus`: each named menu as a list of {title, url, weight,
+/// external}, ordered by weight, then title. Pages join a menu with
+/// frontmatter `menu: NAME` (titled by `menu_title`, else their navigation
+/// title); `site.data.menus.NAME` adds links of its own, each
+/// {title, url, weight}.
+fn menuIndex(b: *Builder, pages: []const Page) Error!Value {
+    const arena = b.arena;
+    var names: std.ArrayList([]const u8) = .empty;
+    var lists: std.ArrayList(std.ArrayList(MenuItem)) = .empty;
+    const Add = struct {
+        fn list(a: Allocator, n: *std.ArrayList([]const u8), l: *std.ArrayList(std.ArrayList(MenuItem)), name: []const u8) Allocator.Error!*std.ArrayList(MenuItem) {
+            for (n.items, 0..) |m, i| if (std.mem.eql(u8, m, name)) return &l.items[i];
+            try n.append(a, name);
+            try l.append(a, .empty);
+            return &l.items[l.items.len - 1];
+        }
+    };
+
+    if (b.data.object.get("menus")) |data| {
+        if (data != .object) return b.fail("_data/menus", 0, "'site.data.menus' must map menu names to lists of links", .{});
+        for (data.object.entries) |menu| {
+            if (menu.value != .list) return b.fail("_data/menus", 0, "menu '{s}' must be a list of links", .{menu.key});
+            const list = try Add.list(arena, &names, &lists, menu.key);
+            for (menu.value.list) |item| {
+                const o = if (item == .object) item.object else return b.fail("_data/menus", 0, "each link in menu '{s}' must have a title and a url", .{menu.key});
+                const title = o.get("title") orelse Value.nil;
+                const url = o.get("url") orelse Value.nil;
+                if (title != .string or url != .string) return b.fail("_data/menus", 0, "each link in menu '{s}' must have a title and a url", .{menu.key});
+                const weight: ?i64 = if (o.get("weight")) |w| switch (w) {
+                    .int => |n| n,
+                    else => return b.fail("_data/menus", 0, "link '{s}' in menu '{s}' has a 'weight' that is not a whole number", .{ title.string, menu.key }),
+                } else null;
+                // Root-relative links are inside the site, under `baseurl`.
+                const internal = url.string.len > 0 and url.string[0] == '/' and !std.mem.startsWith(u8, url.string, "//");
+                const href = if (internal and b.baseurl.len > 0) try std.mem.concat(arena, u8, &.{ b.baseurl, url.string }) else url.string;
+                try list.append(arena, .{ .title = title.string, .url = href, .weight = weight, .external = !internal });
+            }
+        }
+    }
+    for (pages) |*p| {
+        const v = p.fields.get("menu") orelse continue;
+        const menus: []const frontmatter.Value = if (v == .list) v.list else &.{v};
+        for (menus) |m| {
+            const list = try Add.list(arena, &names, &lists, m.string);
+            const weight = navWeight(p);
+            try list.append(arena, .{
+                .title = stringField(p.fields, "menu_title") orelse navTitle(p),
+                .url = p.url,
+                .weight = if (weight == std.math.maxInt(i64)) null else weight,
+                .external = false,
+            });
+        }
+    }
+
+    const out = try arena.alloc(Entry, names.items.len);
+    for (names.items, lists.items, out) |name, *list, *o| {
+        std.mem.sort(MenuItem, list.items, {}, MenuItem.lessThan);
+        const items = try arena.alloc(Value, list.items.len);
+        for (list.items, items) |item, *v| v.* = try item.value(arena, &.{});
+        o.* = .{ .key = name, .value = .{ .list = items } };
+    }
+    return .{ .object = .{ .entries = out } };
+}
+
+const MenuItem = struct {
+    title: []const u8,
+    url: []const u8,
+    weight: ?i64,
+    external: bool,
+
+    fn lessThan(_: void, a: MenuItem, b: MenuItem) bool {
+        const wa = a.weight orelse std.math.maxInt(i64);
+        const wb = b.weight orelse std.math.maxInt(i64);
+        if (wa != wb) return wa < wb;
+        return std.mem.lessThan(u8, a.title, b.title);
+    }
+
+    fn value(item: MenuItem, arena: Allocator, extra: []const Entry) Allocator.Error!Value {
+        var entries: std.ArrayList(Entry) = .empty;
+        try entries.append(arena, .{ .key = "title", .value = .{ .string = item.title } });
+        try entries.append(arena, .{ .key = "url", .value = .{ .string = item.url } });
+        try entries.append(arena, .{ .key = "weight", .value = if (item.weight) |w| .{ .int = w } else .nil });
+        try entries.append(arena, .{ .key = "external", .value = .{ .boolean = item.external } });
+        try entries.appendSlice(arena, extra);
+        return .{ .object = .{ .entries = entries.items } };
+    }
+};
+
+/// `page.menus`: every menu in `menus` as seen from the page at `url`.
+/// Each link gains `active` (it is this page) and `in_section` (this page
+/// is below it, as `/docs/setup/` is below `/docs/`).
+fn pageMenus(arena: Allocator, menus: Value, url: []const u8, root: []const u8) Allocator.Error!Value {
+    const out = try arena.alloc(Entry, menus.object.entries.len);
+    for (menus.object.entries, out) |menu, *o| {
+        const items = try arena.alloc(Value, menu.value.list.len);
+        for (menu.value.list, items) |item, *v| {
+            const href = item.object.get("url").?.string;
+            const active = std.mem.eql(u8, href, url);
+            const in_section = !active and !std.mem.eql(u8, href, root) and
+                std.mem.endsWith(u8, href, "/") and std.mem.startsWith(u8, url, href);
+            var entries: std.ArrayList(Entry) = .empty;
+            try entries.appendSlice(arena, item.object.entries);
+            try entries.append(arena, .{ .key = "active", .value = .{ .boolean = active } });
+            try entries.append(arena, .{ .key = "in_section", .value = .{ .boolean = in_section } });
+            v.* = .{ .object = .{ .entries = entries.items } };
+        }
+        o.* = .{ .key = menu.key, .value = .{ .list = items } };
+    }
+    return .{ .object = .{ .entries = out } };
 }
 
 /// Adds `page.related` to every page: up to `count` other pages that share
@@ -3883,4 +4045,33 @@ test "taxonomies, their pages, and related pages" {
 
     try expectBuildError(&.{.{ "_config.yml", "taxonomies: [tags]\n" }}, "_config.yml", 1, "'tags' is built in");
     try expectBuildError(&.{.{ "_config.yml", "title: T\nrelated: lots\n" }}, "_config.yml", 2, "'related' must be how many");
+}
+
+test "named menus and section sort orders" {
+    var t: TestSite = try .init(&.{
+        .{ "_data/menus/main.json", "[{\"title\": \"Source\", \"url\": \"https://example.com/src\", \"weight\": 9}, {\"title\": \"Home\", \"url\": \"/\", \"weight\": 0}]" },
+        .{ "_layouts/l.html", "{% for m in page.menus.main %}[{{ m.title }}{% if m.active %}*{% endif %}{% if m.in_section %}+{% endif %}{% if m.external %}^{% endif %}]{% endfor %}|{% for n in site.nav %}{{ n.title }}:{% for c in n.children %}{{ c.title }},{% endfor %};{% endfor %}" },
+        .{ "index.md", "---\nlayout: l\nsort: title\n---\n" },
+        .{ "docs/index.md", "---\ntitle: Docs\nlayout: l\nmenu: main\nmenu_title: Guide\nweight: 2\nsort: date\n---\n" },
+        .{ "docs/old.md", "---\ntitle: Old\nlayout: l\ndate: 2023-01-01\n---\n" },
+        .{ "docs/new.md", "---\ntitle: New\nlayout: l\ndate: 2024-01-01\n---\n" },
+        .{ "docs/none.md", "---\ntitle: Aardvark\nlayout: l\n---\n" },
+        .{ "about.md", "---\ntitle: About\nlayout: l\nmenu: [main, footer]\nweight: 5\n---\n" },
+    });
+    defer t.deinit();
+    var diag: Diagnostic = .{};
+    const site = t.build(&diag) catch |err| {
+        std.debug.print("{f}\n", .{diag});
+        return err;
+    };
+    // Root pages by title despite weights; /docs/ children newest first,
+    // undated last.
+    const nav = "|About:;Docs:New,Old,Aardvark,;";
+    try testing.expectEqualStrings("[Home][Guide+][About][Source^]" ++ nav, site.find("docs/new/index.html").?.data.bytes);
+    try testing.expectEqualStrings("[Home][Guide][About*][Source^]" ++ nav, site.find("about/index.html").?.data.bytes);
+    try testing.expectEqualStrings("[Home*][Guide][About][Source^]" ++ nav, site.find("index.html").?.data.bytes);
+
+    try expectBuildError(&.{.{ "a.md", "---\ntitle: A\nsort: size\n---\n" }}, "a.md", 3, "'sort' must be weight");
+    try expectBuildError(&.{.{ "a.md", "---\nmenu: 3\n---\n" }}, "a.md", 2, "'menu' must be a menu name");
+    try expectBuildError(&.{.{ "_data/menus.json", "{\"main\": [{\"title\": \"X\"}]}" }}, "_data/menus", 0, "must have a title and a url");
 }

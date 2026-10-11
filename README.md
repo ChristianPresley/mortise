@@ -179,6 +179,10 @@ my-site/
   `_layouts/term.html` and `_layouts/taxonomy.html` pages; `related: 5`
   gives each page `page.related`. See
   [taxonomies](docs/templates.md#taxonomies).
+- Named [menus](docs/templates.md#menus): pages join with `menu: main`,
+  `_data/menus/main.json` adds other links, and `page.menus.main` marks
+  the active link and section. A section's index page can set
+  `sort: title` (or `date`, `url`, `weight`) to order its pages.
 - Markdown pages get `page.toc`, a nested list linking to their level 2
   and 3 headings.
 - Headings get anchor ids from their text, so `## Getting started` can be

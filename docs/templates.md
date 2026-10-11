@@ -219,6 +219,41 @@ title is its `title`, else the last part of its URL.
 Templates cannot recurse, so a sidebar shows as many levels as its layout
 loops over.
 
+A section's index page can choose another order for the pages directly
+under it with `sort:` in its frontmatter: `weight` (the default), `title`,
+`date` (frontmatter `date`, newest first, undated pages last), or `url`.
+Ties are ordered by title. The order applies to `site.nav` and to
+`page.previous` and `page.next`.
+
+## Menus
+
+Menus are named lists of links, such as a header's `main` and a footer's
+`footer`. A page joins one or more with frontmatter:
+
+```yaml
+menu: [main, footer]
+menu_title: Guide   # optional; defaults to the navigation title
+weight: 2           # optional; orders the menu
+```
+
+Links that are not pages come from `_data/menus/NAME.json` (or one
+`_data/menus.json` mapping names to lists), each `{title, url, weight}`.
+URLs starting with `/` get the site's `baseurl`; other URLs are marked
+`external`. Each menu is sorted by weight (links without one last), then
+title.
+
+`site.menus.NAME` lists each link's `title`, `url`, `weight`, and
+`external`. `page.menus.NAME` is the same list as seen from the current
+page, with two more flags: `active` when the link is this page, and
+`in_section` when this page is below it, as `/docs/install/` is below
+`/docs/`.
+
+```html
+{% for item in page.menus.main %}
+<a href="{{ item.url }}"{% if item.active or item.in_section %} class="current"{% endif %}>{{ item.title }}</a>
+{% endfor %}
+```
+
 ## SEO and social cards
 
 `{{ seo }}` in a layout's `<head>` writes the tags search engines and link
