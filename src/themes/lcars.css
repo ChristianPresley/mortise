@@ -2,38 +2,40 @@
    Written to /theme.css by `theme: lcars` in _config.yml. Link it after
    the site's own stylesheet. The images in theme/ (a planet and a turning
    hologram) are drawn by Mortise's renderer during the build; there are
-   no fonts or scripts. Motion stops under prefers-reduced-motion. */
+   no fonts or scripts. Motion stops under prefers-reduced-motion.
+   Colors come from the --m- design tokens Mortise writes after the
+   @import below (src/themes/lcars/tokens.yml, overridable with
+   theme_tokens: in _config.yml). */
 @import url("theme/hologram.css");
 
 :root {
-  color-scheme: dark;
-  --l-orange: #ff9c3c;
-  --l-peach: #ffbb88;
-  --l-gold: #ffcc66;
-  --l-lilac: #cc99dd;
-  --l-violet: #9a8cf0;
-  --l-blue: #8fb8ff;
-  --l-red: #e8665a;
-  --l-text: #f3e6cf;
-  --l-muted: #b7a58c;
+  --l-orange: var(--m-accent);
+  --l-peach: var(--m-peach);
+  --l-gold: var(--m-gold);
+  --l-lilac: var(--m-lilac);
+  --l-violet: var(--m-violet);
+  --l-blue: var(--m-blue);
+  --l-red: var(--m-danger);
+  --l-text: var(--m-text);
+  --l-muted: var(--m-muted);
   --l-display: "Antonio", "Bahnschrift", "Arial Narrow", "Roboto Condensed", "Helvetica Neue", sans-serif;
   --l-mono: "Cascadia Code", ui-monospace, SFMono-Regular, Consolas, monospace;
   --l-col: 10rem;
   /* The components' neutral colors, retuned for the console. */
-  --mt-border: rgba(255, 187, 136, .3);
-  --mt-surface: #0b0907;
-  --mt-subtle: rgba(255, 187, 136, .08);
-  --mt-muted: #b7a58c;
-  --mt-accent: #ff9c3c;
-  --mt-note: #8fb8ff;
-  --mt-tip: #99dd99;
-  --mt-important: #cc99dd;
-  --mt-warning: #ffcc66;
-  --mt-caution: #e8665a;
+  --mt-border: color-mix(in srgb, var(--m-peach) 30%, transparent);
+  --mt-surface: var(--m-surface);
+  --mt-subtle: color-mix(in srgb, var(--m-peach) 8%, transparent);
+  --mt-muted: var(--m-muted);
+  --mt-accent: var(--m-accent);
+  --mt-note: var(--m-blue);
+  --mt-tip: var(--m-success);
+  --mt-important: var(--m-lilac);
+  --mt-warning: var(--m-gold);
+  --mt-caution: var(--m-danger);
   --mt-radius: 1.2rem;
 }
 
-html { background: #000; }
+html { background: var(--m-bg); }
 :root body {
   position: relative;
   display: flex;

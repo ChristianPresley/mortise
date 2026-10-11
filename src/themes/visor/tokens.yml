@@ -1,0 +1,14 @@
+# Design tokens for the visor theme. Mortise writes them as --m-NAME
+# custom properties above visor.css; theme_tokens: in _config.yml
+# overrides any of them.
+scheme: dark
+bg: "#04070b"
+surface: "#08141c"
+text: "#cfe6ef"
+muted: "#7f9aa6"
+accent: "#5ce1ff"
+accent2: "#ffb347"
+border: "#16323d"
+success: "#6dffb0"
+important: "#b99cff"
+danger: "#ff5a5f"

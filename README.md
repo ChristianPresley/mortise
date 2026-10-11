@@ -143,6 +143,10 @@ my-site/
   `_config.yml`: `visor`, a helmet heads-up display with a shield meter
   and HUD panel frames, and `lcars`, a starship console frame. Both draw
   their art with the built-in renderer and add no fonts or scripts.
+  Their colors are [design tokens](docs/themes.md#design-tokens) you can
+  override with `theme_tokens:`; token pairs give light and dark modes
+  with `{{ site.scheme_toggle }}`, and the build warns about WCAG
+  contrast problems.
 - Built-in [components](docs/components.md): callouts (`> [!NOTE]`),
   cards, grids, details, figures, buttons, and steps (`:::card Title` ...
   `:::`), plus `:badge[New]` and `:kbd[Ctrl]`, styled by a `mortise.css`

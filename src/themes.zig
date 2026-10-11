@@ -13,6 +13,10 @@ pub const css_path = "theme.css";
 pub const Theme = struct {
     name: []const u8,
     css: []const u8,
+    /// The theme's design tokens (see tokens.zig), in frontmatter format.
+    /// The build writes them as `--m-NAME` properties above `css`, after
+    /// any leading `@import` rules.
+    tokens: []const u8 = "",
     /// Images the build renders for the theme. The stylesheet refers to
     /// them relative to itself, as `url("theme/NAME.png")`.
     assets: []const Asset = &.{},
@@ -30,10 +34,10 @@ pub const Asset = struct {
 pub const assets_dir = "theme";
 
 pub const all = [_]Theme{
-    .{ .name = "visor", .css = @embedFile("themes/visor.css"), .assets = &.{
+    .{ .name = "visor", .css = @embedFile("themes/visor.css"), .tokens = @embedFile("themes/visor/tokens.yml"), .assets = &.{
         .{ .name = "panel", .spec = @embedFile("themes/visor/panel.yml") },
     } },
-    .{ .name = "lcars", .css = @embedFile("themes/lcars.css"), .assets = &.{
+    .{ .name = "lcars", .css = @embedFile("themes/lcars.css"), .tokens = @embedFile("themes/lcars/tokens.yml"), .assets = &.{
         .{ .name = "planet", .spec = @embedFile("themes/lcars/planet.yml") },
         .{ .name = "hologram", .spec = @embedFile("themes/lcars/hologram.yml") },
     } },

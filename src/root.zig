@@ -20,6 +20,7 @@ pub const feeds = @import("feeds.zig");
 pub const data = @import("data.zig");
 pub const openapi = @import("openapi.zig");
 pub const themes = @import("themes.zig");
+pub const tokens = @import("tokens.zig");
 pub const assets = @import("assets.zig");
 pub const check = @import("check.zig");
 pub const redirects = @import("redirects.zig");

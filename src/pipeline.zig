@@ -27,6 +27,7 @@ const feeds = @import("feeds.zig");
 const data_files = @import("data.zig");
 const openapi = @import("openapi.zig");
 const themes = @import("themes.zig");
+const tokens = @import("tokens.zig");
 const assets = @import("assets.zig");
 const redirects = @import("redirects.zig");
 const git = @import("git.zig");
@@ -98,6 +99,8 @@ pub const Site = struct {
     baseurl: []const u8,
     /// Pages and posts left out of this build, by reason.
     skipped: Skipped = .{},
+    /// Problems that do not stop the build, such as low color contrast.
+    warnings: []const Diagnostic = &.{},
     /// What `rebuild` needs to update this site. An incrementally rebuilt
     /// site shares memory with the site it came from, so that site's
     /// arena must outlive this one.
@@ -267,6 +270,9 @@ const Builder = struct {
     paginator: ?template.Object = null,
     /// Whether templates fail on undefined variables.
     strict: bool = false,
+    /// The site's design tokens, or null without a theme or theme_tokens.
+    token_set: ?tokens.Set = null,
+    warnings: std.ArrayList(Diagnostic) = .empty,
 
     fn fail(b: *Builder, path: []const u8, line: usize, comptime fmt: []const u8, args: anytype) Error {
         b.diag.* = .{
@@ -275,6 +281,10 @@ const Builder = struct {
             .message = std.fmt.allocPrint(b.arena, fmt, args) catch "out of memory while reporting an error",
         };
         return error.BuildFailed;
+    }
+
+    fn warn(b: *Builder, path: []const u8, line: usize, comptime fmt: []const u8, args: anytype) Allocator.Error!void {
+        try b.warnings.append(b.arena, .{ .path = path, .line = line, .message = try std.fmt.allocPrint(b.arena, fmt, args) });
     }
 
     fn read(b: *Builder, path: []const u8) Error![]const u8 {
@@ -631,17 +641,98 @@ fn addComponentsCss(b: *Builder, outputs: *std.ArrayList(Output), config_fields:
     try outputs.append(b.arena, .{ .path = components_css_path, .source = config_path, .data = .{ .bytes = markdown.components_css } });
 }
 
-/// Writes the stylesheet of the theme named by `theme:` in the config,
-/// unless the site has its own file at that path.
+/// Writes `/theme.css`: the design tokens, then the stylesheet of the
+/// theme named by `theme:` in the config, unless the site has its own
+/// file at that path.
 fn addThemeCss(b: *Builder, outputs: *std.ArrayList(Output), config_fields: frontmatter.Map) Error!void {
-    const v = config_fields.get("theme") orelse return;
+    const set = b.token_set orelse return;
+    const theme = try configTheme(b, config_fields);
+    if (theme) |t| try addThemeAssets(b, outputs, t, fieldLine(try b.read(config_path), "theme"));
+    if (hasOutput(outputs.items, themes.css_path)) return;
+    const token_css = try tokens.css(b.arena, set);
+    const css = if (theme) |t| try insertAfterImports(b.arena, t.css, token_css) else token_css;
+    try outputs.append(b.arena, .{ .path = themes.css_path, .source = config_path, .data = .{ .bytes = css } });
+}
+
+/// The theme named by `theme:`, or null when there is none.
+fn configTheme(b: *Builder, config_fields: frontmatter.Map) Error!?themes.Theme {
+    const v = config_fields.get("theme") orelse return null;
     const line = fieldLine(try b.read(config_path), "theme");
     if (v != .string) return b.fail(config_path, line, "'theme' must be the name of a theme: {s}", .{themes.names});
-    const theme = themes.find(v.string) orelse
-        return b.fail(config_path, line, "unknown theme '{s}'; the themes are: {s}", .{ v.string, themes.names });
-    try addThemeAssets(b, outputs, theme, line);
-    if (hasOutput(outputs.items, themes.css_path)) return;
-    try outputs.append(b.arena, .{ .path = themes.css_path, .source = config_path, .data = .{ .bytes = theme.css } });
+    return themes.find(v.string) orelse
+        b.fail(config_path, line, "unknown theme '{s}'; the themes are: {s}", .{ v.string, themes.names });
+}
+
+/// The design tokens of the theme, with `theme_tokens:` from the config
+/// applied, or null for a site with neither. Warns about low contrast.
+fn tokenSet(b: *Builder, config_fields: frontmatter.Map) Error!?tokens.Set {
+    const theme = try configTheme(b, config_fields);
+    const overrides = config_fields.get("theme_tokens");
+    if (theme == null and overrides == null) return null;
+    var d: tokens.Diagnostic = .{};
+    var set: tokens.Set = .{ .scheme = .both, .tokens = &.{} };
+    if (theme) |t| {
+        var fd: frontmatter.Diagnostic = .{};
+        const fields = frontmatter.parseFile(b.arena, t.tokens, &fd) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.InvalidFrontmatter => return b.fail(config_path, 0, "theme '{s}' has broken tokens: line {d}: {s}", .{ t.name, fd.line, fd.message }),
+        };
+        set = tokens.parse(b.arena, fields, &d) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.InvalidTokens => return b.fail(config_path, 0, "theme '{s}' has a broken token '{s}': {s}", .{ t.name, d.key, d.message }),
+        };
+    }
+    if (overrides) |o| {
+        const data = try b.read(config_path);
+        if (o != .map) return b.fail(config_path, fieldLine(data, "theme_tokens"), "'theme_tokens' must be a map of token names to colors", .{});
+        set = tokens.override(b.arena, set, o.map, &d) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.InvalidTokens => return b.fail(config_path, nestedLine(data, "theme_tokens", d.key), "theme_tokens: '{s}' {s}", .{ d.key, d.message }),
+        };
+    }
+    const line = fieldLine(try b.read(config_path), if (overrides != null) "theme_tokens" else "theme");
+    for (try tokens.check(b.arena, set)) |f| {
+        try b.warn(config_path, line, "low contrast: '{s}' on '{s}' is {d:.2}:1 in the {s} scheme; WCAG asks for {d}:1", .{ f.fg, f.bg, f.ratio, f.scheme, f.needed });
+    }
+    return set;
+}
+
+/// The line of `key` indented under the top-level `parent` key.
+fn nestedLine(data: []const u8, parent: []const u8, key: []const u8) usize {
+    const start = fieldLine(data, parent);
+    var it = std.mem.splitScalar(u8, data, '\n');
+    var n: usize = 0;
+    while (it.next()) |l| {
+        n += 1;
+        if (n <= start) continue;
+        const t = std.mem.trimStart(u8, l, " ");
+        if (t.len == l.len and t.len > 0) break; // the next top-level key
+        if (std.mem.startsWith(u8, t, key) and t.len > key.len and t[key.len] == ':') return n;
+    }
+    return start;
+}
+
+/// `css` with `insert` placed after its leading `@import` rules, which
+/// must come first in a stylesheet.
+fn insertAfterImports(arena: Allocator, css: []const u8, insert: []const u8) Allocator.Error![]const u8 {
+    var pos: usize = 0;
+    var i: usize = 0;
+    while (i < css.len) {
+        // Skip whitespace and comments.
+        if (std.ascii.isWhitespace(css[i])) {
+            i += 1;
+            continue;
+        }
+        if (std.mem.startsWith(u8, css[i..], "/*")) {
+            i = if (std.mem.indexOfPos(u8, css, i + 2, "*/")) |e| e + 2 else css.len;
+            continue;
+        }
+        if (!std.mem.startsWith(u8, css[i..], "@import")) break;
+        i = if (std.mem.indexOfScalarPos(u8, css, i, ';')) |e| e + 1 else css.len;
+        pos = i;
+    }
+    if (pos > 0 and pos < css.len and css[pos] == '\n') pos += 1;
+    return std.mem.concat(arena, u8, &.{ css[0..pos], if (pos > 0) "\n" else "", insert, "\n", css[pos..] });
 }
 
 /// Renders a theme's images into `/theme/`, except those the site
@@ -910,7 +1001,11 @@ fn finish(b: *Builder, config_fields: frontmatter.Map, pages: []Page, statics: [
         }
     }
 
+    b.token_set = try tokenSet(b, config_fields);
     var site_entries: std.ArrayList(Entry) = .empty;
+    // A light/dark switch, for token sets with both schemes.
+    const toggle = if (b.token_set) |s| (if (s.scheme == .both) tokens.scheme_toggle_html else "") else "";
+    try site_entries.append(arena, .{ .key = "scheme_toggle", .value = .{ .html = toggle } });
     for (config_fields.entries) |e| {
         if (std.mem.eql(u8, e.key, "posts") or std.mem.eql(u8, e.key, "pages") or
             std.mem.eql(u8, e.key, "data") or std.mem.eql(u8, e.key, "tags") or std.mem.eql(u8, e.key, "nav") or
@@ -985,6 +1080,7 @@ fn finish(b: *Builder, config_fields: frontmatter.Map, pages: []Page, statics: [
         .baseurl = b.baseurl,
         .skipped = b.skipped,
         .state = .{ .skipped = b.skipped, .config_fields = config_fields, .baseurl = b.baseurl, .site_url = b.site_url, .options = b.options, .data = b.data, .history = b.history, .pages = pages, .statics = statics },
+        .warnings = b.warnings.items,
     };
 }
 
@@ -1996,7 +2092,45 @@ test "a theme writes its stylesheet and is visible to templates" {
     var diag: Diagnostic = .{};
     const site = try t.build(&diag);
     try testing.expectEqualStrings("<link href=\"/theme.css\" data-theme=\"lcars\">", site.find("index.html").?.data.bytes);
-    try testing.expectEqualStrings(themes.find("lcars").?.css, site.find(themes.css_path).?.data.bytes);
+    // The tokens come right after the theme's @import, then the theme.
+    const css = site.find(themes.css_path).?.data.bytes;
+    const import_end = std.mem.indexOf(u8, css, "@import url(\"theme/hologram.css\");").? + 34;
+    const tokens_at = std.mem.indexOf(u8, css, "/* Design tokens").?;
+    try testing.expect(tokens_at > import_end and tokens_at < import_end + 4);
+    try testing.expect(std.mem.indexOf(u8, css, "  --m-accent: #ff9c3c;\n") != null);
+    try testing.expect(std.mem.endsWith(u8, css, themes.find("lcars").?.css[import_end..]));
+}
+
+test "theme_tokens override a theme's tokens, and low contrast warns" {
+    var t: TestSite = try .init(&.{
+        .{ "_config.yml", "theme: visor\ntheme_tokens:\n  accent: \"#ff9c00\"\n  muted: \"#222222\"\n" },
+        .{ "index.html", "---\n---\n[{{ site.scheme_toggle }}]" },
+    });
+    defer t.deinit();
+    var diag: Diagnostic = .{};
+    const site = try t.build(&diag);
+    const css = site.find(themes.css_path).?.data.bytes;
+    try testing.expect(std.mem.indexOf(u8, css, "  --m-accent: #ff9c00;\n") != null);
+    try testing.expect(std.mem.startsWith(u8, css, "/* Design tokens"));
+    // A dark-only theme has no scheme switch.
+    try testing.expectEqualStrings("[]", site.find("index.html").?.data.bytes);
+    try testing.expectEqual(@as(usize, 1), site.warnings.len);
+    try testing.expectEqualStrings("_config.yml", site.warnings[0].path);
+    try testing.expectEqual(@as(usize, 2), site.warnings[0].line);
+    try testing.expect(std.mem.startsWith(u8, site.warnings[0].message, "low contrast: 'muted' on 'bg' is 1."));
+
+    // Tokens without a theme, in light and dark, with the switch.
+    var t2: TestSite = try .init(&.{
+        .{ "_config.yml", "theme_tokens:\n  bg: [\"#ffffff\", \"#111111\"]\n  text: [\"#111111\", \"#eeeeee\"]\n" },
+        .{ "index.html", "---\n---\n{{ site.scheme_toggle }}" },
+    });
+    defer t2.deinit();
+    const s2 = try t2.build(&diag);
+    try testing.expect(std.mem.indexOf(u8, s2.find(themes.css_path).?.data.bytes, "--m-bg: light-dark(#ffffff, #111111);") != null);
+    try testing.expect(std.mem.startsWith(u8, s2.find("index.html").?.data.bytes, "<fieldset class=\"mt-scheme\">"));
+    try testing.expectEqual(@as(usize, 0), s2.warnings.len);
+
+    try expectBuildError(&.{.{ "_config.yml", "theme: visor\ntheme_tokens:\n  bg: \"#000\"\n  accent: cyan\n" }}, "_config.yml", 4, "theme_tokens: 'accent' must be a color");
 }
 
 test "an unknown theme names the config line and the themes" {

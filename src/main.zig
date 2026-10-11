@@ -162,6 +162,7 @@ fn cmdBuild(ctx: Ctx, rest: []const [:0]const u8) u8 {
     };
 
     const elapsed = start.durationTo(Io.Clock.Timestamp.now(io, .awake)).raw;
+    for (site.warnings) |w| ctx.err.print("warning: {f}\n", .{w}) catch {};
     ctx.out.print("Built {d} pages, {d} posts, and {d} static files into {s}/{s} in {d} ms\n", .{
         site.pages, site.posts, site.static_files, dir, pipeline.output_dir, elapsed.toMilliseconds(),
     }) catch return 1;

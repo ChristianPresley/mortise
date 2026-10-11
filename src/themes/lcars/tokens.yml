@@ -1,0 +1,17 @@
+# Design tokens for the lcars theme. Mortise writes them as --m-NAME
+# custom properties after lcars.css's @import; theme_tokens: in
+# _config.yml overrides any of them.
+scheme: dark
+bg: "#000000"
+surface: "#0b0907"
+text: "#f3e6cf"
+muted: "#b7a58c"
+accent: "#ff9c3c"
+border: "#4d3b2c"
+peach: "#ffbb88"
+gold: "#ffcc66"
+lilac: "#cc99dd"
+violet: "#9a8cf0"
+blue: "#8fb8ff"
+success: "#99dd99"
+danger: "#e8665a"

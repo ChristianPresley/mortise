@@ -112,6 +112,20 @@ job:
 - Aliases are paths on this site; they cannot redirect to other sites, and
   `_redirects` lists exact paths without wildcards or splats.
 
+## Design tokens
+
+- Token values are hex colors only (`#rgb` or `#rrggbb`); no `rgb()`,
+  named colors, transparency or non-color tokens such as sizes or fonts.
+- Overriding tokens recolors a theme's CSS but not its rendered art:
+  `visor`'s panel frames and `lcars`'s planet and hologram keep their
+  colors. Copy the specs into `_render/theme/` to recolor them.
+- The contrast check covers four fixed token pairs, not every color
+  combination a theme or site stylesheet uses, and ignores alpha.
+- `light-dark()` and `:has()` need a 2024 browser (Chrome 123, Firefox
+  120, Safari 17.5); older browsers fall back to the light colors and
+  ignore the scheme switch.
+- Without JavaScript the scheme switch resets to Auto on every page.
+
 ## Rendered graphics
 
 - `mortise build` renders every `_render/` spec and theme asset from scratch

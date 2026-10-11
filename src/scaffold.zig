@@ -40,6 +40,16 @@ const files = [_]struct { []const u8, []const u8 }{
         \\# url: https://example.com
         \\# Pick a built-in theme: visor (helmet HUD) or lcars (starship console).
         \\# theme: visor
+        \\# Colors, written to theme.css as --m-NAME variables. A pair is a light
+        \\# and a dark color: the site follows the reader's setting, and
+        \\# site.scheme_toggle lets them pick. The build warns about low contrast.
+        \\theme_tokens:
+        \\  bg: ["#ffffff", "#15161a"]
+        \\  surface: ["#f6f8fa", "#1f2128"]
+        \\  text: ["#1d1d1f", "#e8e8ed"]
+        \\  muted: ["#6e6e73", "#a1a1aa"]
+        \\  accent: ["#0b57d0", "#8ab4f8"]
+        \\  border: ["#e5e5e5", "#33353d"]
         \\
     },
     .{ "_layouts/base.html",
@@ -51,7 +61,7 @@ const files = [_]struct { []const u8, []const u8 }{
         \\<title>{% if page.title %}{{ page.title }} | {% endif %}{{ site.title }}</title>
         \\<link rel="stylesheet" href="{{ site.baseurl }}/mortise.css">
         \\<link rel="stylesheet" href="{{ site.baseurl }}/css/site.css">
-        \\{% if site.theme %}<link rel="stylesheet" href="{{ site.baseurl }}/theme.css">{% endif %}
+        \\{% if site.theme or site.theme_tokens %}<link rel="stylesheet" href="{{ site.baseurl }}/theme.css">{% endif %}
         \\</head>
         \\<body>
         \\{% include "header.html" %}
@@ -79,6 +89,7 @@ const files = [_]struct { []const u8, []const u8 }{
         \\<nav>
         \\{%- for p in site.pages %}{% if p.title and p.nav != false %} <a href="{{ p.url }}">{{ p.title }}</a>{% endif %}{% endfor -%}
         \\</nav>
+        \\{{ site.scheme_toggle }}
         \\</header>
         \\
     },
@@ -111,18 +122,20 @@ const files = [_]struct { []const u8, []const u8 }{
         \\
     },
     .{ "css/site.css",
-        \\body { max-width: 42rem; margin: 2rem auto; padding: 0 1rem; font: 17px/1.6 system-ui, sans-serif; color: #1d1d1f; }
-        \\a { color: #0b57d0; }
-        \\header { display: flex; justify-content: space-between; align-items: baseline; padding-bottom: .75rem; border-bottom: 1px solid #e5e5e5; }
+        \\/* Colors come from theme_tokens in _config.yml, through theme.css. */
+        \\html { background: var(--m-bg, #fff); }
+        \\body { max-width: 42rem; margin: 2rem auto; padding: 0 1rem; font: 17px/1.6 system-ui, sans-serif; color: var(--m-text, #1d1d1f); }
+        \\a { color: var(--m-accent, #0b57d0); }
+        \\header { display: flex; flex-wrap: wrap; gap: .5rem 1rem; justify-content: space-between; align-items: baseline; padding-bottom: .75rem; border-bottom: 1px solid var(--m-border, #e5e5e5); }
         \\header .brand { font-weight: 700; color: inherit; text-decoration: none; }
-        \\header nav a { margin-left: 1rem; color: #6e6e73; text-decoration: none; }
-        \\.date, small { color: #6e6e73; }
-        \\pre { background: #f6f8fa; padding: 1rem; overflow-x: auto; border-radius: 6px; }
-        \\.hl-keyword { color: #a626a4; }
-        \\.hl-literal, .hl-number { color: #986801; }
-        \\.hl-string { color: #50a14f; }
-        \\.hl-comment { color: #a0a1a7; font-style: italic; }
-        \\.hl-builtin { color: #4078f2; }
+        \\header nav a { margin-left: 1rem; color: var(--m-muted, #6e6e73); text-decoration: none; }
+        \\.date, small { color: var(--m-muted, #6e6e73); }
+        \\pre { background: var(--m-surface, #f6f8fa); padding: 1rem; overflow-x: auto; border-radius: 6px; }
+        \\.hl-keyword { color: light-dark(#a626a4, #d197e0); }
+        \\.hl-literal, .hl-number { color: light-dark(#986801, #e5c07b); }
+        \\.hl-string { color: light-dark(#50a14f, #98c379); }
+        \\.hl-comment { color: light-dark(#a0a1a7, #7f848e); font-style: italic; }
+        \\.hl-builtin { color: light-dark(#4078f2, #61afef); }
         \\
     },
 };

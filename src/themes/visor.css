@@ -2,22 +2,24 @@
    Written to /theme.css by `theme: visor` in _config.yml. Link it after
    the site's own stylesheet. The panel frame in theme/ is drawn by
    Mortise's renderer during the build; there are no fonts or scripts.
-   Motion stops under prefers-reduced-motion. */
+   Motion stops under prefers-reduced-motion.
+   Colors come from the --m- design tokens Mortise writes above this
+   stylesheet (src/themes/visor/tokens.yml, overridable with
+   theme_tokens: in _config.yml). */
 
 :root {
-  color-scheme: dark;
-  --v-bg: #04070b;
-  --v-panel: rgba(7, 18, 26, .92);
-  --v-panel-solid: #08141c;
-  --v-line: rgba(92, 225, 255, .22);
-  --v-cyan: #5ce1ff;
-  --v-cyan-dim: rgba(92, 225, 255, .55);
-  --v-amber: #ffb347;
-  --v-red: #ff5a5f;
-  --v-green: #6dffb0;
-  --v-violet: #b99cff;
-  --v-text: #cfe6ef;
-  --v-muted: #7f9aa6;
+  --v-bg: var(--m-bg);
+  --v-panel: color-mix(in srgb, var(--m-surface) 92%, transparent);
+  --v-panel-solid: var(--m-surface);
+  --v-line: color-mix(in srgb, var(--m-accent) 22%, transparent);
+  --v-cyan: var(--m-accent);
+  --v-cyan-dim: color-mix(in srgb, var(--m-accent) 55%, transparent);
+  --v-amber: var(--m-accent2);
+  --v-red: var(--m-danger);
+  --v-green: var(--m-success);
+  --v-violet: var(--m-important);
+  --v-text: var(--m-text);
+  --v-muted: var(--m-muted);
   --v-display: "Bahnschrift", "DIN Alternate", "Barlow Semi Condensed", "Rajdhani", "Segoe UI Variable Display", system-ui, sans-serif;
   --v-mono: "Cascadia Code", ui-monospace, SFMono-Regular, Consolas, monospace;
   /* Four L-shaped corner brackets, drawn with gradients. */
@@ -28,16 +30,16 @@
     var(--v-b) bottom left / 14px 2px no-repeat, var(--v-b) bottom left / 2px 14px no-repeat,
     var(--v-b) bottom right / 14px 2px no-repeat, var(--v-b) bottom right / 2px 14px no-repeat;
   /* The components' neutral colors, retuned for the dark visor. */
-  --mt-border: rgba(92, 225, 255, .2);
-  --mt-surface: rgba(9, 22, 31, .6);
-  --mt-subtle: rgba(92, 225, 255, .07);
-  --mt-muted: #7f9aa6;
-  --mt-accent: #5ce1ff;
-  --mt-note: #5ce1ff;
-  --mt-tip: #6dffb0;
-  --mt-important: #b99cff;
-  --mt-warning: #ffb347;
-  --mt-caution: #ff5a5f;
+  --mt-border: color-mix(in srgb, var(--m-accent) 20%, transparent);
+  --mt-surface: color-mix(in srgb, var(--m-surface) 60%, transparent);
+  --mt-subtle: color-mix(in srgb, var(--m-accent) 7%, transparent);
+  --mt-muted: var(--m-muted);
+  --mt-accent: var(--m-accent);
+  --mt-note: var(--m-accent);
+  --mt-tip: var(--m-success);
+  --mt-important: var(--m-important);
+  --mt-warning: var(--m-accent2);
+  --mt-caution: var(--m-danger);
   --mt-radius: 2px;
 }
 
@@ -45,8 +47,8 @@ html {
   scrollbar-color: var(--v-cyan-dim) transparent;
   /* A calm gradient that fills the window, even on short pages. */
   background:
-    radial-gradient(ellipse 90% 60% at 50% -10%, rgba(92, 225, 255, .14), transparent 70%) fixed,
-    linear-gradient(to bottom, #071019, #04070b 55%, #060a12) fixed,
+    radial-gradient(ellipse 90% 60% at 50% -10%, color-mix(in srgb, var(--m-accent) 14%, transparent), transparent 70%) fixed,
+    linear-gradient(to bottom, color-mix(in srgb, var(--m-bg), var(--m-accent) 4%), var(--m-bg) 55%, color-mix(in srgb, var(--m-bg), #102040 6%)) fixed,
     var(--v-bg);
 }
 
@@ -81,7 +83,7 @@ html {
   padding-bottom: 1.1rem;
   border-bottom: 0;
   /* The bar spans the window while its content lines up with the page. */
-  border-image: linear-gradient(to bottom, rgba(4, 7, 11, .97), rgba(4, 7, 11, .86) calc(100% - 1px), rgba(92, 225, 255, .3) calc(100% - 1px)) fill 0 / / 0 100vw;
+  border-image: linear-gradient(to bottom, color-mix(in srgb, var(--m-bg) 97%, transparent), color-mix(in srgb, var(--m-bg) 86%, transparent) calc(100% - 1px), color-mix(in srgb, var(--m-accent) 30%, transparent) calc(100% - 1px)) fill 0 / / 0 100vw;
   backdrop-filter: blur(6px);
 }
 /* Shield meter: segments along the bottom edge that charge on load. */
@@ -106,7 +108,7 @@ html {
   font-stretch: 87.5%;
   letter-spacing: .14em;
   text-transform: uppercase;
-  text-shadow: 0 0 12px rgba(92, 225, 255, .7);
+  text-shadow: 0 0 12px color-mix(in srgb, var(--m-accent) 70%, transparent);
 }
 :root body > header .brand::before { content: "◢ "; color: var(--v-amber); text-shadow: none; }
 :root body > header .brand::after { content: "_"; color: var(--v-cyan); animation: v-blink 1.1s steps(2) infinite; }
@@ -122,11 +124,11 @@ html {
   letter-spacing: .14em;
   text-transform: uppercase;
   text-decoration: none;
-  background: rgba(92, 225, 255, .07);
+  background: color-mix(in srgb, var(--m-accent) 7%, transparent);
   clip-path: polygon(.6rem 0, 100% 0, calc(100% - .6rem) 100%, 0 100%);
   transition: background .15s, color .15s;
 }
-:root body > header nav a:hover { background: rgba(92, 225, 255, .22); color: #fff; }
+:root body > header nav a:hover { background: color-mix(in srgb, var(--m-accent) 22%, transparent); color: #fff; }
 :root body > header nav a.current { background: var(--v-cyan); color: #00121a; font-weight: 700; }
 
 /* Headings: mission readouts. */
@@ -136,7 +138,7 @@ html {
   font-stretch: 87.5%;
   text-transform: uppercase;
   letter-spacing: .08em;
-  text-shadow: 0 0 18px rgba(92, 225, 255, .55);
+  text-shadow: 0 0 18px color-mix(in srgb, var(--m-accent) 55%, transparent);
   animation: v-boot .7s steps(7) both;
 }
 :root body h1::after {
@@ -144,7 +146,7 @@ html {
   display: block;
   height: 2px;
   margin-top: .35rem;
-  background: linear-gradient(90deg, var(--v-cyan), rgba(92, 225, 255, .15) 60%, transparent);
+  background: linear-gradient(90deg, var(--v-cyan), color-mix(in srgb, var(--m-accent) 15%, transparent) 60%, transparent);
 }
 @keyframes v-boot { 0% { opacity: 0; } 30% { opacity: .8; } 45% { opacity: .2; } 100% { opacity: 1; } }
 :root body main { counter-reset: v-obj; }
@@ -160,7 +162,7 @@ html {
 }
 :root body h3::before { content: "◆ "; color: var(--v-cyan); font-size: .7em; vertical-align: .12em; }
 
-:root body a { color: var(--v-cyan); text-decoration-color: rgba(92, 225, 255, .35); text-underline-offset: 3px; }
+:root body a { color: var(--v-cyan); text-decoration-color: color-mix(in srgb, var(--m-accent) 35%, transparent); text-underline-offset: 3px; }
 :root body a:hover { color: #fff; text-shadow: -1px 0 var(--v-red), 1px 0 var(--v-cyan); }
 :root body :is(.lead, .meta, small) { color: var(--v-muted); }
 :root body hr { border: 0; height: 1px; background: linear-gradient(90deg, transparent, var(--v-cyan-dim), transparent); }
@@ -173,9 +175,9 @@ html {
 }
 :root body pre { padding: 1rem 1.1rem; background: var(--v-brackets), rgba(2, 6, 9, .92); color: #d6f6ff; }
 :root body .mt-code pre { background: rgba(2, 6, 9, .92); border: 0; }
-:root body .mt-code-title { background: rgba(92, 225, 255, .08); color: var(--v-cyan); letter-spacing: .08em; }
+:root body .mt-code-title { background: color-mix(in srgb, var(--m-accent) 8%, transparent); color: var(--v-cyan); letter-spacing: .08em; }
 :root body code { font-family: var(--v-mono); }
-:root body :not(pre) > code { padding: .05rem .35rem; background: rgba(92, 225, 255, .1); color: #bff3ff; border-radius: 2px; }
+:root body :not(pre) > code { padding: .05rem .35rem; background: color-mix(in srgb, var(--m-accent) 10%, transparent); color: #bff3ff; border-radius: 2px; }
 :root body .hl-keyword { color: #ff7ad9; }
 :root body :is(.hl-literal, .hl-number) { color: var(--v-amber); }
 :root body .hl-string { color: var(--v-green); }
@@ -191,9 +193,9 @@ html {
 
 /* Tables: telemetry. */
 :root body table { border-collapse: collapse; }
-:root body :is(th, td) { border: 0; border-bottom: 1px solid rgba(92, 225, 255, .14); }
-:root body th { background: rgba(92, 225, 255, .08); color: var(--v-cyan); font-size: .75rem; letter-spacing: .14em; text-transform: uppercase; }
-:root body tbody tr:hover { background: rgba(92, 225, 255, .05); }
+:root body :is(th, td) { border: 0; border-bottom: 1px solid color-mix(in srgb, var(--m-accent) 14%, transparent); }
+:root body th { background: color-mix(in srgb, var(--m-accent) 8%, transparent); color: var(--v-cyan); font-size: .75rem; letter-spacing: .14em; text-transform: uppercase; }
+:root body tbody tr:hover { background: color-mix(in srgb, var(--m-accent) 5%, transparent); }
 :root body blockquote { border-left: 3px solid var(--v-amber); background: rgba(255, 179, 71, .06); color: #e8d6bd; }
 
 /* Small parts. */
@@ -201,8 +203,8 @@ html {
 :root body .mt-kbd { background: #0b1a23; color: #fff; border: 1px solid var(--v-cyan-dim); box-shadow: 0 2px 0 var(--v-cyan-dim); }
 :root body .mt-method { border-radius: 0; clip-path: polygon(.35rem 0, 100% 0, calc(100% - .35rem) 100%, 0 100%); padding-inline: .7rem; }
 :root body .mt-steps li::before { background: var(--v-cyan); color: #00121a; border-radius: 0; clip-path: polygon(50% 0, 100% 50%, 50% 100%, 0 50%); }
-:root body .mt-steps li { border-left-style: dashed; border-left-color: rgba(92, 225, 255, .35); }
-:root body .mt-actions a { border-radius: 0; border-color: var(--v-cyan-dim); color: var(--v-cyan); text-transform: uppercase; letter-spacing: .12em; font-size: .82rem; clip-path: polygon(.7rem 0, 100% 0, calc(100% - .7rem) 100%, 0 100%); padding-inline: 1.5rem; background: rgba(92, 225, 255, .08); }
+:root body .mt-steps li { border-left-style: dashed; border-left-color: color-mix(in srgb, var(--m-accent) 35%, transparent); }
+:root body .mt-actions a { border-radius: 0; border-color: var(--v-cyan-dim); color: var(--v-cyan); text-transform: uppercase; letter-spacing: .12em; font-size: .82rem; clip-path: polygon(.7rem 0, 100% 0, calc(100% - .7rem) 100%, 0 100%); padding-inline: 1.5rem; background: color-mix(in srgb, var(--m-accent) 8%, transparent); }
 :root body .mt-actions a:first-of-type { background: var(--v-cyan); color: #00121a; }
 :root body .mt-actions a:hover { filter: brightness(1.2); }
 :root body .mt-tab-label { text-transform: uppercase; letter-spacing: .1em; font-size: .8rem; }
@@ -210,20 +212,20 @@ html {
 /* Wiki sidebar and pager: squad roster. */
 :root body .wiki-nav-title { color: var(--v-amber); letter-spacing: .3em; }
 :root body .wiki-nav a { color: var(--v-text); border-radius: 0; border-left: 2px solid transparent; }
-:root body .wiki-nav a:hover { background: rgba(92, 225, 255, .08); border-left-color: var(--v-cyan-dim); }
-:root body .wiki-nav a.current { background: linear-gradient(90deg, rgba(92, 225, 255, .22), transparent); color: #fff; border-left-color: var(--v-cyan); }
-:root body .wiki-nav ul ul { border-left-color: rgba(92, 225, 255, .18); }
+:root body .wiki-nav a:hover { background: color-mix(in srgb, var(--m-accent) 8%, transparent); border-left-color: var(--v-cyan-dim); }
+:root body .wiki-nav a.current { background: linear-gradient(90deg, color-mix(in srgb, var(--m-accent) 22%, transparent), transparent); color: #fff; border-left-color: var(--v-cyan); }
+:root body .wiki-nav ul ul { border-left-color: color-mix(in srgb, var(--m-accent) 18%, transparent); }
 :root body .breadcrumbs, :root body .breadcrumbs a { color: var(--v-muted); text-transform: uppercase; letter-spacing: .12em; font-size: .72rem; }
 :root body .breadcrumbs .here { color: var(--v-cyan); }
 :root body .wiki-main .pager { border-top-color: var(--v-line); }
 :root body .pager small { color: var(--v-amber); letter-spacing: .2em; text-transform: uppercase; }
-:root body .posts li { padding-left: .9rem; border-left: 2px solid rgba(92, 225, 255, .25); }
+:root body .posts li { padding-left: .9rem; border-left: 2px solid color-mix(in srgb, var(--m-accent) 25%, transparent); }
 :root body .posts li:hover { border-left-color: var(--v-cyan); }
 
 :root body > footer {
   margin-top: 3rem;
   border-top: 0;
-  border-image: linear-gradient(to bottom, rgba(92, 225, 255, .3) 1px, rgba(4, 7, 11, .9) 1px) fill 0 / / 0 100vw;
+  border-image: linear-gradient(to bottom, color-mix(in srgb, var(--m-accent) 30%, transparent) 1px, color-mix(in srgb, var(--m-bg) 90%, transparent) 1px) fill 0 / / 0 100vw;
   color: var(--v-muted);
   font-size: .78rem;
   letter-spacing: .08em;

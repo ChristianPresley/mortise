@@ -84,3 +84,59 @@ and the showcase use:
 
 Anything else keeps the site's own styles. Theme rules start with
 `:root body`, so they win over a site stylesheet's ordinary selectors.
+
+## Design tokens
+
+Every theme's colors are named design tokens, kept in
+`src/themes/NAME/tokens.yml`. The build writes them at the top of
+`/theme.css` (after any `@import`) as CSS custom properties named
+`--m-NAME`, and the theme's rules use those properties, so changing a
+token recolors the whole theme:
+
+```yaml
+theme: visor
+theme_tokens:
+  accent: "#ffb347"     # amber instead of cyan
+  bg: "#05060a"
+```
+
+Every theme defines `bg`, `surface`, `text`, `muted`, `accent` and
+`border`; `visor` adds `accent2`, `success`, `important` and `danger`, and
+`lcars` its console palette (`peach`, `gold`, `lilac`, `violet`, `blue`,
+`success`, `danger`). Your own CSS can use them too:
+`color: var(--m-accent)`. New names in `theme_tokens` become new
+properties.
+
+### Light and dark
+
+A token may hold a light and a dark color. With `scheme: both`, or when a
+site sets `theme_tokens` without a theme, such pairs are written with
+CSS `light-dark()`, and the page follows the reader's system setting:
+
+```yaml
+theme_tokens:
+  bg: ["#ffffff", "#15161a"]
+  text: ["#1d1d1f", "#e8e8ed"]
+  accent: ["#0b57d0", "#8ab4f8"]
+```
+
+`{{ site.scheme_toggle }}` adds an Auto / Light / Dark switch for readers.
+It works without JavaScript (the token CSS reacts to the checked button
+through `:has()`); a few lines of script remember the choice between
+pages. It is empty for single-scheme themes: `visor` and `lcars` are
+`scheme: dark` only. The starter site from `mortise new` uses a light and
+dark token set and shows the switch in its header.
+
+### Contrast check
+
+The build checks the resolved tokens against WCAG 2.2: `text` on `bg` and
+on `surface`, and `muted` on `bg`, need 4.5:1; `accent` on `bg` needs 3:1
+(links, large text and controls). Each pair is checked in every scheme in
+use, and a pair that falls short is printed as a warning with the config
+line, for example:
+
+```
+warning: _config.yml:3: low contrast: 'muted' on 'bg' is 1.32:1 in the dark scheme; WCAG asks for 4.5:1
+```
+
+Warnings do not stop the build.

@@ -256,6 +256,7 @@ pub const Server = struct {
             } else {
                 s.logLine("Rebuilt {d} of {d} pages in {d:.1} ms", .{ site.rendered, site.pages + site.posts, ms });
             }
+            for (site.warnings) |w| s.logLine("warning: {f}", .{w});
         } else |err| {
             const failure: ?Failure = switch (err) {
                 error.BuildFailed => s.copyFailure(diag) catch null,
