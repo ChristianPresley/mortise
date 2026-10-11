@@ -5,7 +5,8 @@
 //!   {{ page.title | upper }}         filters (built-ins only)
 //!   {% if a and not b %}...{% elif c == "x" %}...{% else %}...{% endif %}
 //!   {% for post in site.posts | limit(5) %}...{{ loop.index }}...{% endfor %}
-//!   {% include "nav.html" %}
+//!   {% include "card.html" title=page.title %}
+//!   {% extends "base.html" %}{% block main %}...{{ super }}...{% endblock %}
 //!   {# comment #}
 //!   {%- ... -%}                      `-` trims whitespace on that side
 //!
@@ -192,8 +193,18 @@ const Node = union(enum) {
     output: struct { expr: Expr, filters: []const Filter, line: usize },
     @"if": struct { branches: []const Branch, line: usize },
     @"for": struct { name: []const u8, iter: Expr, filters: []const Filter, body: []const Node, line: usize },
-    include: struct { name: []const u8, line: usize },
+    include: struct { name: []const u8, args: []const Arg = &.{}, line: usize },
+    /// `{% block NAME %}...{% endblock %}`: content a child template can
+    /// replace.
+    block: struct { name: []const u8, body: []const Node, line: usize },
+    /// `{{ super }}` inside a block: the block's content one template up.
+    super: usize,
 };
+
+/// `name=expression` after an include's name.
+const Arg = struct { name: []const u8, expr: Expr };
+
+pub const BlockDef = struct { name: []const u8, body: []const Node };
 
 const Branch = struct {
     /// Null for `else`.
@@ -211,6 +222,16 @@ pub const Template = struct {
     reads_collections: bool,
     /// Whether any expression reads `seo`, the page's head tags.
     reads_seo: bool = false,
+    /// The parent named by `{% extends %}`, or null.
+    extends: ?[]const u8 = null,
+    extends_line: usize = 0,
+    /// Every block in the template, at any depth.
+    blocks: []const BlockDef = &.{},
+
+    fn findBlock(t: *const Template, name: []const u8) ?[]const Node {
+        for (t.blocks) |b| if (std.mem.eql(u8, b.name, name)) return b.body;
+        return null;
+    }
 };
 
 pub const Diagnostic = struct {
@@ -241,6 +262,14 @@ const Parser = struct {
     includes: std.ArrayList([]const u8) = .empty,
     reads_collections: bool = false,
     reads_seo: bool = false,
+    extends: ?[]const u8 = null,
+    extends_line: usize = 0,
+    blocks: std.ArrayList(BlockDef) = .empty,
+    /// How deep inside `if`, `for` and `block` the parser is; `extends`
+    /// must be at the top.
+    depth: usize = 0,
+    /// Blocks open around the current position, for `{{ super }}`.
+    block_depth: usize = 0,
 
     fn fail(p: *Parser, line: usize, comptime fmt: []const u8, args: anytype) ParseError {
         p.diag.* = .{
@@ -259,7 +288,16 @@ pub fn parse(arena: Allocator, name: []const u8, src: []const u8, diag: *Diagnos
     var end: ?Stmt = null;
     const nodes = try parseNodes(&p, &end);
     if (end) |e| return p.fail(e.line, "unexpected '{s}'", .{e.keyword});
-    return .{ .name = name, .nodes = nodes, .includes = p.includes.items, .reads_collections = p.reads_collections, .reads_seo = p.reads_seo };
+    return .{
+        .name = name,
+        .nodes = nodes,
+        .includes = p.includes.items,
+        .reads_collections = p.reads_collections,
+        .reads_seo = p.reads_seo,
+        .extends = p.extends,
+        .extends_line = p.extends_line,
+        .blocks = p.blocks.items,
+    };
 }
 
 fn tokenize(p: *Parser, src: []const u8) ParseError![]const Token {
@@ -368,6 +406,10 @@ fn parseNodes(p: *Parser, end: *?Stmt) ParseError![]const Node {
                         try nodes.append(p.arena, try parseFor(p, st));
                     } else if (std.mem.eql(u8, st.keyword, "include")) {
                         try nodes.append(p.arena, try parseInclude(p, st));
+                    } else if (std.mem.eql(u8, st.keyword, "block")) {
+                        try nodes.append(p.arena, try parseBlock(p, st));
+                    } else if (std.mem.eql(u8, st.keyword, "extends")) {
+                        try parseExtends(p, st, nodes.items);
                     } else if (isBlockEnd(st.keyword)) {
                         end.* = st;
                         return nodes.items;
@@ -382,7 +424,7 @@ fn parseNodes(p: *Parser, end: *?Stmt) ParseError![]const Node {
 }
 
 fn isBlockEnd(keyword: []const u8) bool {
-    for ([_][]const u8{ "elif", "else", "endif", "endfor" }) |k| {
+    for ([_][]const u8{ "elif", "else", "endif", "endfor", "endblock" }) |k| {
         if (std.mem.eql(u8, keyword, k)) return true;
     }
     return false;
@@ -394,7 +436,9 @@ fn parseIf(p: *Parser, first: Stmt) ParseError!Node {
     var seen_else = false;
     while (true) {
         var end: ?Stmt = null;
+        p.depth += 1;
         const body = try parseNodes(p, &end);
+        p.depth -= 1;
         try branches.append(p.arena, .{ .cond = cond, .body = body });
         const e = end orelse return p.fail(first.line, "'if' is not closed; add '{{% endif %}}'", .{});
         if (std.mem.eql(u8, e.keyword, "endif")) {
@@ -429,7 +473,9 @@ fn parseFor(p: *Parser, st: Stmt) ParseError!Node {
     const filters = try parseFilters(p, &lx, st.line, "the loop expression");
 
     var end: ?Stmt = null;
+    p.depth += 1;
     const body = try parseNodes(p, &end);
+    p.depth -= 1;
     const e = end orelse return p.fail(st.line, "'for' is not closed; add '{{% endfor %}}'", .{});
     if (!std.mem.eql(u8, e.keyword, "endfor")) return p.fail(e.line, "unexpected '{s}' inside 'for'", .{e.keyword});
     if (e.rest.len != 0) return p.fail(e.line, "'endfor' takes no arguments", .{});
@@ -440,14 +486,69 @@ fn parseInclude(p: *Parser, st: Stmt) ParseError!Node {
     var lx: Lexer = .{ .p = p, .src = st.rest, .line = st.line };
     const t = try lx.next();
     if (t != .string) return p.fail(st.line, "'include' expects a quoted template name", .{});
-    if (try lx.next() != .end) return p.fail(st.line, "unexpected text after the include name", .{});
+    // Arguments: `name=expression` pairs, bound while the include renders.
+    var args: std.ArrayList(Arg) = .empty;
+    while (true) {
+        const name_tok = try lx.next();
+        if (name_tok == .end) break;
+        if (name_tok != .ident or std.mem.indexOfScalar(u8, name_tok.ident, '.') != null) {
+            return p.fail(st.line, "expected name=value arguments after the include name", .{});
+        }
+        if (try lx.next() != .assign) return p.fail(st.line, "expected '=' after '{s}'", .{name_tok.ident});
+        try args.append(p.arena, .{ .name = name_tok.ident, .expr = try parseExpr(&lx) });
+    }
     try p.includes.append(p.arena, t.string);
-    return .{ .include = .{ .name = t.string, .line = st.line } };
+    return .{ .include = .{ .name = t.string, .args = args.items, .line = st.line } };
+}
+
+fn parseBlock(p: *Parser, st: Stmt) ParseError!Node {
+    const name = st.rest;
+    if (name.len == 0 or !validName(name)) return p.fail(st.line, "'block' needs a name, as in {{% block content %}}", .{});
+    for (p.blocks.items) |b| {
+        if (std.mem.eql(u8, b.name, name)) return p.fail(st.line, "block '{s}' is defined twice", .{name});
+    }
+    // Reserve the block's place, so parents list before their children.
+    const index = p.blocks.items.len;
+    try p.blocks.append(p.arena, .{ .name = name, .body = &.{} });
+    var end: ?Stmt = null;
+    p.depth += 1;
+    p.block_depth += 1;
+    const body = try parseNodes(p, &end);
+    p.block_depth -= 1;
+    p.depth -= 1;
+    const e = end orelse return p.fail(st.line, "block '{s}' is not closed; add '{{% endblock %}}'", .{name});
+    if (!std.mem.eql(u8, e.keyword, "endblock")) return p.fail(e.line, "unexpected '{s}' inside block '{s}'", .{ e.keyword, name });
+    if (e.rest.len != 0 and !std.mem.eql(u8, e.rest, name)) return p.fail(e.line, "'endblock {s}' closes block '{s}'", .{ e.rest, name });
+    p.blocks.items[index].body = body;
+    return .{ .block = .{ .name = name, .body = body, .line = st.line } };
+}
+
+fn parseExtends(p: *Parser, st: Stmt, before: []const Node) ParseError!void {
+    if (p.extends != null) return p.fail(st.line, "a template can extend only one parent", .{});
+    const ok = p.depth == 0 and p.blocks.items.len == 0 and for (before) |n| {
+        if (n != .text or std.mem.trim(u8, n.text, " \t\r\n").len != 0) break false;
+    } else true;
+    if (!ok) return p.fail(st.line, "'extends' must come first in a template", .{});
+    var lx: Lexer = .{ .p = p, .src = st.rest, .line = st.line };
+    const t = try lx.next();
+    if (t != .string) return p.fail(st.line, "'extends' expects a quoted layout name, as in {{% extends \"base.html\" %}}", .{});
+    if (try lx.next() != .end) return p.fail(st.line, "unexpected text after the layout name", .{});
+    p.extends = t.string;
+    p.extends_line = st.line;
+}
+
+fn validName(s: []const u8) bool {
+    for (s) |c| if (!isIdentChar(c)) return false;
+    return true;
 }
 
 fn parseOutput(p: *Parser, body: []const u8, line: usize) ParseError!Node {
     var lx: Lexer = .{ .p = p, .src = body, .line = line };
     if (body.len == 0) return p.fail(line, "empty output tag", .{});
+    if (std.mem.eql(u8, body, "super")) {
+        if (p.block_depth == 0) return p.fail(line, "'super' works only inside a block", .{});
+        return .{ .super = line };
+    }
     const expr = try parseExpr(&lx);
     const filters = try parseFilters(p, &lx, line, "the tag");
     return .{ .output = .{ .expr = expr, .filters = filters, .line = line } };
@@ -522,6 +623,7 @@ fn parseCondition(p: *Parser, src: []const u8, line: usize) ParseError!Condition
                 }
                 return p.fail(line, "unexpected '{s}' in condition", .{w});
             },
+            .assign => return p.fail(line, "unexpected '='; did you mean '=='?", .{}),
             else => return p.fail(line, "unexpected token in condition", .{}),
         }
     }
@@ -579,6 +681,8 @@ const Tok = union(enum) {
     lparen,
     rparen,
     comma,
+    /// A single `=`, in include arguments.
+    assign,
     eq,
     ne,
 };
@@ -632,7 +736,11 @@ const Lexer = struct {
                     lx.i += 2;
                     return if (c == '=') .eq else .ne;
                 }
-                return lx.p.fail(lx.line, "unexpected '{c}'; did you mean '{c}='?", .{ c, c });
+                if (c == '=') {
+                    lx.i += 1;
+                    return .assign;
+                }
+                return lx.p.fail(lx.line, "unexpected '!'; did you mean '!='?", .{});
             },
             '"', '\'' => {
                 lx.i += 1;
@@ -676,13 +784,23 @@ fn isIdentChar(c: u8) bool {
 pub const Loader = struct {
     ctx: *anyopaque,
     loadFn: *const fn (ctx: *anyopaque, name: []const u8, diag: *Diagnostic) LoadError!*const Template,
+    /// Resolves `{% extends %}` names, which name layouts; null uses
+    /// `loadFn`.
+    extendsFn: ?*const fn (ctx: *anyopaque, name: []const u8, diag: *Diagnostic) LoadError!*const Template = null,
 
     pub const LoadError = error{ TemplateNotFound, TemplateSyntax } || Allocator.Error;
 
     fn load(l: Loader, name: []const u8, diag: *Diagnostic) LoadError!*const Template {
         return l.loadFn(l.ctx, name, diag);
     }
+
+    fn loadParent(l: Loader, name: []const u8, diag: *Diagnostic) LoadError!*const Template {
+        return (l.extendsFn orelse l.loadFn)(l.ctx, name, diag);
+    }
 };
+
+/// How many templates an `extends` chain may hold.
+const max_extends_depth = 16;
 
 pub const RenderError = error{ TemplateRender, TemplateSyntax, TemplateNotFound } || Allocator.Error || Writer.Error;
 
@@ -699,6 +817,11 @@ const Renderer = struct {
     template: []const u8 = "",
     depth: usize = 0,
     strict: bool = false,
+    /// The `extends` chain being rendered, most derived template first.
+    /// Each block renders from the first template that defines it.
+    chain: []const *const Template = &.{},
+    /// The block being rendered and where `{{ super }}` continues.
+    super: ?struct { name: []const u8, next: usize } = null,
 
     fn fail(r: *Renderer, line: usize, comptime fmt: []const u8, args: anytype) RenderError {
         r.diag.* = .{
@@ -726,7 +849,52 @@ pub fn render(arena: Allocator, tpl: *const Template, root: Object, loader: ?Loa
 /// `render` with options.
 pub fn renderWith(arena: Allocator, tpl: *const Template, root: Object, loader: ?Loader, options: RenderOptions, w: *Writer, diag: *Diagnostic) RenderError!void {
     var r: Renderer = .{ .arena = arena, .loader = loader, .diag = diag, .root = root, .template = tpl.name, .strict = options.strict };
-    try renderNodes(&r, tpl.nodes, w);
+    // Follow `extends` to the root template, which supplies the page; the
+    // templates below it only fill its blocks.
+    var chain: std.ArrayList(*const Template) = .empty;
+    try chain.append(arena, tpl);
+    var cur = tpl;
+    while (cur.extends) |parent_name| {
+        if (chain.items.len >= max_extends_depth) {
+            r.template = cur.name;
+            return r.fail(cur.extends_line, "templates extend each other more than {d} deep (does '{s}' extend itself?)", .{ max_extends_depth, parent_name });
+        }
+        const loader_ = loader orelse {
+            r.template = cur.name;
+            return r.fail(cur.extends_line, "'extends' is not available here", .{});
+        };
+        const saved_diag = r.diag.*;
+        const parent = loader_.loadParent(parent_name, r.diag) catch |err| switch (err) {
+            error.TemplateNotFound => {
+                r.diag.* = saved_diag;
+                r.template = cur.name;
+                return r.fail(cur.extends_line, "the layout '{s}' to extend was not found", .{parent_name});
+            },
+            else => |e| return e,
+        };
+        cur = parent;
+        try chain.append(arena, cur);
+    }
+    r.chain = chain.items;
+    r.template = cur.name;
+    try renderNodes(&r, cur.nodes, w);
+}
+
+/// Renders block `name` from the first template in the chain at or after
+/// `start` that defines it.
+fn renderBlock(r: *Renderer, name: []const u8, start: usize, w: *Writer) RenderError!void {
+    for (r.chain[@min(start, r.chain.len)..], start..) |t, i| {
+        const body = t.findBlock(name) orelse continue;
+        const outer_template = r.template;
+        const outer_super = r.super;
+        r.template = t.name;
+        r.super = .{ .name = name, .next = i + 1 };
+        defer {
+            r.template = outer_template;
+            r.super = outer_super;
+        }
+        return renderNodes(r, body, w);
+    }
 }
 
 /// Renders to a newly allocated string.
@@ -799,12 +967,35 @@ fn renderNodes(r: *Renderer, nodes: []const Node, w: *Writer) RenderError!void {
                 },
                 else => |e| return e,
             };
+            // Arguments are evaluated where the include is, then bound for
+            // the included template only.
+            const base = r.scope.items.len;
+            defer r.scope.shrinkRetainingCapacity(base);
+            for (inc.args) |a| {
+                const v = try evalExpr(r, a.expr);
+                try r.scope.append(r.arena, .{ .name = a.name, .value = v });
+            }
             const outer = r.template;
+            const outer_chain = r.chain;
+            const outer_super = r.super;
+            // An included template's blocks are its own, not the page's.
+            r.chain = &.{child};
+            r.super = null;
             r.template = child.name;
             r.depth += 1;
             try renderNodes(r, child.nodes, w);
             r.depth -= 1;
             r.template = outer;
+            r.chain = outer_chain;
+            r.super = outer_super;
+        },
+        .block => |b| {
+            if (r.chain.len == 0) return renderNodes(r, b.body, w);
+            try renderBlock(r, b.name, 0, w);
+        },
+        .super => {
+            const s = r.super orelse return;
+            try renderBlock(r, s.name, s.next, w);
         },
     };
 }
@@ -1421,6 +1612,9 @@ fn expectRender(expected: []const u8, src: []const u8) !void {
     var tl: TestLoader = .{ .arena = arena.allocator(), .files = &.{
         .{ "nav.html", "<nav>{{ page.title }}</nav>" },
         .{ "item.html", "<li>{{ post.title }}</li>" },
+        .{ "card.html", "<div class=\"card\">{{ title }}{% if count %} ({{ count }}){% endif %}</div>" },
+        .{ "base.html", "<title>{% block title %}Site{% endblock %}</title><main>{% block main %}base main{% endblock %}</main><footer>{% block footer %}(c){% endblock %}</footer>" },
+        .{ "doc.html", "{% extends \"base.html\" %}{% block main %}<article>{% block body %}doc body{% endblock %}</article>{% endblock %}" },
     } };
     const out = renderAlloc(arena.allocator(), &tpl, testRoot(), tl.loader(), &diag) catch |err| {
         std.debug.print("{s}:{d}: {s}\n", .{ diag.template, diag.line, diag.message });
@@ -1452,6 +1646,7 @@ fn expectRenderError(src: []const u8, template: []const u8, line: usize, part: [
     const tpl = try parse(arena.allocator(), "main.html", src, &diag);
     var tl: TestLoader = .{ .arena = arena.allocator(), .files = &.{
         .{ "self.html", "x{% include \"self.html\" %}" },
+        .{ "loop.html", "{% extends \"loop.html\" %}" },
         .{ "broken.html", "\n{{ page.tags }}" },
     } };
     try testing.expectError(error.TemplateRender, renderAlloc(arena.allocator(), &tpl, testRoot(), tl.loader(), &diag));
@@ -1585,6 +1780,40 @@ test "loops" {
 test "includes share scope" {
     try expectRender("<nav>&lt;Hello&gt;</nav>", "{% include \"nav.html\" %}");
     try expectRender("<ul><li>First</li><li>Second &amp; more</li></ul>", "<ul>{% for post in posts %}{% include \"item.html\" %}{% endfor %}</ul>");
+}
+
+test "include arguments" {
+    try expectRender("<div class=\"card\">&lt;Hello&gt; (3)</div>", "{% include \"card.html\" title=page.title count=page.count %}");
+    try expectRender("<div class=\"card\">Fixed</div>", "{% include \"card.html\" title=\"Fixed\" %}");
+    // Arguments last only for the include.
+    try expectRender("<div class=\"card\">x</div>[]", "{% include \"card.html\" title='x' %}[{{ title }}]");
+    try expectRender("<div class=\"card\">First</div><div class=\"card\">Second &amp; more</div>", "{% for p in posts %}{% include \"card.html\" title=p.title %}{% endfor %}");
+}
+
+test "extends and blocks" {
+    // A child fills the parent's blocks; the rest keeps its defaults.
+    try expectRender("<title>Home</title><main>Hi</main><footer>(c)</footer>", "{% extends \"base.html\" %}{% block title %}Home{% endblock %}{% block main %}Hi{% endblock main %}");
+    // Text outside blocks in a child is ignored.
+    try expectRender("<title>Site</title><main>base main</main><footer>(c)</footer>", "{% extends \"base.html\" %}ignored");
+    // super renders the parent's content of the block.
+    try expectRender("<title>Home | Site</title><main>base main</main><footer>(c) 2024</footer>", "{% extends \"base.html\" %}{% block title %}Home | {{ super }}{% endblock %}{% block footer %}{{ super }} 2024{% endblock %}");
+    // Three levels: a block from the grandchild fills a block the middle
+    // template added inside one of the root's.
+    try expectRender("<title>Site</title><main><article>mine, then doc body</article></main><footer>(c)</footer>", "{% extends \"doc.html\" %}{% block body %}mine, then {{ super }}{% endblock %}");
+    // Without extends, blocks render in place.
+    try expectRender("a[b]c", "a[{% block x %}b{% endblock %}]c");
+}
+
+test "extends errors" {
+    try expectParseError("<p>\n{% extends \"base.html\" %}", 2, "must come first");
+    try expectParseError("{% extends \"a.html\" %}{% extends \"b.html\" %}", 1, "only one parent");
+    try expectParseError("{% block a %}{% endblock %}{% block a %}{% endblock %}", 1, "defined twice");
+    try expectParseError("{% block a %}", 1, "is not closed");
+    try expectParseError("{% block a %}{% endblock b %}", 1, "closes block 'a'");
+    try expectParseError("{{ super }}", 1, "only inside a block");
+    try expectParseError("{% include \"x.html\" a %}", 1, "expected '=' after 'a'");
+    try expectRenderError("{% extends \"nope.html\" %}", "main.html", 1, "was not found");
+    try expectRenderError("{% extends \"loop.html\" %}", "loop.html", 1, "more than 16 deep");
 }
 
 test "whitespace control and comments" {

@@ -1992,7 +1992,7 @@ fn renderTemplate(b: *Builder, tpl: *const template.Template, p: *const Page, co
     const root: template.Object = .{ .entries = entries[0..n] };
     b.useTemplate(tpl);
     var td: template.Diagnostic = .{};
-    return template.renderAllocWith(b.arena, tpl, root, .{ .ctx = b, .loadFn = loadInclude }, .{ .strict = b.strict }, &td) catch |err| switch (err) {
+    return template.renderAllocWith(b.arena, tpl, root, .{ .ctx = b, .loadFn = loadInclude, .extendsFn = loadExtends }, .{ .strict = b.strict }, &td) catch |err| switch (err) {
         error.OutOfMemory => error.OutOfMemory,
         error.WriteFailed => error.OutOfMemory,
         error.TemplateRender, error.TemplateSyntax => b.templateFail(td),
@@ -2031,6 +2031,27 @@ fn loadLayout(b: *Builder, name: []const u8, used_by: []const u8) Error!Layout {
     const layout: Layout = .{ .tpl = tpl, .parent = parent };
     try b.layouts.put(arena, path, layout);
     return layout;
+}
+
+/// Loads the layout a `{% extends "NAME" %}` names: `_layouts/NAME`, with
+/// `.html` added when missing.
+fn loadExtends(ctx: *anyopaque, name: []const u8, diag: *template.Diagnostic) template.Loader.LoadError!*const template.Template {
+    const b: *Builder = @ptrCast(@alignCast(ctx));
+    const raw = try std.fmt.allocPrint(b.arena, "_layouts/{s}{s}", .{ name, if (std.mem.endsWith(u8, name, ".html")) "" else ".html" });
+    const path = sitepath.normalize(b.arena, raw) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return error.TemplateNotFound,
+    };
+    if (!std.mem.startsWith(u8, path, "_layouts/") or !b.exists(path)) return error.TemplateNotFound;
+    const layout = loadLayout(b, name, path) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.BuildFailed => {
+            diag.* = .{ .template = b.diag.path, .line = b.diag.line, .message = b.diag.message };
+            return error.TemplateSyntax;
+        },
+    };
+    b.useTemplate(layout.tpl);
+    return layout.tpl;
 }
 
 fn loadInclude(ctx: *anyopaque, name: []const u8, diag: *template.Diagnostic) template.Loader.LoadError!*const template.Template {
@@ -3095,4 +3116,26 @@ test "search: true writes an index of page sections and the client" {
     try testing.expect(site.find("search.js") != null);
     try testing.expect(std.mem.indexOf(u8, site.find("guide/index.html").?.data.bytes, "data-index=\"/search-index.json\"") != null);
     _ = try std.json.parseFromSliceLeaky(std.json.Value, t.arena.allocator(), index, .{});
+}
+
+test "templates extend layouts and fill their blocks" {
+    var t: TestSite = try .init(&.{
+        .{ "_layouts/base.html", "<title>{% block title %}{{ site.title }}{% endblock %}</title><main>{% block main %}{{ content }}{% endblock %}</main>" },
+        .{ "_layouts/wide.html", "{% extends \"base\" %}{% block main %}<div class=\"wide\">{{ super }}</div>{% endblock %}" },
+        .{ "_config.yml", "title: Site\n" },
+        .{ "a.md", "---\nlayout: wide\n---\nA\n" },
+        .{ "b.html", "---\n---\n{% extends \"base.html\" %}{% block title %}B | {{ super }}{% endblock %}{% block main %}<p>B</p>{% endblock %}" },
+    });
+    defer t.deinit();
+    var diag: Diagnostic = .{};
+    const site = try t.build(&diag);
+    try testing.expectEqualStrings("<title>Site</title><main><div class=\"wide\"><p>A</p>\n</div></main>", site.find("a/index.html").?.data.bytes);
+    try testing.expectEqualStrings("<title>B | Site</title><main><p>B</p></main>", site.find("b.html").?.data.bytes);
+    // The parent layout is a dependency of pages that extend it.
+    for (site.deps) |d| {
+        if (!std.mem.eql(u8, d.output, "b.html")) continue;
+        try testing.expect(usesAny(d.sources, &.{"_layouts/base.html"}));
+    }
+
+    try expectBuildError(&.{.{ "x.html", "---\n---\n{% extends \"missing\" %}" }}, "x.html", 3, "the layout 'missing' to extend was not found");
 }

@@ -5,7 +5,7 @@ Mortise templates are HTML files with three kinds of tags:
 | Tag            | Purpose                         |
 | -------------- | ------------------------------- |
 | `{{ ... }}`    | Output a value                  |
-| `{% ... %}`    | Statements: `if`, `for`, `include` |
+| `{% ... %}`    | Statements: `if`, `for`, `include`, `extends`, `block` |
 | `{# ... #}`    | Comments, removed from output   |
 
 Layouts live in `_layouts/` and includes in `_includes/`.
@@ -246,6 +246,53 @@ replaces its card, `card: false` leaves a page without one, and
 Includes are loaded from `_includes/` and see the same variables as the
 template that includes them, including loop variables. Includes may nest up
 to 32 levels deep.
+
+An include can take arguments, `name=value` pairs after its name. Each
+value is any expression; the names are variables inside the include only:
+
+```html
+{% for post in site.posts | limit(3) %}
+  {% include "card.html" title=post.title url=post.url label="New" %}
+{% endfor %}
+```
+
+## Template inheritance
+
+Besides `layout:` in frontmatter, which wraps a page's output in a layout's
+`{{ content }}`, a template can **extend** a layout and replace named
+**blocks** in it, as in Jinja or Django:
+
+```html
+<!-- _layouts/base.html -->
+<html>
+<head><title>{% block title %}{{ site.title }}{% endblock %}</title></head>
+<body>
+<main>{% block main %}{{ content }}{% endblock %}</main>
+<footer>{% block footer %}© {{ site.title }}{% endblock %}</footer>
+</body>
+</html>
+```
+
+```html
+<!-- _layouts/wide.html -->
+{% extends "base.html" %}
+{% block main %}<div class="wide">{{ super }}</div>{% endblock %}
+{% block footer %}{{ super }} · Wide edition{% endblock %}
+```
+
+- `{% extends "NAME" %}` names a layout in `_layouts/` (`.html` may be left
+  off). It must come first; only whitespace may precede it. The child's
+  text outside blocks is ignored.
+- `{% block NAME %}...{% endblock %}` marks content a child may replace;
+  `{% endblock NAME %}` may repeat the name. Each block name appears once
+  per template, and blocks may nest.
+- Inside a block, `{{ super }}` writes what the parent template has for
+  that block.
+- Chains may be up to 16 templates long. A page or a layout can extend,
+  and a page using `layout: wide` gets the whole chain.
+- Without `extends`, a block simply renders its content in place.
+- An included template's blocks are its own: a page's blocks do not
+  replace them.
 
 ## Whitespace control
 
