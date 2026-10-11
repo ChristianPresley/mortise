@@ -20,10 +20,10 @@ pub const script = @embedFile("search.js");
 
 /// Words that say nothing about a page.
 const stop_words = [_][]const u8{
-    "a",    "an",   "and", "are",  "as",   "at",  "be",   "but", "by",   "for",  "if",
-    "in",   "into", "is",  "it",   "its",  "no",  "not",  "of",  "on",   "or",   "so",
-    "such", "that", "the", "their", "then", "there", "these", "they", "this", "to",
-    "was",  "will", "with", "you",  "your", "we",  "our",  "can", "from", "has",
+    "a",    "an",   "and", "are",   "as",   "at",    "be",    "but",  "by",   "for", "if",
+    "in",   "into", "is",  "it",    "its",  "no",    "not",   "of",   "on",   "or",  "so",
+    "such", "that", "the", "their", "then", "there", "these", "they", "this", "to",  "was",
+    "will", "with", "you", "your",  "we",   "our",   "can",   "from", "has",
 };
 
 /// How much a word counts by where it appears.
