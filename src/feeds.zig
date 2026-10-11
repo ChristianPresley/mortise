@@ -1,6 +1,6 @@
-//! Generated XML outputs: an Atom feed of recent posts and a sitemap of
-//! every page. Both need absolute URLs, so the pipeline only produces them
-//! when `_config.yml` sets `url`.
+//! Generated feeds and sitemap: Atom and JSON feeds of recent posts and a
+//! sitemap of every page. They need absolute URLs, so the pipeline only
+//! produces them when `_config.yml` sets `url`.
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
@@ -62,6 +62,49 @@ fn writeAtom(w: *Writer, site: Site, posts: []const Entry) Writer.Error!void {
         try w.writeAll("</content>\n</entry>\n");
     }
     try w.writeAll("</feed>\n");
+}
+
+pub const json_feed_path = "feed.json";
+
+/// Renders a JSON Feed 1.1 (jsonfeed.org) of `posts`, newest first, with
+/// the same entries and dates as the Atom feed.
+pub fn jsonFeed(arena: Allocator, site: Site, description: []const u8, posts: []const Entry) Allocator.Error![]u8 {
+    var aw: Writer.Allocating = .init(arena);
+    writeJsonFeed(arena, &aw.writer, site, description, posts[0..@min(posts.len, feed_limit)]) catch return error.OutOfMemory;
+    return aw.toOwnedSlice();
+}
+
+fn writeJsonFeed(arena: Allocator, w: *Writer, site: Site, description: []const u8, posts: []const Entry) (Allocator.Error || Writer.Error)!void {
+    const Author = struct { name: []const u8 };
+    const Item = struct {
+        id: []const u8,
+        url: []const u8,
+        title: []const u8,
+        content_html: []const u8,
+        date_published: []const u8,
+    };
+    const items = try arena.alloc(Item, posts.len);
+    for (posts, items) |p, *it| {
+        const url = try std.fmt.allocPrint(arena, "{s}{s}", .{ site.url, p.url });
+        it.* = .{
+            .id = url,
+            .url = url,
+            .title = p.title,
+            .content_html = p.html,
+            .date_published = try std.fmt.allocPrint(arena, "{s}T00:00:00Z", .{if (p.date.len > 0) p.date else "1970-01-01"}),
+        };
+    }
+    const feed = .{
+        .version = "https://jsonfeed.org/version/1.1",
+        .title = site.title,
+        .home_page_url = try std.fmt.allocPrint(arena, "{s}{s}/", .{ site.url, site.baseurl }),
+        .feed_url = try std.fmt.allocPrint(arena, "{s}{s}/{s}", .{ site.url, site.baseurl, json_feed_path }),
+        .description = description,
+        .authors = &[_]Author{.{ .name = site.author }},
+        .items = items,
+    };
+    try std.json.Stringify.value(feed, .{ .whitespace = .indent_2 }, w);
+    try w.writeByte('\n');
 }
 
 /// Renders a sitemap (sitemaps.org protocol 0.9) listing `pages`.
@@ -163,6 +206,39 @@ test "sitemap" {
         \\<url><loc>https://example.com/</loc></url>
         \\<url><loc>https://example.com/a&amp;b/</loc><lastmod>2024-01-01</lastmod></url>
         \\</urlset>
+        \\
+    , out);
+}
+
+test "json feed" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const site: Site = .{ .url = "https://example.com", .baseurl = "/blog", .title = "A \"B\"", .author = "Ada" };
+    const out = try jsonFeed(arena.allocator(), site, "News", &.{
+        .{ .title = "First", .url = "/blog/2024/01/01/a/", .date = "2024-01-01", .html = "<p>A</p>\n" },
+    });
+    try testing.expectEqualStrings(
+        \\{
+        \\  "version": "https://jsonfeed.org/version/1.1",
+        \\  "title": "A \"B\"",
+        \\  "home_page_url": "https://example.com/blog/",
+        \\  "feed_url": "https://example.com/blog/feed.json",
+        \\  "description": "News",
+        \\  "authors": [
+        \\    {
+        \\      "name": "Ada"
+        \\    }
+        \\  ],
+        \\  "items": [
+        \\    {
+        \\      "id": "https://example.com/blog/2024/01/01/a/",
+        \\      "url": "https://example.com/blog/2024/01/01/a/",
+        \\      "title": "First",
+        \\      "content_html": "<p>A</p>\n",
+        \\      "date_published": "2024-01-01T00:00:00Z"
+        \\    }
+        \\  ]
+        \\}
         \\
     , out);
 }

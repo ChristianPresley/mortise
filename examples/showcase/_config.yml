@@ -22,3 +22,7 @@ related: 3
 # resized copies at these widths for srcset.
 images:
   widths: [480, 960]
+# llms.txt, llms-full.txt and a Markdown twin of every Markdown page.
+llms: true
+# feed.json beside feed.xml.
+json_feed: true

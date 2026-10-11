@@ -202,6 +202,18 @@ job:
   name in the site; the site's own file wins and no copy is made.
 - The page's first image is never lazy, even when it is far down the page.
 
+## llms.txt and twins
+
+- Markdown twins hold the page's source after frontmatter, as written:
+  component, include and template syntax is left as it is, and links keep
+  pointing at HTML pages rather than at other twins.
+- Template (`.html`) pages and OpenAPI pages have no twin; `llms.txt` links
+  their HTML. `llms.txt` lists every page, in path order, without grouping
+  them into sections of their own.
+- `mortise serve` sends twins and `llms.txt` as `text/plain`.
+- The JSON Feed carries the same 20 newest posts as the Atom feed, with no
+  summaries, images or tags.
+
 ## Rendered graphics
 
 - `mortise build` renders every `_render/` spec and theme asset from scratch

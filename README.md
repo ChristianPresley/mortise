@@ -236,7 +236,8 @@ my-site/
   page at `sitemap.xml`. Set `feed: false` or `sitemap: false` to skip one,
   or `sitemap: false` in a page's frontmatter to leave that page out. A file
   of your own at either path takes precedence. The feed's author is
-  `author` from the config, or the site title. A page's `updated:
+  `author` from the config, or the site title. `json_feed: true` adds the
+  same feed as a [JSON Feed](https://jsonfeed.org/) at `feed.json`. A page's `updated:
   YYYY-MM-DD` becomes its sitemap `lastmod` (otherwise a post's date).
   The same `url` also writes `robots.txt`, allowing all crawlers and
   naming the sitemap; `robots: false` skips it and a `robots.txt` of your
@@ -274,6 +275,11 @@ my-site/
   `_schemas/pages.yml` or `_schemas/DIR.yml` declare each field's type,
   whether it is required, allowed values, defaults and number ranges; a
   page that breaks a rule stops the build at the field's line.
+- `llms: true` writes [`llms.txt`](https://llmstxt.org/), an index of the
+  site for language models, and `llms-full.txt`, every page's Markdown in
+  one file. Each Markdown page also gets a plain Markdown twin at its URL
+  plus `index.html.md` (`/docs/install/index.html.md`). `llms: false` in a
+  page's frontmatter leaves it out.
 - Templates see `site` (config values plus `site.posts`, newest first, and
   `site.pages`), `page` (frontmatter plus `url`, `path`, and for posts `date`
   and `slug`), and in layouts `content`.
@@ -295,6 +301,7 @@ See the [Markdown subset](docs/markdown.md),
 | `src/frontmatter.zig` | Restricted YAML frontmatter                       |
 | `src/template.zig`    | Template engine                                   |
 | `src/pipeline.zig`    | Source tree to output files                       |
+| `src/llms.zig`        | llms.txt, llms-full.txt and Markdown twins        |
 | `src/watch.zig`       | Native file watchers                              |
 | `src/server.zig`      | Dev server and Server-Sent Events live reload     |
 | `src/check.zig`       | `mortise check` link and anchor checker           |

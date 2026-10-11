@@ -27,6 +27,7 @@ const feeds = @import("feeds.zig");
 const gzip = @import("gzip.zig");
 const search = @import("search.zig");
 const minify = @import("minify.zig");
+const llms = @import("llms.zig");
 const data_files = @import("data.zig");
 const schema = @import("schema.zig");
 const openapi = @import("openapi.zig");
@@ -743,6 +744,48 @@ fn configFlag(b: *Builder, config_fields: frontmatter.Map, key: []const u8, defa
     return v.boolean;
 }
 
+/// Whether config switch `key` (such as `llms: true`) is on. Defaults off.
+fn optIn(b: *Builder, config_fields: frontmatter.Map, key: []const u8) Error!bool {
+    const v = config_fields.get(key) orelse return false;
+    if (v != .boolean) return b.fail(config_path, fieldLine(try b.read(config_path), key), "'{s}' must be true or false", .{key});
+    return v.boolean;
+}
+
+/// `llms.txt`, `llms-full.txt` and a Markdown twin of every Markdown page.
+/// Pages with `llms: false` in their frontmatter are left out.
+fn addLlms(b: *Builder, outputs: *std.ArrayList(Output), config_fields: frontmatter.Map, pages: []const Page) Error!void {
+    const arena = b.arena;
+    var list: std.ArrayList(llms.Page) = .empty;
+    for (pages) |*p| {
+        if (std.mem.eql(u8, p.out_path, "404.html")) continue;
+        if (p.fields.get("llms")) |v| if (v == .boolean and !v.boolean) continue;
+        // OpenAPI pages have no Markdown source; their HTML is linked instead.
+        const has_markdown = p.is_markdown and p.api == null;
+        const page: llms.Page = .{
+            .title = stringField(p.fields, "title") orelse "",
+            .url = p.url,
+            .description = stringField(p.fields, "description") orelse stringField(p.fields, "summary") orelse "",
+            .date = p.date,
+            .is_post = p.is_post,
+            .markdown = if (has_markdown) p.body else null,
+        };
+        try list.append(arena, page);
+        if (has_markdown) {
+            const path = try llms.twinPath(arena, p.out_path);
+            if (!hasOutput(outputs.items, path)) try outputs.append(arena, .{ .path = path, .source = p.source, .data = .{ .bytes = try llms.twin(arena, page) } });
+        }
+    }
+    const site_url = b.site_url orelse "";
+    if (!hasOutput(outputs.items, llms.index_path)) {
+        const title = stringField(config_fields, "title") orelse "";
+        const description = stringField(config_fields, "description") orelse "";
+        try outputs.append(arena, .{ .path = llms.index_path, .source = config_path, .data = .{ .bytes = try llms.index(arena, title, description, site_url, list.items) } });
+    }
+    if (!hasOutput(outputs.items, llms.full_path)) {
+        try outputs.append(arena, .{ .path = llms.full_path, .source = config_path, .data = .{ .bytes = try llms.full(arena, site_url, list.items) } });
+    }
+}
+
 fn hasOutput(outputs: []const Output, path: []const u8) bool {
     for (outputs) |o| if (std.mem.eql(u8, o.path, path)) return true;
     return false;
@@ -1210,6 +1253,10 @@ fn addGenerated(b: *Builder, outputs: *std.ArrayList(Output), config_fields: fro
     if (try enabled(b, config_fields, "feed") and posts.items.len > 0 and !hasOutput(outputs.items, feeds.feed_path)) {
         try outputs.append(arena, .{ .path = feeds.feed_path, .source = config_path, .data = .{ .bytes = try feeds.atom(arena, site, posts.items) } });
     }
+    if (try optIn(b, config_fields, "json_feed") and posts.items.len > 0 and !hasOutput(outputs.items, feeds.json_feed_path)) {
+        const description = stringField(config_fields, "description") orelse "";
+        try outputs.append(arena, .{ .path = feeds.json_feed_path, .source = config_path, .data = .{ .bytes = try feeds.jsonFeed(arena, site, description, posts.items) } });
+    }
     const has_sitemap = try enabled(b, config_fields, "sitemap");
     if (has_sitemap and !hasOutput(outputs.items, feeds.sitemap_path)) {
         try outputs.append(arena, .{ .path = feeds.sitemap_path, .source = config_path, .data = .{ .bytes = try feeds.sitemap(arena, site, listed.items) } });
@@ -1361,6 +1408,7 @@ fn finish(b: *Builder, config_fields: frontmatter.Map, pages: []Page, statics: [
     }
     if (b.site_url) |url| try addGenerated(b, &outputs, config_fields, pages, url);
     try addImageVariants(b, &outputs, pages);
+    if (try optIn(b, config_fields, "llms")) try addLlms(b, &outputs, config_fields, pages);
 
     std.mem.sortUnstable(Output, outputs.items, {}, outputOrder);
     for (outputs.items[0..outputs.items.len -| 1], outputs.items[@min(1, outputs.items.len)..]) |a, c| {
@@ -4316,4 +4364,31 @@ test "chart blocks become SVG, and bad specs fail the build" {
     var diag: Diagnostic = .{};
     try testing.expect((try t.build(&diag)).find("mortise.css") != null);
     try expectBuildError(&.{.{ "a.md", "Intro\n\n```chart\nvalues: [1]\nstacked: yes\n```\n" }}, "a.md", 0, "chart, line 2 of its block: unknown chart setting 'stacked'");
+}
+
+test "llms.txt, Markdown twins and the JSON feed" {
+    var t: TestSite = try .init(&.{
+        .{ "_config.yml", "title: T\nurl: https://x.dev\nllms: true\njson_feed: true\n" },
+        .{ "_posts/2024-01-02-hi.md", "---\ntitle: Hi\n---\nHello *there*.\n" },
+        .{ "docs.md", "---\ntitle: Docs\ndescription: How to\n---\nRead me.\n" },
+        .{ "secret.md", "---\ntitle: Secret\nllms: false\n---\nNo.\n" },
+        .{ "index.html", "---\ntitle: Home\n---\nhome" },
+    });
+    defer t.deinit();
+    var diag: Diagnostic = .{};
+    const site = t.build(&diag) catch |err| {
+        std.debug.print("{f}\n", .{diag});
+        return err;
+    };
+    try testing.expectEqualStrings("# Hi\n\nHello *there*.\n", site.find("2024/01/02/hi/index.html.md").?.data.bytes);
+    try testing.expectEqualStrings("# Docs\n\nRead me.\n", site.find("docs/index.html.md").?.data.bytes);
+    try testing.expect(site.find("secret/index.html.md") == null);
+    const index = site.find("llms.txt").?.data.bytes;
+    try testing.expect(std.mem.indexOf(u8, index, "- [Docs](https://x.dev/docs/index.html.md): How to\n") != null);
+    try testing.expect(std.mem.indexOf(u8, index, "- [Home](https://x.dev/)\n") != null);
+    try testing.expect(std.mem.indexOf(u8, index, "Secret") == null);
+    try testing.expect(std.mem.indexOf(u8, site.find("llms-full.txt").?.data.bytes, "URL: https://x.dev/docs/\n\n# Docs") != null);
+    try testing.expect(std.mem.indexOf(u8, site.find("feed.json").?.data.bytes, "\"title\": \"Hi\"") != null);
+
+    try expectBuildError(&.{.{ "_config.yml", "title: T\nllms: yes\n" }}, "_config.yml", 2, "'llms' must be true or false");
 }
