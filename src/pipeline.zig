@@ -25,6 +25,7 @@ const frontmatter = @import("frontmatter.zig");
 const template = @import("template.zig");
 const feeds = @import("feeds.zig");
 const gzip = @import("gzip.zig");
+const search = @import("search.zig");
 const data_files = @import("data.zig");
 const openapi = @import("openapi.zig");
 const themes = @import("themes.zig");
@@ -227,6 +228,9 @@ const Page = struct {
     reads_collections: bool = false,
     /// Whether the page's templates output `seo`, so it gets a card.
     uses_seo: bool = false,
+    /// The page's search sections, kept from the render that produced
+    /// `output` (see search.zig).
+    search_sections: []const search.Section = &.{},
 };
 
 const Layout = struct {
@@ -1077,6 +1081,8 @@ fn finish(b: *Builder, config_fields: frontmatter.Map, pages: []Page, statics: [
     const icon_config = try iconConfig(b, config_fields);
     const icon_tags = if (icon_config) |c| try icons.tags(arena, c, b.baseurl) else "";
     try site_entries.append(arena, .{ .key = "icon_tags", .value = .{ .html = icon_tags } });
+    const has_search = if (config_fields.get("search")) |v| (if (v == .boolean) v.boolean else return b.fail(config_path, fieldLine(try b.read(config_path), "search"), "'search' must be true or false", .{})) else false;
+    try site_entries.append(arena, .{ .key = "search_box", .value = .{ .html = if (has_search) try search.box(arena, b.baseurl) else "" } });
     b.site = .{ .entries = site_entries.items };
 
     var rendered: usize = 0;
@@ -1095,6 +1101,7 @@ fn finish(b: *Builder, config_fields: frontmatter.Map, pages: []Page, statics: [
             p.sources = b.deps.items;
             p.reads_collections = b.reads_collections;
             p.uses_seo = b.reads_seo;
+            p.search_sections = if (has_search) try searchSections(arena, p) else &.{};
             rendered += 1;
         }
         try outputs.append(arena, .{ .path = p.out_path, .source = p.source, .data = .{ .bytes = p.output } });
@@ -1108,6 +1115,7 @@ fn finish(b: *Builder, config_fields: frontmatter.Map, pages: []Page, statics: [
     try addThemeCss(b, &outputs, config_fields);
     try addAliases(b, &outputs, config_fields, pages);
     if (icon_config) |c| try addIcons(b, &outputs, c);
+    if (has_search) try addSearch(b, &outputs, pages);
     if (b.site_url) |url| try addGenerated(b, &outputs, config_fields, pages, url);
 
     std.mem.sortUnstable(Output, outputs.items, {}, outputOrder);
@@ -1689,6 +1697,37 @@ fn tocLink(w: *std.Io.Writer, h: markdown.Heading) std.Io.Writer.Error!void {
     try w.writeAll("\">");
     try markdown.escapeHtml(w, h.text);
     try w.writeAll("</a>");
+}
+
+/// The search sections of a rendered page, or none for pages that opt
+/// out with `search: false` and for the 404 page.
+fn searchSections(arena: Allocator, p: *const Page) Allocator.Error![]const search.Section {
+    if (p.fields.get("search")) |v| if (v == .boolean and !v.boolean) return &.{};
+    if (std.mem.eql(u8, p.out_path, "404.html")) return &.{};
+    // Markdown pages index their content; template pages the `<main>` of
+    // their output, else its body.
+    const html = p.html orelse blk: {
+        const out = p.output;
+        if (std.mem.indexOf(u8, out, "<main")) |m| {
+            const start = (std.mem.indexOfScalarPos(u8, out, m, '>') orelse m) + 1;
+            const end = std.mem.lastIndexOf(u8, out, "</main>") orelse out.len;
+            break :blk out[@min(start, end)..end];
+        }
+        break :blk out;
+    };
+    return search.sections(arena, navTitle(p), p.url, html);
+}
+
+/// Writes the search index of every page's sections and the client.
+fn addSearch(b: *Builder, outputs: *std.ArrayList(Output), pages: []const Page) Error!void {
+    var all: std.ArrayList(search.Section) = .empty;
+    for (pages) |p| try all.appendSlice(b.arena, p.search_sections);
+    if (!hasOutput(outputs.items, search.index_path)) {
+        try outputs.append(b.arena, .{ .path = search.index_path, .source = config_path, .data = .{ .bytes = try search.indexJson(b.arena, all.items) } });
+    }
+    if (!hasOutput(outputs.items, search.script_path)) {
+        try outputs.append(b.arena, .{ .path = search.script_path, .source = config_path, .data = .{ .bytes = search.script } });
+    }
 }
 
 /// The first `<p>...</p>` element of rendered Markdown, or null.
@@ -3034,4 +3073,26 @@ test "gzip: true writes .gz copies of large text files" {
     try testing.expectError(error.FileNotFound, src.readFile(a, "_site/img.png.gz"));
 
     try expectBuildError(&.{.{ "_config.yml", "title: T\ngzip: yes\n" }}, "_config.yml", 2, "'gzip' must be true or false");
+}
+
+test "search: true writes an index of page sections and the client" {
+    var t: TestSite = try .init(&.{
+        .{ "_config.yml", "search: true\n" },
+        .{ "_layouts/base.html", "<header>Site</header><main>{{ content }}</main>{{ site.search_box }}" },
+        .{ "guide.md", "---\ntitle: Guide\nlayout: base\n---\nIntro text.\n\n## Install zig\n\nDownload it.\n" },
+        .{ "about.html", "---\ntitle: About\nlayout: base\n---\n<p>We build things.</p>" },
+        .{ "hidden.md", "---\nsearch: false\n---\nSecret.\n" },
+    });
+    defer t.deinit();
+    var diag: Diagnostic = .{};
+    const site = try t.build(&diag);
+    const index = site.find("search-index.json").?.data.bytes;
+    try testing.expect(std.mem.indexOf(u8, index, "[\"Guide \u{203a} Install zig\",\"/guide/#install-zig\",\"Download it.\",") != null);
+    try testing.expect(std.mem.indexOf(u8, index, "[\"About\",\"/about.html\",\"We build things.\",") != null);
+    try testing.expect(std.mem.indexOf(u8, index, "ecret") == null);
+    // The header is not part of a template page's text.
+    try testing.expect(std.mem.indexOf(u8, index, "\"site\"") == null);
+    try testing.expect(site.find("search.js") != null);
+    try testing.expect(std.mem.indexOf(u8, site.find("guide/index.html").?.data.bytes, "data-index=\"/search-index.json\"") != null);
+    _ = try std.json.parseFromSliceLeaky(std.json.Value, t.arena.allocator(), index, .{});
 }

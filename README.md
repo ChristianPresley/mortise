@@ -211,6 +211,10 @@ my-site/
   `icons:` can instead hold `letters`, `style` (`plain`, `visor`,
   `lcars`), `accent`, `background`, `foreground` and `name`. Your own file
   at any of those paths wins.
+- [Search](docs/search.md): `search: true` writes a section-level index
+  and a small client; `{{ site.search_box }}` adds the button, and Ctrl+K
+  opens a search dialog with prefix matching, BM25 ranking and links to
+  the matching heading.
 - Templates see `site` (config values plus `site.posts`, newest first, and
   `site.pages`), `page` (frontmatter plus `url`, `path`, and for posts `date`
   and `slug`), and in layouts `content`.

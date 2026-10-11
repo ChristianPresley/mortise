@@ -13,6 +13,9 @@ job:
   error overlay has to happen inside the browser, which runs JavaScript. The
   script is a string in `src/server.zig`, sent only by `serve`, and never
   appears in `build` output.
+- **The search client.** Searching happens in the reader's browser, so
+  `search: true` writes `src/search.js`, a small hand-written script with
+  no libraries, to the site. Sites without search get no script.
 - **The CI bootstrap step.** CI has to download Zig before any Zig code can
   run, so one workflow step uses the runner's shell (`curl`, a checksum
   check, and `tar` or `unzip`). Every other check (the exact Zig version,
@@ -205,6 +208,20 @@ job:
   references Mortise writes (`&amp;`, `&quot;`, `&#39;`, `&lt;`, `&gt;`).
 - A link to a directory without a trailing slash (`/docs`) counts as valid
   when `docs/index.html` exists, matching `serve` and most static hosts.
+
+## Search
+
+- The whole index is one file that the browser downloads on first search;
+  past a few thousand pages it grows to megabytes. There is no index
+  splitting yet.
+- Words are split at anything that is not a letter or digit and matched by
+  prefix; there is no stemming (`running` does not find `run`), no typo
+  tolerance and no phrase search. The stop-word list is English.
+- Text in scripts without spaces between words (Chinese, Japanese, Thai)
+  is indexed as long runs and only matches from the start of a run.
+- Only `h2` and `h3` headings start sections.
+- `serve` rebuilds the whole index after every change, which grows the
+  rebuild time on large sites with search on.
 
 ## Site pipeline
 
