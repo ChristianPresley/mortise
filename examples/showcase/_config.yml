@@ -9,3 +9,6 @@ theme: visor
 # Last-updated dates from the Git history, and an edit link on every page.
 git_dates: true
 edit_url: https://github.com/ChristianPresley/mortise/edit/main/{path}
+# Favicon, app icons and web manifest, drawn in the theme's style.
+icons:
+  letters: M

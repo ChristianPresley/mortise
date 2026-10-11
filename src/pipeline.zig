@@ -28,6 +28,7 @@ const data_files = @import("data.zig");
 const openapi = @import("openapi.zig");
 const themes = @import("themes.zig");
 const tokens = @import("tokens.zig");
+const icons = @import("icons.zig");
 const assets = @import("assets.zig");
 const redirects = @import("redirects.zig");
 const git = @import("git.zig");
@@ -908,6 +909,46 @@ fn yamlString(arena: Allocator, out: *std.ArrayList(u8), s: []const u8) Allocato
     try out.append(arena, '"');
 }
 
+/// Reads `icons:` from the config, or null when the site wants none.
+fn iconConfig(b: *Builder, config_fields: frontmatter.Map) Error!?icons.Config {
+    var d: icons.Diagnostic = .{};
+    return icons.config(b.arena, config_fields.get("icons"), stringField(config_fields, "title") orelse "", stringField(config_fields, "theme"), &d) catch |err| switch (err) {
+        error.OutOfMemory => error.OutOfMemory,
+        error.InvalidIcons => b.fail(config_path, fieldLine(try b.read(config_path), "icons"), "icons: '{s}' {s}", .{ d.key, d.message }),
+    };
+}
+
+/// Draws the site icons and writes them with the web app manifest, except
+/// files the site has itself.
+fn addIcons(b: *Builder, outputs: *std.ArrayList(Output), c: icons.Config) Error!void {
+    const arena = b.arena;
+    if (!hasOutput(outputs.items, icons.ico_path)) {
+        var images: [icons.ico_sizes.len]@import("render").icon.IcoImage = undefined;
+        for (icons.ico_sizes, &images) |size, *im| {
+            const name = try std.fmt.allocPrint(arena, "favicon-{d}", .{size});
+            im.* = .{ .size = size, .png = (try renderIcon(b, name, try icons.spec(arena, c, size))).png };
+        }
+        const ico = try @import("render").icon.ico(arena, &images);
+        try outputs.append(arena, .{ .path = icons.ico_path, .source = config_path, .data = .{ .bytes = ico } });
+    }
+    for (icons.pngs) |p| {
+        if (hasOutput(outputs.items, p.path)) continue;
+        const out = try renderIcon(b, p.path, try icons.spec(arena, c, p.size));
+        try outputs.append(arena, .{ .path = p.path, .source = config_path, .data = .{ .bytes = out.png } });
+    }
+    if (!hasOutput(outputs.items, icons.manifest_path)) {
+        try outputs.append(arena, .{ .path = icons.manifest_path, .source = config_path, .data = .{ .bytes = try icons.manifest(arena, c, b.baseurl) } });
+    }
+}
+
+fn renderIcon(b: *Builder, name: []const u8, spec: []const u8) Error!assets.Rendered {
+    var d: assets.Diagnostic = .{};
+    return assets.renderCached(b.options.render_cache, b.arena, b.src.io, name, spec, &d) catch |err| switch (err) {
+        error.OutOfMemory => error.OutOfMemory,
+        error.InvalidSpec => b.fail(config_path, fieldLine(try b.read(config_path), "icons"), "cannot draw the site icon: {s}", .{d.message}),
+    };
+}
+
 /// Renders the spec `spec` read from `source` into `NAME.png`, plus
 /// `NAME.css` for kinds that need it.
 fn addRendered(b: *Builder, outputs: *std.ArrayList(Output), source: []const u8, name: []const u8, spec: []const u8) Error!void {
@@ -1029,6 +1070,9 @@ fn finish(b: *Builder, config_fields: frontmatter.Map, pages: []Page, statics: [
     const tag_pages = b.exists(tag_layout);
     const tags = try tagIndex(arena, pages, if (tag_pages) b.baseurl else null);
     try site_entries.append(arena, .{ .key = "tags", .value = tags });
+    const icon_config = try iconConfig(b, config_fields);
+    const icon_tags = if (icon_config) |c| try icons.tags(arena, c, b.baseurl) else "";
+    try site_entries.append(arena, .{ .key = "icon_tags", .value = .{ .html = icon_tags } });
     b.site = .{ .entries = site_entries.items };
 
     var rendered: usize = 0;
@@ -1059,6 +1103,7 @@ fn finish(b: *Builder, config_fields: frontmatter.Map, pages: []Page, statics: [
     try addComponentsCss(b, &outputs, config_fields, pages);
     try addThemeCss(b, &outputs, config_fields);
     try addAliases(b, &outputs, config_fields, pages);
+    if (icon_config) |c| try addIcons(b, &outputs, c);
     if (b.site_url) |url| try addGenerated(b, &outputs, config_fields, pages, url);
 
     std.mem.sortUnstable(Output, outputs.items, {}, outputOrder);
@@ -2917,4 +2962,24 @@ test "cardPath" {
     try testing.expectEqualStrings("social/index.png", try cardPath(a, "index.html"));
     try testing.expectEqualStrings("social/docs/install.png", try cardPath(a, "docs/install/index.html"));
     try testing.expectEqualStrings("social/rendering.png", try cardPath(a, "rendering.html"));
+}
+
+test "icons: writes a favicon, app icons and a manifest" {
+    var t: TestSite = try .init(&.{
+        .{ "_config.yml", "title: Docs\ntheme: lcars\nicons: true\n" },
+        .{ "index.html", "---\n---\n{{ site.icon_tags }}" },
+        .{ "icon-512.png", "mine" },
+    });
+    defer t.deinit();
+    var diag: Diagnostic = .{};
+    const site = try t.build(&diag);
+    const ico = site.find("favicon.ico").?.data.bytes;
+    try testing.expectEqual(@as(u16, 3), std.mem.readInt(u16, ico[4..6], .little));
+    try testing.expect(std.mem.startsWith(u8, site.find("apple-touch-icon.png").?.data.bytes, "\x89PNG"));
+    // The site's own file wins.
+    try testing.expect(site.find("icon-512.png").?.data == .copy);
+    try testing.expect(std.mem.indexOf(u8, site.find("site.webmanifest").?.data.bytes, "\"theme_color\": \"#000000\"") != null);
+    try testing.expect(std.mem.startsWith(u8, site.find("index.html").?.data.bytes, "<link rel=\"icon\" href=\"/favicon.ico\""));
+
+    try expectBuildError(&.{.{ "_config.yml", "title: T\nicons:\n  colour: \"#fff\"\n" }}, "_config.yml", 2, "icons: 'colour' is not an icons setting");
 }

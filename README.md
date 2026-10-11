@@ -200,6 +200,13 @@ my-site/
   link, Open Graph and Twitter tags, and JSON-LD structured data, and
   gives every such page a social card image drawn by the build in the
   theme's style; see [SEO and social cards](docs/templates.md#seo-and-social-cards).
+- `icons: true` in `_config.yml` draws a site icon (the title's first
+  letter, in the theme's style) and writes `favicon.ico` (16, 32 and 48
+  pixels), `apple-touch-icon.png`, `icon-192.png`, `icon-512.png` and a
+  `site.webmanifest`; put `{{ site.icon_tags }}` in your `<head>`.
+  `icons:` can instead hold `letters`, `style` (`plain`, `visor`,
+  `lcars`), `accent`, `background`, `foreground` and `name`. Your own file
+  at any of those paths wins.
 - Templates see `site` (config values plus `site.posts`, newest first, and
   `site.pages`), `page` (frontmatter plus `url`, `path`, and for posts `date`
   and `slug`), and in layouts `content`.

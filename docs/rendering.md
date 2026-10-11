@@ -183,6 +183,24 @@ label: 2024-01-08
 The font covers ASCII, curly quotes, dashes and the ellipsis; accented
 Latin letters are drawn as their base letter and anything else as a box.
 
+### icon
+
+A square emblem with one or two letters, for favicons and app icons, in
+the same three styles as cards: `plain` (a rounded tile), `visor` (a
+chamfered HUD plate) and `lcars` (a console pill with an elbow bar).
+Small sizes are drawn four times larger and shrunk, so a 16-pixel favicon
+stays smooth.
+
+| Field        | Default   | Meaning                                  |
+| ------------ | --------- | ---------------------------------------- |
+| `letters`    | required  | One or two characters                    |
+| `size`       | 512       | Width and height, 16 to 1024             |
+| `style`      | plain     | `plain`, `visor` or `lcars`              |
+| `accent`, `background`, `foreground` | the style's | Colors     |
+
+Most sites do not write icon specs: `icons:` in `_config.yml` draws the
+whole set (see [site icons](../README.md#site-layout)).
+
 ## Speed
 
 Rendering takes from a few milliseconds (a panel) to a few seconds (a large

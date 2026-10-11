@@ -126,6 +126,15 @@ job:
   ignore the scheme switch.
 - Without JavaScript the scheme switch resets to Auto on every page.
 
+## Site icons
+
+- The icon is drawn from letters in the built-in stroke font; there is no
+  way to use a logo image except by putting your own `favicon.ico` and
+  PNGs in the site, which replace the generated ones.
+- No SVG icon, maskable icon or Windows tile images are written.
+- The web manifest names the site and its icons only; it has no
+  `description`, `scope`, shortcuts or screenshots.
+
 ## Rendered graphics
 
 - `mortise build` renders every `_render/` spec and theme asset from scratch

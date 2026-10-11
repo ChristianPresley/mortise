@@ -53,7 +53,7 @@ pub const Diagnostic = struct {
 
 pub const Error = error{InvalidSpec} || Allocator.Error;
 
-pub const Kind = enum { starfield, panel, reticle, radar, planet, hologram, card };
+pub const Kind = enum { starfield, panel, reticle, radar, planet, hologram, card, icon };
 
 /// Upper bounds that keep a typo from rendering for minutes.
 const max_side = 4096;
@@ -84,6 +84,7 @@ pub fn render(gpa: Allocator, arena: Allocator, io: std.Io, name: []const u8, so
         .planet => try planet(gpa, &s, class),
         .hologram => try hologram(gpa, &s, class),
         .card => try card(gpa, &s),
+        .icon => try icon(gpa, &s),
     };
     errdefer {
         gpa.free(rendered.png);
@@ -319,6 +320,19 @@ fn card(gpa: Allocator, s: *Spec) Error!Rendered {
     defer c.deinit(gpa);
     // Cards are large and plain; fast compression costs little in size.
     return .{ .png = try r.encodePngWith(gpa, c, .clamp, .{ .level = .level_1 }), .css = null };
+}
+
+fn icon(gpa: Allocator, s: *Spec) Error!Rendered {
+    var c = try r.icon.render(gpa, .{
+        .size = @intCast(try s.int("size", 512, 16, 1024)),
+        .letters = try s.text("letters", null),
+        .style = try s.enumField(r.card.Style, "style", .plain),
+        .accent = try s.optionalColor("accent"),
+        .background = try s.optionalColor("background"),
+        .foreground = try s.optionalColor("foreground"),
+    });
+    defer c.deinit(gpa);
+    return .{ .png = try r.encodePng(gpa, c, .clamp), .css = null };
 }
 
 pub const Shape = enum { icosphere, sphere, cube, torus, gem };
@@ -673,8 +687,8 @@ test "colors" {
 }
 
 test "bad specs name the line" {
-    try expectSpecError("width: 64\n", 0, "'kind' is required; it must be one of: starfield, panel, reticle, radar, planet, hologram, card");
-    try expectSpecError("kind: nebula\n", 1, "'kind' must be one of: starfield, panel, reticle, radar, planet, hologram, card");
+    try expectSpecError("width: 64\n", 0, "'kind' is required; it must be one of: starfield, panel, reticle, radar, planet, hologram, card, icon");
+    try expectSpecError("kind: nebula\n", 1, "'kind' must be one of: starfield, panel, reticle, radar, planet, hologram, card, icon");
     try expectSpecError("kind: starfield\nwidht: 64\n", 2, "unknown field 'widht'");
     try expectSpecError("kind: starfield\nwidth: 99999\n", 2, "'width' must be a whole number from 8 to 4096");
     try expectSpecError("kind: reticle\ncolor: teal\n", 2, "'color' must be a color such as \"#3fd8ff\" (quoted, since # starts a comment)");
