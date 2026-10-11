@@ -280,6 +280,12 @@ job:
   stylesheet sets to `white-space: pre` outside `<pre>` loses its runs of
   spaces. JavaScript and JSON are not minified, and `serve` does not
   minify.
+- Taxonomy and term pages are not paginated, and a taxonomy cannot use
+  its own layout names; every taxonomy shares `term.html` and
+  `taxonomy.html`.
+- `page.related` scores pages only by how many tags and terms they share,
+  not by their text, and comparing every pair of pages grows with the
+  square of the page count.
 - `build` deletes the whole `_site` directory before writing, so files
   placed there by hand are lost.
 - Layouts are found only as `_layouts/NAME.html`; includes only under

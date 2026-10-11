@@ -1,0 +1,10 @@
+---
+layout: base
+---
+<h1>{{ page.taxonomy }}: {{ page.term }}</h1>
+<ul class="posts">
+{%- for post in page.pages %}
+<li><a href="{{ post.url }}">{{ post.title }}</a> <small>{{ post.date | date }}</small></li>
+{%- endfor %}
+</ul>
+<p><a href="{{ site.baseurl }}/{{ page.taxonomy }}/">All {{ page.taxonomy }}</a></p>

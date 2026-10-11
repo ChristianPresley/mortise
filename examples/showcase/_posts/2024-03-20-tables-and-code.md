@@ -2,6 +2,7 @@
 title: Tables and highlighted code
 layout: post
 tags: [markdown]
+categories: [guides]
 ---
 Mortise renders GitHub-style tables and highlights code at build time.
 

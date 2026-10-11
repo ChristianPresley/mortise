@@ -255,6 +255,46 @@ replaces its card, `card: false` leaves a page without one, and
 </head>
 ```
 
+## Taxonomies
+
+Tags are built in. Other ways of grouping content are named in
+`_config.yml`:
+
+```yaml
+taxonomies: [categories, series]
+```
+
+Any page or post can then set `categories: [guides, zig]` (or one value as
+a string). Values that differ only in case or punctuation are one term,
+named as the newest post first writes it. Each taxonomy appears as
+`site.taxonomies.NAME`, a list of terms sorted by name, each with `name`,
+`slug`, `count`, and `pages` (posts newest first, then other pages).
+
+Two optional layouts generate pages for every taxonomy:
+
+| Layout                   | Output        | Variables                                  |
+| ------------------------ | ------------- | ------------------------------------------ |
+| `_layouts/term.html`     | `/NAME/SLUG/` | `page.taxonomy`, `page.term`, `page.pages` |
+| `_layouts/taxonomy.html` | `/NAME/`      | `page.taxonomy`, `page.terms`              |
+
+With `term.html` present, each term also gets a `url`.
+
+```html
+{% for term in site.taxonomies.categories %}
+<a href="{{ term.url }}">{{ term.name }}</a> ({{ term.count }})
+{% endfor %}
+```
+
+## Related pages
+
+`related: 5` in `_config.yml` gives every page and post `page.related`:
+up to five other pages that share the most tags and taxonomy terms, newest
+posts first among equals. Pages that share nothing are not listed.
+
+```html
+{% for r in page.related %}<a href="{{ r.url }}">{{ r.title }}</a>{% endfor %}
+```
+
 ## Includes
 
 ```html

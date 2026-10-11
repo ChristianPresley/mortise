@@ -174,6 +174,11 @@ my-site/
 - Add `_layouts/tag.html` to generate a page per tag at `/tags/<slug>/`.
   The layout sees `page.tag` and `page.posts`, and each `site.tags` entry
   gains a `url`. Tags differing only in case or punctuation are merged.
+- `taxonomies: [categories, series]` in `_config.yml` adds groupings
+  beside tags, listed in `site.taxonomies`, with optional
+  `_layouts/term.html` and `_layouts/taxonomy.html` pages; `related: 5`
+  gives each page `page.related`. See
+  [taxonomies](docs/templates.md#taxonomies).
 - Markdown pages get `page.toc`, a nested list linking to their level 2
   and 3 headings.
 - Headings get anchor ids from their text, so `## Getting started` can be

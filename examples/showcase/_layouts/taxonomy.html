@@ -1,0 +1,9 @@
+---
+layout: base
+---
+<h1>All {{ page.taxonomy }}</h1>
+<ul class="posts">
+{%- for term in page.terms %}
+<li><a href="{{ term.url }}">{{ term.name }}</a> <small>{{ term.count }}</small></li>
+{%- endfor %}
+</ul>

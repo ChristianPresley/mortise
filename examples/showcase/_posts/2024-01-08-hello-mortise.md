@@ -3,6 +3,7 @@ title: Hello, Mortise
 layout: post
 tags: [announcements]
 aliases: [/hello/]
+categories: [news]
 ---
 Mortise turns a folder of Markdown and templates into a plain HTML site.
 

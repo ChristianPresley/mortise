@@ -1213,6 +1213,11 @@ fn finish(b: *Builder, config_fields: frontmatter.Map, pages: []Page, statics: [
         if (p.base.entries.len == 0) p.base = try pageObject(arena, p);
     }
     try addNavigation(arena, pages);
+    const taxonomies = try taxonomyNames(b, config_fields);
+    if (config_fields.get("related")) |v| {
+        if (v != .int or v.int < 1 or v.int > 50) return b.fail(config_path, fieldLine(try b.read(config_path), "related"), "'related' must be how many related pages to list, 1 to 50", .{});
+        try addRelated(arena, pages, taxonomies, @intCast(v.int));
+    }
     for (pages) |*p| {
         if (p.is_post) {
             try post_values.append(arena, .{ .object = p.object });
@@ -1239,6 +1244,8 @@ fn finish(b: *Builder, config_fields: frontmatter.Map, pages: []Page, statics: [
             try site_entries.append(arena, .{ .key = e.key, .value = .{ .string = b.baseurl } });
             continue;
         }
+        // `site.taxonomies` is the index built from this setting.
+        if (std.mem.eql(u8, e.key, "taxonomies")) continue;
         try site_entries.append(arena, .{ .key = e.key, .value = try convert(arena, e.value) });
     }
     // Always defined, so templates can use it in strict mode.
@@ -1256,6 +1263,10 @@ fn finish(b: *Builder, config_fields: frontmatter.Map, pages: []Page, statics: [
     try site_entries.append(arena, .{ .key = "icon_tags", .value = .{ .html = icon_tags } });
     const has_search = if (config_fields.get("search")) |v| (if (v == .boolean) v.boolean else return b.fail(config_path, fieldLine(try b.read(config_path), "search"), "'search' must be true or false", .{})) else false;
     try site_entries.append(arena, .{ .key = "search_box", .value = .{ .html = if (has_search) try search.box(arena, b.baseurl) else "" } });
+    const term_pages = taxonomies.len > 0 and b.exists(term_layout);
+    const taxonomy_pages = taxonomies.len > 0 and b.exists(taxonomy_layout);
+    const taxonomy_index = try taxonomyIndex(arena, pages, taxonomies, if (term_pages) b.baseurl else null);
+    try site_entries.append(arena, .{ .key = "taxonomies", .value = taxonomy_index });
     b.site = .{ .entries = site_entries.items };
 
     var rendered: usize = 0;
@@ -1288,6 +1299,7 @@ fn finish(b: *Builder, config_fields: frontmatter.Map, pages: []Page, statics: [
     b.page_assets = .empty;
     if (tag_pages) try addTagPages(b, &outputs, tags.list);
     try addCards(b, &outputs, pages);
+    try addTaxonomyPages(b, &outputs, taxonomy_index, term_pages, taxonomy_pages);
     try addFingerprinted(b, &outputs, pages, b.page_assets.items);
     try addComponentsCss(b, &outputs, config_fields, pages);
     try addThemeCss(b, &outputs);
@@ -2062,6 +2074,192 @@ fn addTagPages(b: *Builder, outputs: *std.ArrayList(Output), tags: []const Value
         b.deps = .empty;
         const html = try renderPage(b, &page);
         try outputs.append(arena, .{ .path = page.out_path, .source = tag_layout, .data = .{ .bytes = html } });
+    }
+}
+
+/// Layouts that turn on generated pages for `taxonomies:`: one per term at
+/// `/NAME/SLUG/`, and one per taxonomy at `/NAME/`.
+pub const term_layout = "_layouts/term.html";
+pub const taxonomy_layout = "_layouts/taxonomy.html";
+
+/// The taxonomy names from `taxonomies: [categories, series]`.
+fn taxonomyNames(b: *Builder, config_fields: frontmatter.Map) Error![]const []const u8 {
+    const v = config_fields.get("taxonomies") orelse return &.{};
+    const line = fieldLine(try b.read(config_path), "taxonomies");
+    const items: []const frontmatter.Value = switch (v) {
+        .list => |l| l,
+        .string => &.{v},
+        else => return b.fail(config_path, line, "'taxonomies' must be a list of names such as [categories, series]", .{}),
+    };
+    var names: std.ArrayList([]const u8) = .empty;
+    for (items) |item| {
+        if (item != .string or item.string.len == 0) return b.fail(config_path, line, "'taxonomies' must be a list of names such as [categories, series]", .{});
+        const n = item.string;
+        for (n) |c| if (!(std.ascii.isAlphanumeric(c) or c == '_' or c == '-')) {
+            return b.fail(config_path, line, "taxonomy '{s}' may hold only letters, digits, '-' and '_'", .{n});
+        };
+        if (std.mem.eql(u8, n, "tags")) return b.fail(config_path, line, "'tags' is built in; leave it out of 'taxonomies'", .{});
+        try names.append(b.arena, n);
+    }
+    return names.items;
+}
+
+/// The terms a page lists in frontmatter `field`: a list of strings or
+/// one string.
+fn pageTerms(arena: Allocator, p: *const Page, field: []const u8) Allocator.Error![]const []const u8 {
+    const v = p.fields.get(field) orelse return &.{};
+    switch (v) {
+        .string => |s| return arena.dupe([]const u8, &.{s}),
+        .list => |l| {
+            var out: std.ArrayList([]const u8) = .empty;
+            for (l) |item| if (item == .string) try out.append(arena, item.string);
+            return out.items;
+        },
+        else => return &.{},
+    }
+}
+
+/// `site.taxonomies`: for each taxonomy, its terms sorted by name, each
+/// with `name`, `slug`, `count`, its `pages` (posts newest first, then
+/// pages) and, when term pages are generated, its `url`.
+fn taxonomyIndex(arena: Allocator, pages: []const Page, names: []const []const u8, base: ?[]const u8) Allocator.Error!Value {
+    var by_name: std.ArrayList(Entry) = .empty;
+    for (names) |tax| {
+        var term_names: std.ArrayList([]const u8) = .empty;
+        var slugs: std.ArrayList([]const u8) = .empty;
+        var lists: std.ArrayList(std.ArrayList(Value)) = .empty;
+        for (pages) |*p| {
+            for (try pageTerms(arena, p, tax)) |term| {
+                const slug = try markdown.slugify(arena, term);
+                const i = for (slugs.items, 0..) |s, i| {
+                    if (std.mem.eql(u8, s, slug)) break i;
+                } else blk: {
+                    try term_names.append(arena, term);
+                    try slugs.append(arena, slug);
+                    try lists.append(arena, .empty);
+                    break :blk term_names.items.len - 1;
+                };
+                try lists.items[i].append(arena, .{ .object = p.object });
+            }
+        }
+        const order = try arena.alloc(usize, term_names.items.len);
+        for (order, 0..) |*o, i| o.* = i;
+        std.mem.sortUnstable(usize, order, term_names.items, struct {
+            fn lt(n: [][]const u8, a: usize, c: usize) bool {
+                return std.ascii.lessThanIgnoreCase(n[a], n[c]);
+            }
+        }.lt);
+        const terms = try arena.alloc(Value, order.len);
+        for (order, terms) |i, *t| {
+            var entries: std.ArrayList(Entry) = .empty;
+            try entries.append(arena, .{ .key = "name", .value = .{ .string = term_names.items[i] } });
+            try entries.append(arena, .{ .key = "slug", .value = .{ .string = slugs.items[i] } });
+            try entries.append(arena, .{ .key = "count", .value = .{ .int = @intCast(lists.items[i].items.len) } });
+            try entries.append(arena, .{ .key = "pages", .value = .{ .list = lists.items[i].items } });
+            if (base) |b| try entries.append(arena, .{ .key = "url", .value = .{ .string = try std.fmt.allocPrint(arena, "{s}/{s}/{s}/", .{ b, tax, slugs.items[i] }) } });
+            t.* = .{ .object = .{ .entries = entries.items } };
+        }
+        try by_name.append(arena, .{ .key = tax, .value = .{ .list = terms } });
+    }
+    return .{ .object = .{ .entries = by_name.items } };
+}
+
+/// Renders the term pages (`term` layout: `page.title` and `page.term`
+/// are the term's name, `page.taxonomy` its taxonomy, `page.pages` its
+/// pages) and the taxonomy pages (`taxonomy` layout: `page.terms`).
+fn addTaxonomyPages(b: *Builder, outputs: *std.ArrayList(Output), index: Value, terms_on: bool, index_on: bool) Error!void {
+    const arena = b.arena;
+    for (index.object.entries) |tax| {
+        if (terms_on) for (tax.value.list) |term| {
+            const t = term.object;
+            const slug = t.get("slug").?.string;
+            try renderGenerated(b, outputs, "term", term_layout, t.get("url").?.string, try std.fmt.allocPrint(arena, "{s}/{s}/index.html", .{ tax.key, slug }), &.{
+                .{ .key = "title", .value = t.get("name").? },
+                .{ .key = "term", .value = t.get("name").? },
+                .{ .key = "taxonomy", .value = .{ .string = tax.key } },
+                .{ .key = "pages", .value = t.get("pages").? },
+            });
+        };
+        if (index_on) {
+            try renderGenerated(b, outputs, "taxonomy", taxonomy_layout, try std.fmt.allocPrint(arena, "{s}/{s}/", .{ b.baseurl, tax.key }), try std.fmt.allocPrint(arena, "{s}/index.html", .{tax.key}), &.{
+                .{ .key = "title", .value = .{ .string = tax.key } },
+                .{ .key = "taxonomy", .value = .{ .string = tax.key } },
+                .{ .key = "terms", .value = tax.value },
+            });
+        }
+    }
+}
+
+/// Renders a page that has no source file, with `layout` and the page
+/// fields given.
+fn renderGenerated(b: *Builder, outputs: *std.ArrayList(Output), layout: []const u8, source: []const u8, url: []const u8, out_path: []const u8, fields: []const Entry) Error!void {
+    const arena = b.arena;
+    const layout_field = try arena.dupe(frontmatter.Entry, &.{.{ .key = "layout", .value = .{ .string = layout } }});
+    var page: Page = .{
+        .source = source,
+        .is_post = false,
+        .is_markdown = false,
+        .fields = .{ .entries = layout_field },
+        .body = "",
+        .body_line = 1,
+        .url = url,
+        .out_path = out_path,
+        .html = "",
+    };
+    var entries: std.ArrayList(Entry) = .empty;
+    try entries.appendSlice(arena, fields);
+    try entries.append(arena, .{ .key = "url", .value = .{ .string = url } });
+    page.object = .{ .entries = entries.items };
+    b.deps = .empty;
+    const html = try renderPage(b, &page);
+    try outputs.append(arena, .{ .path = out_path, .source = source, .data = .{ .bytes = html } });
+}
+
+/// Adds `page.related` to every page: up to `count` other pages that share
+/// the most tags and taxonomy terms with it, newest posts first on ties.
+fn addRelated(arena: Allocator, pages: []Page, names: []const []const u8, count: usize) Allocator.Error!void {
+    // Every page's terms as "field\x00slug", and the pages of each term.
+    const keys = try arena.alloc([]const []const u8, pages.len);
+    var by_term: std.StringHashMapUnmanaged(std.ArrayList(usize)) = .empty;
+    for (pages, keys, 0..) |*p, *k, i| {
+        var list: std.ArrayList([]const u8) = .empty;
+        const fields = try std.mem.concat(arena, []const u8, &.{ &.{"tags"}, names });
+        for (fields) |field| {
+            for (try pageTerms(arena, p, field)) |term| {
+                const key = try std.mem.concat(arena, u8, &.{ field, "\x00", try markdown.slugify(arena, term) });
+                try list.append(arena, key);
+                const gop = try by_term.getOrPut(arena, key);
+                if (!gop.found_existing) gop.value_ptr.* = .empty;
+                if (gop.value_ptr.items.len == 0 or gop.value_ptr.items[gop.value_ptr.items.len - 1] != i) try gop.value_ptr.append(arena, i);
+            }
+        }
+        k.* = list.items;
+    }
+    // Related pages appear as they were before getting their own lists.
+    const plain = try arena.alloc(template.Object, pages.len);
+    for (pages, plain) |p, *o| o.* = p.object;
+    const scores = try arena.alloc(u32, pages.len);
+    for (pages, keys, 0..) |*p, own, i| {
+        @memset(scores, 0);
+        for (own) |key| for (by_term.get(key).?.items) |j| {
+            if (j != i) scores[j] += 1;
+        };
+        var picked: std.ArrayList(usize) = .empty;
+        for (scores, 0..) |s, j| if (s > 0) try picked.append(arena, j);
+        // Pages are in `pageOrder` (newest posts first), so a stable sort
+        // by score keeps that order among ties.
+        std.mem.sort(usize, picked.items, scores, struct {
+            fn lt(sc: []const u32, a: usize, c: usize) bool {
+                return sc[a] > sc[c];
+            }
+        }.lt);
+        const n = @min(count, picked.items.len);
+        const related = try arena.alloc(Value, n);
+        for (related, picked.items[0..n]) |*r, j| r.* = .{ .object = plain[j] };
+        var entries: std.ArrayList(Entry) = .empty;
+        try entries.appendSlice(arena, p.object.entries);
+        try entries.append(arena, .{ .key = "related", .value = .{ .list = related } });
+        p.object = .{ .entries = entries.items };
     }
 }
 
@@ -3657,4 +3855,32 @@ test "shortcodes render templates from _includes/shortcodes" {
         .{ "_includes/shortcodes/bad.html", "\n{{ args }}" },
         .{ "a.md", "{{< bad >}}\n" },
     }, "a.md", 1, "shortcode 'bad': _includes/shortcodes/bad.html:2: cannot output an object");
+}
+
+test "taxonomies, their pages, and related pages" {
+    var t: TestSite = try .init(&.{
+        .{ "_config.yml", "taxonomies: [categories, series]\nrelated: 2\n" },
+        .{ "_layouts/term.html", "{{ page.taxonomy }}/{{ page.term }}:{% for p in page.pages %}[{{ p.title }}]{% endfor %}" },
+        .{ "_layouts/taxonomy.html", "{{ page.taxonomy }}:{% for t in page.terms %}[{{ t.name }} {{ t.count }} {{ t.url }}]{% endfor %}" },
+        .{ "_layouts/post.html", "{% for r in page.related %}<{{ r.title }}>{% endfor %}" },
+        .{ "_posts/2024-01-01-a.md", "---\ntitle: A\nlayout: post\ncategories: [Zig, Web]\ntags: [x]\n---\nA\n" },
+        .{ "_posts/2024-02-01-b.md", "---\ntitle: B\nlayout: post\ncategories: Zig\nseries: Intro\n---\nB\n" },
+        .{ "_posts/2024-03-01-c.md", "---\ntitle: C\nlayout: post\ncategories: [zig, web]\ntags: [x]\n---\nC\n" },
+        .{ "guide.md", "---\ntitle: Guide\nseries: Intro\n---\nG\n" },
+    });
+    defer t.deinit();
+    var diag: Diagnostic = .{};
+    const site = t.build(&diag) catch |err| {
+        std.debug.print("{f}\n", .{diag});
+        return err;
+    };
+    // "Zig" and "zig" are one term, named as first seen (the newest post).
+    try testing.expectEqualStrings("categories/zig:[C][B][A]", site.find("categories/zig/index.html").?.data.bytes);
+    try testing.expectEqualStrings("series/Intro:[B][Guide]", site.find("series/intro/index.html").?.data.bytes);
+    try testing.expectEqualStrings("categories:[web 2 /categories/web/][zig 3 /categories/zig/]", site.find("categories/index.html").?.data.bytes);
+    // A shares zig, web and x with C, zig with B.
+    try testing.expectEqualStrings("<C><B>", site.find("2024/01/01/a/index.html").?.data.bytes);
+
+    try expectBuildError(&.{.{ "_config.yml", "taxonomies: [tags]\n" }}, "_config.yml", 1, "'tags' is built in");
+    try expectBuildError(&.{.{ "_config.yml", "title: T\nrelated: lots\n" }}, "_config.yml", 2, "'related' must be how many");
 }

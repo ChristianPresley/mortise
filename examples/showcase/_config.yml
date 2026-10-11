@@ -14,3 +14,7 @@ icons:
   letters: M
 # Site search: an index and a Ctrl+K dialog, see docs/search.md.
 search: true
+# Extra taxonomies besides tags; each gets /NAME/ and /NAME/TERM/ pages.
+taxonomies: [categories]
+# page.related lists up to this many posts sharing tags or categories.
+related: 3
