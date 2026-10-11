@@ -208,6 +208,10 @@ job:
 
 ## Site pipeline
 
+- `gzip: true` writes gzip only (no Brotli or Zstandard), and only in
+  `build`; `serve` does not compress responses. Compression uses the
+  standard library's deflate at its best level, which is close to but a
+  little larger than zlib's `-9` or zopfli.
 - Posts must be Markdown files in `_posts/` named `YYYY-MM-DD-slug.md`,
   even when frontmatter sets a `date` that overrides the file name's.
 - Frontmatter dates are calendar dates. A time after the date is accepted

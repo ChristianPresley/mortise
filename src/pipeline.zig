@@ -24,6 +24,7 @@ const markdown = @import("markdown.zig");
 const frontmatter = @import("frontmatter.zig");
 const template = @import("template.zig");
 const feeds = @import("feeds.zig");
+const gzip = @import("gzip.zig");
 const data_files = @import("data.zig");
 const openapi = @import("openapi.zig");
 const themes = @import("themes.zig");
@@ -102,6 +103,9 @@ pub const Site = struct {
     skipped: Skipped = .{},
     /// Problems that do not stop the build, such as low color contrast.
     warnings: []const Diagnostic = &.{},
+    /// `gzip: true` in the config: writing the site also writes `.gz`
+    /// copies of text files (see gzip.zig).
+    gzip: bool = false,
     /// What `rebuild` needs to update this site. An incrementally rebuilt
     /// site shares memory with the site it came from, so that site's
     /// arena must outlive this one.
@@ -1126,6 +1130,7 @@ fn finish(b: *Builder, config_fields: frontmatter.Map, pages: []Page, statics: [
         .skipped = b.skipped,
         .state = .{ .skipped = b.skipped, .config_fields = config_fields, .baseurl = b.baseurl, .site_url = b.site_url, .options = b.options, .data = b.data, .history = b.history, .pages = pages, .statics = statics },
         .warnings = b.warnings.items,
+        .gzip = if (config_fields.get("gzip")) |v| (if (v == .boolean) v.boolean else return b.fail(config_path, fieldLine(try b.read(config_path), "gzip"), "'gzip' must be true or false", .{})) else false,
     };
 }
 
@@ -2016,7 +2021,8 @@ fn loadInclude(ctx: *anyopaque, name: []const u8, diag: *template.Diagnostic) te
     return tpl;
 }
 
-/// Writes every output into `out`, copying static files from `src`.
+/// Writes every output into `out`, copying static files from `src`, and
+/// `.gz` copies of text files when the site asks for them.
 pub fn writeSite(site: Site, src: SiteDir, out: SiteDir, diag: *Diagnostic) error{BuildFailed}!void {
     for (site.outputs) |o| {
         const result = switch (o.data) {
@@ -2027,7 +2033,28 @@ pub fn writeSite(site: Site, src: SiteDir, out: SiteDir, diag: *Diagnostic) erro
             diag.* = .{ .path = o.path, .message = @errorName(err) };
             return error.BuildFailed;
         };
+        if (site.gzip) writeGzip(o, src, out) catch |err| {
+            diag.* = .{ .path = o.path, .message = @errorName(err) };
+            return error.BuildFailed;
+        };
     }
+}
+
+/// Writes `PATH.gz` for a text output over the size threshold.
+fn writeGzip(o: Output, src: SiteDir, out: SiteDir) !void {
+    // Outputs are written one after another, so a scratch arena per file
+    // keeps memory flat.
+    var arena_state: std.heap.ArenaAllocator = .init(std.heap.smp_allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    if (!gzip.wanted(o.path, gzip.min_size)) return;
+    const data = switch (o.data) {
+        .bytes => |bytes| bytes,
+        .copy => try src.readFile(arena, o.source),
+    };
+    if (!gzip.wanted(o.path, data.len)) return;
+    const gz_path = try std.mem.concat(arena, u8, &.{ o.path, ".gz" });
+    try out.writeFile(gz_path, try gzip.compress(arena, data));
 }
 
 /// Fails when two outputs differ only in letter case. They would overwrite
@@ -2982,4 +3009,29 @@ test "icons: writes a favicon, app icons and a manifest" {
     try testing.expect(std.mem.startsWith(u8, site.find("index.html").?.data.bytes, "<link rel=\"icon\" href=\"/favicon.ico\""));
 
     try expectBuildError(&.{.{ "_config.yml", "title: T\nicons:\n  colour: \"#fff\"\n" }}, "_config.yml", 2, "icons: 'colour' is not an icons setting");
+}
+
+test "gzip: true writes .gz copies of large text files" {
+    const big = "x " ** 600;
+    var t: TestSite = try .init(&.{
+        .{ "_config.yml", "gzip: true\n" },
+        .{ "big.md", big ++ "\n" },
+        .{ "small.md", "small\n" },
+        .{ "css/site.css", "body{}" ++ " " ** 2000 },
+        .{ "img.png", big },
+    });
+    defer t.deinit();
+    const src = SiteDir.borrow(testing.io, t.tmp.dir);
+    var diag: Diagnostic = .{};
+    const site = try t.build(&diag);
+    try testing.expect(site.gzip);
+    try writeOutputDir(site, src, &diag);
+    const a = t.arena.allocator();
+    const gz = try src.readFile(a, "_site/big/index.html.gz");
+    try testing.expectEqualSlices(u8, &.{ 0x1f, 0x8b }, gz[0..2]);
+    _ = try src.readFile(a, "_site/css/site.css.gz");
+    try testing.expectError(error.FileNotFound, src.readFile(a, "_site/small/index.html.gz"));
+    try testing.expectError(error.FileNotFound, src.readFile(a, "_site/img.png.gz"));
+
+    try expectBuildError(&.{.{ "_config.yml", "title: T\ngzip: yes\n" }}, "_config.yml", 2, "'gzip' must be true or false");
 }

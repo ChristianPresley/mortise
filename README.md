@@ -68,7 +68,11 @@ page or post with `expires: YYYY-MM-DD` is left out from that date on.
 `build` and `serve` report what they skipped, as in
 `Skipped 1 draft, 2 future posts, 1 expired page`.
 
-`build` deletes and rewrites `SITE_DIR/_site` on every run.
+`build` deletes and rewrites `SITE_DIR/_site` on every run. With
+`gzip: true` in `_config.yml` it also writes a `NAME.gz` next to every
+HTML, CSS, JavaScript, JSON, XML, SVG and text file over 1 KiB, for
+servers that send precompressed files (nginx `gzip_static on`, Caddy
+`precompressed gzip`). The files are byte-for-byte reproducible.
 
 `serve` builds the site into memory, serves it on `127.0.0.1` only, and
 watches the source tree. After each save it rebuilds and the open browser
