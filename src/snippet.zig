@@ -145,10 +145,10 @@ pub fn language(path: []const u8) []const u8 {
     const dot = std.mem.lastIndexOfScalar(u8, base, '.') orelse return "";
     const ext = base[dot + 1 ..];
     const map = [_][2][]const u8{
-        .{ "h", "c" },          .{ "hpp", "cpp" },   .{ "cc", "cpp" },       .{ "rs", "rust" },
-        .{ "py", "python" },    .{ "mjs", "js" },    .{ "cjs", "js" },       .{ "yml", "yaml" },
-        .{ "md", "markdown" },  .{ "htm", "html" },  .{ "bash", "sh" },      .{ "zsh", "sh" },
-        .{ "zon", "zig" },      .{ "tsx", "ts" },    .{ "jsx", "js" },
+        .{ "h", "c" },         .{ "hpp", "cpp" },  .{ "cc", "cpp" },  .{ "rs", "rust" },
+        .{ "py", "python" },   .{ "mjs", "js" },   .{ "cjs", "js" },  .{ "yml", "yaml" },
+        .{ "md", "markdown" }, .{ "htm", "html" }, .{ "bash", "sh" }, .{ "zsh", "sh" },
+        .{ "zon", "zig" },     .{ "tsx", "ts" },   .{ "jsx", "js" },
     };
     for (map) |m| if (std.mem.eql(u8, ext, m[0])) return m[1];
     return ext;
