@@ -97,3 +97,34 @@ between them as `content`, so shortcodes can nest.
 This box is the `aside` shortcode. Its body is **Markdown**, rendered
 before the template wraps it.
 {{< /aside >}}
+
+## Charts
+
+A fenced block with the language `chart` becomes an SVG chart at build
+time, with a hidden table of the same numbers for screen readers.
+
+```chart
+type: bar
+title: Save to reload, by site size
+labels: [100 pages, "1,000 pages", "10,000 pages"]
+series:
+  Linux: [4, 11, 96]
+  Windows: [6, 16, 140]
+suffix: " ms"
+```
+
+```chart
+type: line
+title: Pages built per second
+labels: [1, 2, 4, 8, 16]
+series:
+  threads: [900, 1700, 3200, 5600, 7400]
+```
+
+```chart
+type: donut
+title: Where a rebuild spends its time
+labels: [Markdown, Templates, Writing, Other]
+values: [38, 31, 22, 9]
+suffix: "%"
+```

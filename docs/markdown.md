@@ -90,6 +90,9 @@ with the language `diff`, the block is wrapped in a `mt-code` container
 and each line in a `mt-line` span; see [components](components.md#code-block-options).
 Unknown options are ignored.
 
+A block whose language is `chart` is not code: it is drawn as a chart (see
+[components](components.md#charts)).
+
 ````markdown
 ```zig
 const x = 1;

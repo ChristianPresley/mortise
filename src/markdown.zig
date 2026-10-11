@@ -9,6 +9,7 @@ const Allocator = std.mem.Allocator;
 const Writer = std.Io.Writer;
 const highlight = @import("highlight.zig");
 const snippet = @import("snippet.zig");
+const chart = @import("chart.zig");
 
 pub const Error = Allocator.Error || Writer.Error;
 
@@ -35,6 +36,8 @@ pub const Document = struct {
     /// The first `<<< path` include or `{{< shortcode >}}` that failed, or
     /// null.
     include_error: ?IncludeError = null,
+    /// The first `chart` block that could not be drawn, if any.
+    chart_error: ?chart.Diagnostic = null,
 };
 
 pub const IncludeError = struct {
@@ -117,7 +120,7 @@ pub fn toDocumentWith(arena: Allocator, src: []const u8, options: Options) Alloc
     const html = try aw.toOwnedSlice();
     // Every component's markup carries an mt- class.
     const uses = std.mem.indexOf(u8, html, "class=\"mt-") != null;
-    return .{ .html = html, .headings = r.headings.items, .uses_components = uses, .include_error = r.include_error };
+    return .{ .html = html, .headings = r.headings.items, .uses_components = uses, .include_error = r.include_error, .chart_error = r.chart_error };
 }
 
 /// Renders `src` to HTML on `w`. Scratch memory comes from `arena`.
@@ -1023,6 +1026,8 @@ const Renderer = struct {
     tab_groups: usize = 0,
     /// Rendered footnote content by label.
     footnotes: std.StringHashMapUnmanaged([]const u8) = .empty,
+    /// Set by the first `chart` block with a bad spec.
+    chart_error: ?chart.Diagnostic = null,
 
     /// A unique id for a heading whose plain text is `text` (see
     /// `slugify`). Repeats get `-1`, `-2`, and so on.
@@ -1288,7 +1293,16 @@ fn renderBlock(r: *Renderer, b: Block, tight: bool, w: *Writer) Error!void {
                 try w.writeAll("</p>\n");
             }
         },
-        .code => |c| try renderCode(arena, c, r.options.copy_buttons, w),
+        .code => |c| if (std.mem.eql(u8, c.info, "chart")) {
+            var diag: chart.Diagnostic = .{};
+            chart.render(arena, c.text, w, &diag) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                error.WriteFailed => return error.WriteFailed,
+                error.InvalidChart => if (r.chart_error == null) {
+                    r.chart_error = diag;
+                },
+            };
+        } else try renderCode(arena, c, r.options.copy_buttons, w),
         .include => |text| {
             const directive = try std.mem.concat(arena, u8, &.{ "<<< ", text });
             const inc = r.options.includer orelse {

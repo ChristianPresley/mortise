@@ -1537,6 +1537,9 @@ fn loadPage(b: *Builder, path: []const u8, is_post: bool) Error!?Page {
         page.uses_components = rendered.uses_components;
         page.included_files = inc.files.items;
         if (std.mem.indexOf(u8, rendered.html, markdown.wikilink_prefix) != null) page.wikilink_html = rendered.html;
+        if (rendered.chart_error) |ce| {
+            return b.fail(path, 0, "chart, line {d} of its block: {s}", .{ ce.line, ce.message });
+        }
     }
 
     if (is_post) {
@@ -4300,4 +4303,17 @@ test "wikilinks resolve by title, path and file name, with backlinks" {
         .{ "b/notes.md", "---\ntitle: B\n---\n" },
         .{ "c.md", "[[notes]]\n" },
     }, "c.md", 0, "wikilink [[notes]] could mean any of a/notes.md, b/notes.md");
+}
+
+test "chart blocks become SVG, and bad specs fail the build" {
+    var t: TestSite = try .init(&.{
+        .{ "a.md", "```chart\nvalues: [1, 2]\n```\n" },
+    });
+    defer t.deinit();
+    const html = try t.output("a/index.html");
+    try testing.expect(std.mem.startsWith(u8, html, "<figure class=\"mt-chart mt-chart-bar\">"));
+    // Charts use mortise.css.
+    var diag: Diagnostic = .{};
+    try testing.expect((try t.build(&diag)).find("mortise.css") != null);
+    try expectBuildError(&.{.{ "a.md", "Intro\n\n```chart\nvalues: [1]\nstacked: yes\n```\n" }}, "a.md", 0, "chart, line 2 of its block: unknown chart setting 'stacked'");
 }

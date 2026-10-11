@@ -412,3 +412,28 @@ pre:has(> .mt-copy) { position: relative; }
 pre:hover > .mt-copy, .mt-copy:focus-visible { opacity: 1; }
 .mt-copy:hover { color: inherit; }
 @media (hover: none) { .mt-copy { opacity: 1; } }
+
+/* Charts from ```chart blocks: an SVG colored only through these classes,
+   and a table of the same numbers for screen readers. Override
+   --mt-chart-1 to --mt-chart-6 to recolor the series. */
+.mt-chart { --mt-chart-1: var(--mt-accent); --mt-chart-2: #e8833a; --mt-chart-3: #3fb27f; --mt-chart-4: #b45dd6; --mt-chart-5: #e0b531; --mt-chart-6: #e05e6d; margin: 1.5rem 0; }
+.mt-chart svg { display: block; width: 100%; height: auto; overflow: visible; font: 12px system-ui, sans-serif; fill: currentColor; }
+.mt-chart figcaption { margin-top: .4rem; color: var(--mt-muted); font-size: .9rem; text-align: center; }
+.mt-chart-grid line { stroke: currentColor; stroke-opacity: .12; }
+.mt-chart-grid line.mt-chart-zero { stroke-opacity: .45; }
+.mt-chart-grid text, .mt-chart-labels text { fill: currentColor; fill-opacity: .7; }
+.mt-chart-legend text { fill: currentColor; }
+.mt-chart-share { fill-opacity: .6; }
+.mt-chart-s1 { fill: var(--mt-chart-1); stroke: var(--mt-chart-1); }
+.mt-chart-s2 { fill: var(--mt-chart-2); stroke: var(--mt-chart-2); }
+.mt-chart-s3 { fill: var(--mt-chart-3); stroke: var(--mt-chart-3); }
+.mt-chart-s4 { fill: var(--mt-chart-4); stroke: var(--mt-chart-4); }
+.mt-chart-s5 { fill: var(--mt-chart-5); stroke: var(--mt-chart-5); }
+.mt-chart-s6 { fill: var(--mt-chart-6); stroke: var(--mt-chart-6); }
+.mt-chart rect, .mt-chart path, .mt-chart circle { stroke-width: 0; }
+.mt-chart polyline { fill: none; stroke-width: 2.5; stroke-linejoin: round; stroke-linecap: round; }
+.mt-chart circle { stroke-width: 2; fill: var(--mt-chart-bg, Canvas); }
+.mt-chart .mt-chart-fill { fill-opacity: .18; stroke-width: 0; }
+.mt-chart-pie path, .mt-chart-donut path { stroke: var(--mt-chart-bg, Canvas); stroke-width: 2; }
+.mt-chart rect:hover, .mt-chart path:hover { fill-opacity: .8; }
+.mt-chart-data { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }

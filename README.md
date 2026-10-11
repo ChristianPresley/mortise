@@ -183,6 +183,9 @@ my-site/
   [shortcodes](docs/components.md#shortcodes): templates in
   `_includes/shortcodes/` that Markdown calls as
   `{{< name key="value" >}}`, with Markdown bodies and nesting.
+- [Charts](docs/components.md#charts): a fenced `chart` block with
+  `labels` and `series` becomes a bar, line, area, pie or donut chart as
+  inline SVG at build time, with a data table for screen readers.
 - Fenced code in Zig, C/C++, Rust, Go, JavaScript/TypeScript, Python,
   shell, JSON, and YAML is syntax-highlighted at build time with
   `hl-*` classes for your stylesheet; see the
@@ -273,6 +276,7 @@ See the [Markdown subset](docs/markdown.md),
 | `src/SiteDir.zig`     | Filesystem access by site path through `std.Io`   |
 | `src/BuildArena.zig`  | Arena-per-build allocation policy                 |
 | `src/markdown.zig`    | Markdown subset to HTML                           |
+| `src/chart.zig`       | SVG charts from ```chart blocks                   |
 | `src/frontmatter.zig` | Restricted YAML frontmatter                       |
 | `src/template.zig`    | Template engine                                   |
 | `src/pipeline.zig`    | Source tree to output files                       |

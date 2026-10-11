@@ -184,6 +184,51 @@ Feeds leave both out.
 
 The text is escaped and may not contain `]`.
 
+## Charts
+
+A fenced code block with the language `chart` is drawn as an SVG chart
+during the build. The block holds settings in the
+[frontmatter format](frontmatter.md):
+
+````markdown
+```chart
+type: bar
+title: Save to reload, by site size
+labels: [100 pages, "1,000 pages", "10,000 pages"]
+series:
+  Linux: [4, 11, 96]
+  Windows: [6, 16, 140]
+suffix: " ms"
+```
+````
+
+| Setting            | Meaning                                                   |
+| ------------------ | --------------------------------------------------------- |
+| `type`             | `bar` (default, grouped), `line`, `area`, `pie` or `donut` |
+| `title`            | The caption, and the chart's accessible name              |
+| `labels`           | One label per value: the x axis, or the slices            |
+| `series`           | Named lists of numbers, up to six; shown with a legend    |
+| `values`           | One unnamed list of numbers, instead of `series`          |
+| `prefix`, `suffix` | Text around every number, such as `$` or `" ms"`          |
+| `min`, `max`       | The value axis's range; by default it fits the data and includes 0 for bars and areas |
+| `height`           | The drawing's height in pixels, 120 to 1200 (default 320); it is 640 wide and scales to the page |
+
+Pie and donut charts show one series of non-negative numbers, with each
+slice's share in the legend. Value axes use round steps (1, 2 or 5 times a
+power of ten) and shorten large numbers to `k`, `M` and `G`. Hovering a
+bar, point or slice shows its exact value.
+
+The output is a `<figure class="mt-chart mt-chart-TYPE">` with the SVG, a
+`<figcaption>` when there is a title, and a `<table class="mt-chart-data">`
+of the same numbers that is hidden from sight but read by screen readers.
+The SVG has no colors of its own: text follows the page's text color and
+series use the classes `mt-chart-s1` to `mt-chart-s6`, colored by the
+variables `--mt-chart-1` to `--mt-chart-6` (the first is `--mt-accent`).
+
+A bad setting, a label count that does not match the values, or a value
+that is not a number fails the build with the file and the line within
+the block.
+
 ## Theming
 
 `mortise.css` mixes its neutral colors from the surrounding text color, so

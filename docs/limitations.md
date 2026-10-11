@@ -230,6 +230,19 @@ job:
 - The theme gallery's previews are scaled-down frames of the real pages,
   so it loads every theme's home page at once.
 
+## Charts
+
+- Charts are bar (grouped, not stacked), line, area, pie and donut only,
+  with at most six series. There are no logarithmic or time axes; labels are
+  evenly spaced text.
+- Label and legend sizes are estimated, since SVG text cannot be measured at
+  build time: long legends can run past the right edge, and crowded x-axis
+  labels are thinned to every second or third one.
+- Errors name the line within the chart block, not within the Markdown
+  file.
+- Hovering shows values through SVG `<title>` tooltips, which touch screens
+  do not show.
+
 ## Syntax highlighting
 
 - Highlighting is lexical: keywords, literals, strings, numbers, comments,
