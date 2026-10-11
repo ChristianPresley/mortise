@@ -281,6 +281,10 @@ my-site/
   one file. Each Markdown page also gets a plain Markdown twin at its URL
   plus `index.html.md` (`/docs/install/index.html.md`). `llms: false` in a
   page's frontmatter leaves it out.
+- [Several languages](docs/i18n.md): with `languages:` in `_config.yml`,
+  `about.fr.md` or `fr/about.md` publishes at `/fr/about/`; templates get
+  `page.translations`, `site.languages`, per-language `site.posts` and
+  `site.nav`, `site.i18n` strings from `_data/i18n/`, and a feed per language.
 - Templates see `site` (config values plus `site.posts`, newest first, and
   `site.pages`), `page` (frontmatter plus `url`, `path`, and for posts `date`
   and `slug`), and in layouts `content`.
@@ -303,6 +307,7 @@ See the [Markdown subset](docs/markdown.md),
 | `src/template.zig`    | Template engine                                   |
 | `src/pipeline.zig`    | Source tree to output files                       |
 | `src/llms.zig`        | llms.txt, llms-full.txt and Markdown twins        |
+| `src/i18n.zig`        | Languages of pages and translations               |
 | `src/watch.zig`       | Native file watchers                              |
 | `src/server.zig`      | Dev server and Server-Sent Events live reload     |
 | `src/check.zig`       | `mortise check` link and anchor checker           |

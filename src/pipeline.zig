@@ -28,6 +28,8 @@ const gzip = @import("gzip.zig");
 const search = @import("search.zig");
 const minify = @import("minify.zig");
 const llms = @import("llms.zig");
+const i18n = @import("i18n.zig");
+const Language = i18n.Language;
 const data_files = @import("data.zig");
 const schema = @import("schema.zig");
 const openapi = @import("openapi.zig");
@@ -217,6 +219,11 @@ pub const Page = struct {
     /// URLs of the site's pages this page's Markdown links to, for
     /// backlinks.
     link_targets: []const []const u8 = &.{},
+    /// Index of the page's language in `Builder.languages` (0, the default
+    /// language, on one-language sites).
+    lang: u8 = 0,
+    /// What the page's translations share: its path without the language.
+    translation_key: []const u8 = "",
     /// For an OpenAPI page, the rendered reference (for `site.apis`).
     api: ?openapi.Rendered = null,
     /// The page's own fields, without navigation; computed once per load.
@@ -297,6 +304,9 @@ const Builder = struct {
     data: Value = .{ .object = .{} },
     /// Frontmatter schemas from `_schemas/`, by name.
     schemas: std.StringArrayHashMapUnmanaged(schema.Schema) = .empty,
+    /// The site's languages from `languages:`, default first; empty for a
+    /// one-language site.
+    languages: []const Language = &.{},
     /// The `paginator` variable while rendering one page of a paginated
     /// page, or null.
     paginator: ?template.Object = null,
@@ -429,6 +439,7 @@ pub fn buildWith(arena: Allocator, src: SiteDir, options: Options, diag: *Diagno
     b.future = try showFuture(&b, config_fields);
     b.history = try loadHistory(&b, config_fields, listing.files);
     b.site_config = try convert(arena, .{ .map = config_fields });
+    b.languages = try loadLanguages(&b, config_fields);
     b.data = try loadData(&b, listing.files);
     b.schemas = try loadSchemas(&b, listing.files);
 
@@ -481,6 +492,7 @@ pub fn rebuild(arena: Allocator, src: SiteDir, prev: *const Site, changed: []con
     b.markdown_options = try markdownOptions(&b, st.config_fields);
     b.future = try showFuture(&b, st.config_fields);
     b.site_config = try convert(arena, .{ .map = st.config_fields });
+    b.languages = try loadLanguages(&b, st.config_fields);
 
     var dirty_templates: std.ArrayList([]const u8) = .empty;
     var dirty_pages: std.ArrayList(usize) = .empty;
@@ -643,6 +655,36 @@ fn applySchema(b: *Builder, path: []const u8, data: []const u8, is_post: bool, f
     fields.* = out;
 }
 
+/// `languages:` from the config, with `default_language:` (or the first one)
+/// moved to the front.
+fn loadLanguages(b: *Builder, config_fields: frontmatter.Map) Error![]const Language {
+    const v = config_fields.get("languages") orelse {
+        if (config_fields.get("default_language") != null) {
+            return b.fail(config_path, fieldLine(try b.read(config_path), "default_language"), "'default_language' needs 'languages'", .{});
+        }
+        return &.{};
+    };
+    const line = fieldLine(try b.read(config_path), "languages");
+    if (v != .map or v.map.entries.len == 0) return b.fail(config_path, line, "'languages' must map codes to names, such as en: English", .{});
+    const out = try b.arena.alloc(Language, v.map.entries.len);
+    for (v.map.entries, out) |e, *l| {
+        if (!i18n.validCode(e.key)) return b.fail(config_path, line, "'{s}' is not a language code; use lowercase letters, digits and '-', such as en or pt-br", .{e.key});
+        if (e.value != .string) return b.fail(config_path, line, "language '{s}' needs a name, such as {s}: English", .{ e.key, e.key });
+        l.* = .{ .code = e.key, .name = e.value.string };
+    }
+    if (config_fields.get("default_language")) |d| {
+        const dline = fieldLine(try b.read(config_path), "default_language");
+        if (d != .string) return b.fail(config_path, dline, "'default_language' must be one of the codes in 'languages'", .{});
+        const i = for (out, 0..) |l, i| {
+            if (std.mem.eql(u8, l.code, d.string)) break i;
+        } else return b.fail(config_path, dline, "'default_language' must be one of the codes in 'languages'", .{});
+        // The default goes first; the others keep their order.
+        std.mem.rotate(Language, out[0 .. i + 1], i);
+    }
+    if (out.len > 255) return b.fail(config_path, line, "too many languages", .{});
+    return out;
+}
+
 /// Loads every data file into the value of `site.data`.
 fn loadData(b: *Builder, files: []const []const u8) Error!Value {
     var tree: data_files.Tree = .{ .arena = b.arena };
@@ -783,6 +825,52 @@ fn addLlms(b: *Builder, outputs: *std.ArrayList(Output), config_fields: frontmat
     }
     if (!hasOutput(outputs.items, llms.full_path)) {
         try outputs.append(arena, .{ .path = llms.full_path, .source = config_path, .data = .{ .bytes = try llms.full(arena, site_url, list.items) } });
+    }
+}
+
+/// `site.languages`: each language's `{code, name, url}`, the URL being its
+/// home page.
+fn languageList(arena: Allocator, langs: []const Language, baseurl: []const u8) Allocator.Error!Value {
+    const out = try arena.alloc(Value, langs.len);
+    for (langs, out, 0..) |l, *o, i| {
+        const e = try arena.alloc(Entry, 3);
+        e[0] = .{ .key = "code", .value = .{ .string = l.code } };
+        e[1] = .{ .key = "name", .value = .{ .string = l.name } };
+        e[2] = .{ .key = "url", .value = .{ .string = if (i == 0) try std.fmt.allocPrint(arena, "{s}/", .{baseurl}) else try std.fmt.allocPrint(arena, "{s}/{s}/", .{ baseurl, l.code }) } };
+        o.* = .{ .object = .{ .entries = e } };
+    }
+    return .{ .list = out };
+}
+
+/// Adds `page.lang` (the language's code) and `page.translations` to every
+/// page: the same page in the other languages, each `{code, name, url}`,
+/// in the order of `languages:`.
+fn addTranslations(arena: Allocator, pages: []Page, langs: []const Language) Allocator.Error!void {
+    var by_key: std.StringHashMapUnmanaged(std.ArrayList(usize)) = .empty;
+    for (pages, 0..) |p, i| {
+        const gop = try by_key.getOrPut(arena, p.translation_key);
+        if (!gop.found_existing) gop.value_ptr.* = .empty;
+        try gop.value_ptr.append(arena, i);
+    }
+    for (pages, 0..) |*p, i| {
+        var list: std.ArrayList(Value) = .empty;
+        for (langs, 0..) |l, li| {
+            if (li == p.lang) continue;
+            for (by_key.get(p.translation_key).?.items) |j| {
+                if (j == i or pages[j].lang != li) continue;
+                const e = try arena.alloc(Entry, 3);
+                e[0] = .{ .key = "code", .value = .{ .string = l.code } };
+                e[1] = .{ .key = "name", .value = .{ .string = l.name } };
+                e[2] = .{ .key = "url", .value = .{ .string = pages[j].url } };
+                try list.append(arena, .{ .object = .{ .entries = e } });
+                break;
+            }
+        }
+        var entries: std.ArrayList(Entry) = .empty;
+        try entries.appendSlice(arena, p.object.entries);
+        try entries.append(arena, .{ .key = "lang", .value = .{ .string = langs[p.lang].code } });
+        try entries.append(arena, .{ .key = "translations", .value = .{ .list = list.items } });
+        p.object = .{ .entries = entries.items };
     }
 }
 
@@ -1219,7 +1307,7 @@ fn appendRendered(b: *Builder, outputs: *std.ArrayList(Output), source: []const 
 
 /// Adds the Atom feed and the sitemap, unless the config turns them off or
 /// the site already has a file at that path.
-fn addGenerated(b: *Builder, outputs: *std.ArrayList(Output), config_fields: frontmatter.Map, pages: []const Page, url: []const u8) Error!void {
+fn addGenerated(b: *Builder, outputs: *std.ArrayList(Output), config_fields: frontmatter.Map, pages: []const Page, url: []const u8, langs: []const Language) Error!void {
     const arena = b.arena;
     const title = stringField(config_fields, "title") orelse "";
     const site: feeds.Site = .{
@@ -1228,7 +1316,9 @@ fn addGenerated(b: *Builder, outputs: *std.ArrayList(Output), config_fields: fro
         .title = title,
         .author = stringField(config_fields, "author") orelse title,
     };
-    var posts: std.ArrayList(feeds.Entry) = .empty;
+    // Each language's posts, newest first.
+    const posts = try arena.alloc(std.ArrayList(feeds.Entry), langs.len);
+    @memset(posts, .empty);
     var listed: std.ArrayList(feeds.Entry) = .empty;
     for (pages) |p| {
         const entry: feeds.Entry = .{
@@ -1240,7 +1330,7 @@ fn addGenerated(b: *Builder, outputs: *std.ArrayList(Output), config_fields: fro
         if (p.is_post) {
             var feed_entry = entry;
             feed_entry.html = try withoutPageControls(arena, entry.html);
-            try posts.append(arena, feed_entry);
+            try posts[p.lang].append(arena, feed_entry);
         }
         const opted_out = if (p.fields.get("sitemap")) |v| v == .boolean and !v.boolean else false;
         if (!opted_out and !std.mem.eql(u8, p.out_path, "404.html")) {
@@ -1250,12 +1340,24 @@ fn addGenerated(b: *Builder, outputs: *std.ArrayList(Output), config_fields: fro
             try listed.append(arena, listed_entry);
         }
     }
-    if (try enabled(b, config_fields, "feed") and posts.items.len > 0 and !hasOutput(outputs.items, feeds.feed_path)) {
-        try outputs.append(arena, .{ .path = feeds.feed_path, .source = config_path, .data = .{ .bytes = try feeds.atom(arena, site, posts.items) } });
-    }
-    if (try optIn(b, config_fields, "json_feed") and posts.items.len > 0 and !hasOutput(outputs.items, feeds.json_feed_path)) {
-        const description = stringField(config_fields, "description") orelse "";
-        try outputs.append(arena, .{ .path = feeds.json_feed_path, .source = config_path, .data = .{ .bytes = try feeds.jsonFeed(arena, site, description, posts.items) } });
+    // A feed per language, of its own posts: `feed.xml`, `fr/feed.xml`, and
+    // with `json_feed: true` the same as JSON: `feed.json`, `fr/feed.json`.
+    const want_json = try optIn(b, config_fields, "json_feed");
+    const description = stringField(config_fields, "description") orelse "";
+    const want_atom = try enabled(b, config_fields, "feed");
+    for (langs, posts, 0..) |lang, lang_posts, li| {
+        if (lang_posts.items.len == 0) continue;
+        var lang_site = site;
+        if (li > 0) lang_site.baseurl = try std.mem.concat(arena, u8, &.{ b.baseurl, "/", lang.code });
+        const dir = if (li == 0) "" else try std.mem.concat(arena, u8, &.{ lang.code, "/" });
+        const atom_path = try std.mem.concat(arena, u8, &.{ dir, feeds.feed_path });
+        if (want_atom and !hasOutput(outputs.items, atom_path)) {
+            try outputs.append(arena, .{ .path = atom_path, .source = config_path, .data = .{ .bytes = try feeds.atom(arena, lang_site, lang_posts.items) } });
+        }
+        const json_path = try std.mem.concat(arena, u8, &.{ dir, feeds.json_feed_path });
+        if (want_json and !hasOutput(outputs.items, json_path)) {
+            try outputs.append(arena, .{ .path = json_path, .source = config_path, .data = .{ .bytes = try feeds.jsonFeed(arena, lang_site, description, lang_posts.items) } });
+        }
     }
     const has_sitemap = try enabled(b, config_fields, "sitemap");
     if (has_sitemap and !hasOutput(outputs.items, feeds.sitemap_path)) {
@@ -1279,82 +1381,137 @@ fn finish(b: *Builder, config_fields: frontmatter.Map, pages: []Page, statics: [
         break :blk v.boolean;
     };
 
-    // Pages and posts are visible to every template through `site`.
-    var post_values: std.ArrayList(Value) = .empty;
-    var page_values: std.ArrayList(Value) = .empty;
-    var post_count: usize = 0;
+    // Pages and posts are visible to every template through `site`. On a
+    // site with several languages, each language has its own `site`, which
+    // lists only that language's pages and posts.
+    const multi = b.languages.len > 0;
+    const langs: []const Language = if (multi) b.languages else &.{.{ .code = "", .name = "" }};
     // Wikilinks name other pages, so they are resolved on every build.
     var backlinks = try links.resolve(arena, pages, b.baseurl, &b.link_error);
     if (b.link_error.message.len > 0) return b.fail(b.link_error.path, 0, "{s}", .{b.link_error.message});
     for (pages) |*p| {
         if (p.base.entries.len == 0) p.base = try pageObject(arena, p);
     }
-    try addNavigation(arena, pages);
+    // Each language's pages, in `pageOrder`, and where they are in `pages`.
+    const by_lang = try arena.alloc([]Page, langs.len);
+    const where = try arena.alloc([]usize, langs.len);
+    if (!multi) {
+        try addNavigation(arena, pages);
+        by_lang[0] = pages;
+        where[0] = &.{};
+    } else {
+        for (by_lang, where, 0..) |*subset, *idx, li| {
+            var list: std.ArrayList(Page) = .empty;
+            var at: std.ArrayList(usize) = .empty;
+            for (pages, 0..) |p, i| if (p.lang == li) {
+                try list.append(arena, p);
+                try at.append(arena, i);
+            };
+            // Previous and next stay within the language.
+            try addNavigation(arena, list.items);
+            for (list.items, at.items) |p, i| pages[i].object = p.object;
+            subset.* = list.items;
+            idx.* = at.items;
+        }
+        try addTranslations(arena, pages, langs);
+    }
     const taxonomies = try taxonomyNames(b, config_fields);
     if (config_fields.get("related")) |v| {
         if (v != .int or v.int < 1 or v.int > 50) return b.fail(config_path, fieldLine(try b.read(config_path), "related"), "'related' must be how many related pages to list, 1 to 50", .{});
         try addRelated(arena, pages, taxonomies, @intCast(v.int));
     }
     b.menus = try menuIndex(b, pages);
-    const root = try std.fmt.allocPrint(arena, "{s}/", .{b.baseurl});
+    const menu_root = try std.fmt.allocPrint(arena, "{s}/", .{b.baseurl});
     for (pages) |*p| {
         var entries: std.ArrayList(Entry) = .empty;
         try entries.appendSlice(arena, p.object.entries);
-        try entries.append(arena, .{ .key = "menus", .value = try pageMenus(arena, b.menus, p.url, root) });
+        try entries.append(arena, .{ .key = "menus", .value = try pageMenus(arena, b.menus, p.url, menu_root) });
         p.object = .{ .entries = entries.items };
     }
     try links.addBacklinks(arena, pages, &backlinks);
-    for (pages) |*p| {
-        if (p.is_post) {
-            try post_values.append(arena, .{ .object = p.object });
-            post_count += 1;
-        } else {
-            try page_values.append(arena, .{ .object = p.object });
-        }
-    }
+    // The per-language copies take the finished objects.
+    if (multi) for (by_lang, where) |subset, idx| {
+        for (subset, idx) |*p, i| p.object = pages[i].object;
+    };
 
     b.theme_chain = try themeChain(b, config_fields);
     b.token_set = try tokenSet(b, config_fields);
-    var site_entries: std.ArrayList(Entry) = .empty;
+    // The config's settings, shared by every language's `site`.
+    var config_entries: std.ArrayList(Entry) = .empty;
     // A light/dark switch, for token sets with both schemes.
     const toggle = if (b.token_set) |s| (if (s.scheme == .both) tokens.scheme_toggle_html else "") else "";
-    try site_entries.append(arena, .{ .key = "scheme_toggle", .value = .{ .html = toggle } });
+    try config_entries.append(arena, .{ .key = "scheme_toggle", .value = .{ .html = toggle } });
     for (config_fields.entries) |e| {
         if (std.mem.eql(u8, e.key, "posts") or std.mem.eql(u8, e.key, "pages") or
             std.mem.eql(u8, e.key, "data") or std.mem.eql(u8, e.key, "tags") or std.mem.eql(u8, e.key, "nav") or std.mem.eql(u8, e.key, "menus") or
-            std.mem.eql(u8, e.key, "apis"))
+            std.mem.eql(u8, e.key, "apis") or (multi and (std.mem.eql(u8, e.key, "lang") or std.mem.eql(u8, e.key, "i18n"))))
         {
             return b.fail(config_path, 0, "'{s}' is set by Mortise; use another key", .{e.key});
         }
         if (std.mem.eql(u8, e.key, "baseurl")) {
-            try site_entries.append(arena, .{ .key = e.key, .value = .{ .string = b.baseurl } });
+            try config_entries.append(arena, .{ .key = e.key, .value = .{ .string = b.baseurl } });
             continue;
         }
-        // `site.taxonomies` is the index built from this setting.
+        // `site.taxonomies` is the index built from this setting, and
+        // `site.languages` the list built from that one.
         if (std.mem.eql(u8, e.key, "taxonomies")) continue;
-        try site_entries.append(arena, .{ .key = e.key, .value = try convert(arena, e.value) });
+        if (multi and std.mem.eql(u8, e.key, "languages")) continue;
+        try config_entries.append(arena, .{ .key = e.key, .value = try convert(arena, e.value) });
     }
     // Always defined, so templates can use it in strict mode.
-    if (config_fields.get("baseurl") == null) try site_entries.append(arena, .{ .key = "baseurl", .value = .{ .string = "" } });
-    try site_entries.append(arena, .{ .key = "posts", .value = .{ .list = post_values.items } });
-    try site_entries.append(arena, .{ .key = "pages", .value = .{ .list = page_values.items } });
-    try site_entries.append(arena, .{ .key = "data", .value = b.data });
-    try site_entries.append(arena, .{ .key = "nav", .value = try navTree(arena, pages, b.baseurl) });
-    try site_entries.append(arena, .{ .key = "apis", .value = try apiIndex(arena, pages) });
-    try site_entries.append(arena, .{ .key = "menus", .value = b.menus });
+    if (config_fields.get("baseurl") == null) try config_entries.append(arena, .{ .key = "baseurl", .value = .{ .string = "" } });
+    const languages_value = if (multi) try languageList(arena, langs, b.baseurl) else Value.nil;
+
     const tag_pages = b.exists(tag_layout);
-    const tags = try tagIndex(arena, pages, if (tag_pages) b.baseurl else null);
-    try site_entries.append(arena, .{ .key = "tags", .value = tags });
     const icon_config = try iconConfig(b, config_fields);
     const icon_tags = if (icon_config) |c| try icons.tags(arena, c, b.baseurl) else "";
-    try site_entries.append(arena, .{ .key = "icon_tags", .value = .{ .html = icon_tags } });
     const has_search = if (config_fields.get("search")) |v| (if (v == .boolean) v.boolean else return b.fail(config_path, fieldLine(try b.read(config_path), "search"), "'search' must be true or false", .{})) else false;
-    try site_entries.append(arena, .{ .key = "search_box", .value = .{ .html = if (has_search) try search.box(arena, b.baseurl) else "" } });
+    const search_box: Value = .{ .html = if (has_search) try search.box(arena, b.baseurl) else "" };
     const term_pages = taxonomies.len > 0 and b.exists(term_layout);
     const taxonomy_pages = taxonomies.len > 0 and b.exists(taxonomy_layout);
     const taxonomy_index = try taxonomyIndex(arena, pages, taxonomies, if (term_pages) b.baseurl else null);
-    try site_entries.append(arena, .{ .key = "taxonomies", .value = taxonomy_index });
-    b.site = .{ .entries = site_entries.items };
+    const sites = try arena.alloc(template.Object, langs.len);
+    const lang_posts = try arena.alloc([]const Value, langs.len);
+    const lang_tags = try arena.alloc(Value, langs.len);
+    var post_count: usize = 0;
+    for (langs, by_lang, sites, lang_posts, lang_tags, 0..) |lang, subset, *site, *posts_out, *tags_out, li| {
+        var post_values: std.ArrayList(Value) = .empty;
+        var page_values: std.ArrayList(Value) = .empty;
+        for (subset) |*p| {
+            if (p.is_post) {
+                try post_values.append(arena, .{ .object = p.object });
+                post_count += 1;
+            } else {
+                try page_values.append(arena, .{ .object = p.object });
+            }
+        }
+        // The language's root: the baseurl, then `/CODE` except for the
+        // default language.
+        const root = if (li == 0) b.baseurl else try std.mem.concat(arena, u8, &.{ b.baseurl, "/", lang.code });
+        var site_entries: std.ArrayList(Entry) = .empty;
+        try site_entries.appendSlice(arena, config_entries.items);
+        try site_entries.append(arena, .{ .key = "posts", .value = .{ .list = post_values.items } });
+        try site_entries.append(arena, .{ .key = "pages", .value = .{ .list = page_values.items } });
+        try site_entries.append(arena, .{ .key = "data", .value = b.data });
+        try site_entries.append(arena, .{ .key = "nav", .value = try navTree(arena, subset, root) });
+        try site_entries.append(arena, .{ .key = "apis", .value = try apiIndex(arena, subset) });
+        try site_entries.append(arena, .{ .key = "menus", .value = b.menus });
+        tags_out.* = try tagIndex(arena, subset, if (tag_pages) root else null);
+        try site_entries.append(arena, .{ .key = "tags", .value = tags_out.* });
+        try site_entries.append(arena, .{ .key = "icon_tags", .value = .{ .html = icon_tags } });
+        try site_entries.append(arena, .{ .key = "search_box", .value = search_box });
+        try site_entries.append(arena, .{ .key = "taxonomies", .value = taxonomy_index });
+        if (multi) {
+            try site_entries.append(arena, .{ .key = "lang", .value = .{ .string = lang.code } });
+            try site_entries.append(arena, .{ .key = "languages", .value = languages_value });
+            // `_data/i18n/CODE.yml`, the language's strings for templates.
+            const strings: Value = if (b.data.object.get("i18n")) |all| (if (all == .object) all.object.get(lang.code) orelse Value{ .object = .{} } else Value{ .object = .{} }) else .{ .object = .{} };
+            try site_entries.append(arena, .{ .key = "i18n", .value = strings });
+        }
+        site.* = .{ .entries = site_entries.items };
+        posts_out.* = post_values.items;
+    }
+    b.site = sites[0];
     b.images = try imageConfig(b, config_fields);
     for (statics) |s| try b.static_outputs.put(arena, s.path, s);
 
@@ -1365,6 +1522,7 @@ fn finish(b: *Builder, config_fields: frontmatter.Map, pages: []Page, statics: [
     b.seo_config = try seoConfig(b, config_fields);
     for (pages, deps, 0..) |*p, *d, i| {
         if (render == null or render.?[i]) {
+            b.site = sites[p.lang];
             b.deps = .empty;
             b.reads_collections = false;
             b.reads_seo = false;
@@ -1372,7 +1530,7 @@ fn finish(b: *Builder, config_fields: frontmatter.Map, pages: []Page, statics: [
             b.page_variants = .empty;
             try b.addDep(p.source);
             for (p.included_files) |f| try b.addDep(f);
-            try renderPaginated(b, p, post_values.items);
+            try renderPaginated(b, p, lang_posts[p.lang]);
             p.sources = b.deps.items;
             p.reads_collections = b.reads_collections;
             p.uses_seo = b.reads_seo;
@@ -1390,7 +1548,12 @@ fn finish(b: *Builder, config_fields: frontmatter.Map, pages: []Page, statics: [
     b.page_assets = .empty;
     // Generated pages collect their images here.
     b.page_variants = .empty;
-    if (tag_pages) try addTagPages(b, &outputs, tags.list);
+    if (tag_pages) for (langs, lang_tags, sites, 0..) |lang, tags, site, li| {
+        b.site = site;
+        const dir = if (li == 0) "" else try std.mem.concat(arena, u8, &.{ lang.code, "/" });
+        try addTagPages(b, &outputs, tags.list, dir);
+    };
+    b.site = sites[0];
     try addCards(b, &outputs, pages);
     try addTaxonomyPages(b, &outputs, taxonomy_index, term_pages, taxonomy_pages);
     try addFingerprinted(b, &outputs, pages, b.page_assets.items);
@@ -1406,7 +1569,7 @@ fn finish(b: *Builder, config_fields: frontmatter.Map, pages: []Page, statics: [
             try outputs.append(arena, .{ .path = out_path, .source = s.path, .data = .{ .bytes = try schema.jsonSchema(arena, s, name) } });
         }
     }
-    if (b.site_url) |url| try addGenerated(b, &outputs, config_fields, pages, url);
+    if (b.site_url) |url| try addGenerated(b, &outputs, config_fields, pages, url, langs);
     try addImageVariants(b, &outputs, pages);
     if (try optIn(b, config_fields, "llms")) try addLlms(b, &outputs, config_fields, pages);
 
@@ -1558,8 +1721,13 @@ fn loadPage(b: *Builder, path: []const u8, is_post: bool) Error!?Page {
     }
 
     const is_markdown = std.mem.eql(u8, sitepath.extension(path), ".md");
+    // A translation's URL is worked out from its path without the language.
+    const lang = try i18n.detect(arena, b.languages, path);
+    const upath = lang.path;
     var page: Page = .{
         .source = path,
+        .lang = lang.index,
+        .translation_key = lang.key,
         .is_post = is_post,
         .is_markdown = is_markdown,
         .fields = doc.fields,
@@ -1591,7 +1759,7 @@ fn loadPage(b: *Builder, path: []const u8, is_post: bool) Error!?Page {
     }
 
     if (is_post) {
-        const base = sitepath.basename(path);
+        const base = sitepath.basename(upath);
         const name_date = if (base.len > 11) template.parseDate(base[0..10]) else null;
         if (name_date == null or base[10] != '-' or sitepath.stem(base).len <= 11) {
             return b.fail(path, 0, "post file names must look like YYYY-MM-DD-slug.md", .{});
@@ -1619,9 +1787,9 @@ fn loadPage(b: *Builder, path: []const u8, is_post: bool) Error!?Page {
         page.url = pl.string;
     } else if (is_post) {
         const d = page.date;
-        page.url = try std.fmt.allocPrint(arena, "/{s}/{s}/{s}/{s}/", .{ d[0..4], d[5..7], d[8..10], sitepath.stem(path)[11..] });
+        page.url = try std.fmt.allocPrint(arena, "/{s}/{s}/{s}/{s}/", .{ d[0..4], d[5..7], d[8..10], sitepath.stem(upath)[11..] });
     } else if (is_markdown) {
-        const stem_path = path[0 .. path.len - ".md".len];
+        const stem_path = upath[0 .. upath.len - ".md".len];
         if (std.mem.eql(u8, sitepath.basename(stem_path), "index")) {
             const dir = sitepath.dirname(stem_path);
             page.url = if (dir) |d| try std.fmt.allocPrint(arena, "/{s}/", .{d}) else "/";
@@ -1629,10 +1797,14 @@ fn loadPage(b: *Builder, path: []const u8, is_post: bool) Error!?Page {
             page.url = try std.fmt.allocPrint(arena, "/{s}/", .{stem_path});
         }
     } else {
-        page.url = if (std.mem.eql(u8, sitepath.basename(path), "index.html"))
-            (if (sitepath.dirname(path)) |d| try std.fmt.allocPrint(arena, "/{s}/", .{d}) else "/")
+        page.url = if (std.mem.eql(u8, sitepath.basename(upath), "index.html"))
+            (if (sitepath.dirname(upath)) |d| try std.fmt.allocPrint(arena, "/{s}/", .{d}) else "/")
         else
-            try std.fmt.allocPrint(arena, "/{s}", .{path});
+            try std.fmt.allocPrint(arena, "/{s}", .{upath});
+    }
+    // `about.fr.md` publishes under `/fr/`; `fr/about.md` already does.
+    if (lang.prefix and doc.fields.get("permalink") == null) {
+        page.url = try std.mem.concat(arena, u8, &.{ "/", b.languages[lang.index].code, page.url });
     }
 
     const out_raw = if (std.mem.endsWith(u8, page.url, "/"))
@@ -2260,7 +2432,7 @@ fn tagIndex(arena: Allocator, pages: []const Page, tag_pages_base: ?[]const u8) 
 
 /// Renders one page per tag with the `tag` layout, which sees `page.tag`,
 /// `page.title` (both the tag name), `page.posts`, and `page.url`.
-fn addTagPages(b: *Builder, outputs: *std.ArrayList(Output), tags: []const Value) Error!void {
+fn addTagPages(b: *Builder, outputs: *std.ArrayList(Output), tags: []const Value, dir: []const u8) Error!void {
     const arena = b.arena;
     const layout_field = try arena.dupe(frontmatter.Entry, &.{.{ .key = "layout", .value = .{ .string = "tag" } }});
     for (tags) |tag| {
@@ -2274,7 +2446,7 @@ fn addTagPages(b: *Builder, outputs: *std.ArrayList(Output), tags: []const Value
             .body = "",
             .body_line = 1,
             .url = t.get("url").?.string,
-            .out_path = try std.fmt.allocPrint(arena, "tags/{s}/index.html", .{slug}),
+            .out_path = try std.fmt.allocPrint(arena, "{s}tags/{s}/index.html", .{ dir, slug }),
             .html = "",
         };
         const entries = try arena.alloc(Entry, 4);
@@ -4391,4 +4563,38 @@ test "llms.txt, Markdown twins and the JSON feed" {
     try testing.expect(std.mem.indexOf(u8, site.find("feed.json").?.data.bytes, "\"title\": \"Hi\"") != null);
 
     try expectBuildError(&.{.{ "_config.yml", "title: T\nllms: yes\n" }}, "_config.yml", 2, "'llms' must be true or false");
+}
+
+test "languages: translations, per-language collections, feeds and strings" {
+    const layout = "{{ site.lang }}|{{ page.lang }}|{% for t in page.translations %}{{ t.code }}={{ t.url }};{% endfor %}|" ++
+        "{% for p in site.posts %}{{ p.title }},{% endfor %}|{{ site.i18n.hello }}|{% for n in site.nav %}{{ n.title }},{% endfor %}|" ++
+        "{% for l in site.languages %}{{ l.name }}@{{ l.url }};{% endfor %}";
+    var t: TestSite = try .init(&.{
+        .{ "_config.yml", "title: T\nurl: https://x.dev\nlanguages:\n  fr: Français\n  en: English\ndefault_language: en\n" },
+        .{ "_data/i18n/en.yml", "hello: Hello\n" },
+        .{ "_data/i18n/fr.yml", "hello: Bonjour\n" },
+        .{ "_layouts/l.html", layout },
+        .{ "about.md", "---\ntitle: About\nlayout: l\n---\n" },
+        .{ "about.fr.md", "---\ntitle: À propos\nlayout: l\n---\n" },
+        .{ "fr/contact.md", "---\ntitle: Contact\nlayout: l\n---\n" },
+        .{ "_posts/2024-01-01-hi.md", "---\ntitle: Hi\nlayout: l\n---\n" },
+        .{ "_posts/2024-01-01-hi.fr.md", "---\ntitle: Salut\nlayout: l\n---\n" },
+        .{ "_posts/2024-02-01-only.md", "---\ntitle: Only\nlayout: l\n---\n" },
+    });
+    defer t.deinit();
+    var diag: Diagnostic = .{};
+    const site = t.build(&diag) catch |err| {
+        std.debug.print("{f}\n", .{diag});
+        return err;
+    };
+    const langs = "English@/;Français@/fr/;";
+    try testing.expectEqualStrings("en|en|fr=/fr/about/;|Only,Hi,|Hello|About,|" ++ langs, site.find("about/index.html").?.data.bytes);
+    try testing.expectEqualStrings("fr|fr|en=/about/;|Salut,|Bonjour|Contact,À propos,|" ++ langs, site.find("fr/about/index.html").?.data.bytes);
+    try testing.expectEqualStrings("fr|fr||Salut,|Bonjour|Contact,À propos,|" ++ langs, site.find("fr/contact/index.html").?.data.bytes);
+    try testing.expect(site.find("fr/2024/01/01/hi/index.html") != null);
+    try testing.expect(std.mem.indexOf(u8, site.find("fr/feed.xml").?.data.bytes, "<title>Salut</title>") != null);
+    try testing.expect(std.mem.indexOf(u8, site.find("feed.xml").?.data.bytes, "Salut") == null);
+
+    try expectBuildError(&.{.{ "_config.yml", "languages:\n  en: English\ndefault_language: de\n" }}, "_config.yml", 3, "'default_language' must be one of");
+    try expectBuildError(&.{.{ "_config.yml", "languages:\n  EN: English\n" }}, "_config.yml", 1, "'EN' is not a language code");
 }

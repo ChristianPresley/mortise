@@ -1,0 +1,9 @@
+# A site in two languages. Build it with:
+#   zig build run -- build examples/i18n
+title: Mortise
+description: A static site generator in Zig
+url: https://example.com
+languages:
+  en: English
+  fr: Français
+default_language: en

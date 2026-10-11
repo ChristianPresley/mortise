@@ -1,0 +1,9 @@
+body { max-width: 42rem; margin: 2rem auto; padding: 0 1rem; font: 17px/1.6 system-ui, sans-serif; color: #1d1d1f; }
+a { color: #0b57d0; }
+header { display: flex; flex-wrap: wrap; gap: .5rem 1.25rem; align-items: baseline; padding-bottom: .75rem; border-bottom: 1px solid #e5e5e5; }
+header .brand { font-weight: 700; color: inherit; text-decoration: none; }
+header nav a { margin-left: .75rem; color: #6e6e73; text-decoration: none; }
+header nav a.current { color: inherit; font-weight: 600; }
+.languages { margin-left: auto; font-size: .9rem; }
+.translations { margin-top: 2rem; padding-top: 1rem; border-top: 1px solid #e5e5e5; color: #6e6e73; }
+small { color: #6e6e73; }

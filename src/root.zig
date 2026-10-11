@@ -22,6 +22,7 @@ pub const gzip = @import("gzip.zig");
 pub const search = @import("search.zig");
 pub const minify = @import("minify.zig");
 pub const llms = @import("llms.zig");
+pub const i18n = @import("i18n.zig");
 pub const data = @import("data.zig");
 pub const schema = @import("schema.zig");
 pub const openapi = @import("openapi.zig");

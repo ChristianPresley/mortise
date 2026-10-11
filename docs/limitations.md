@@ -397,6 +397,20 @@ job:
   is two steps, so a crash between them leaves no `_site` until the next
   build.
 
+## Languages
+
+- Default-language pages live at the root; there is no `/en/` prefix for
+  the default language, and a file in `en/` (the default's own code) is an
+  ordinary page at `/en/...`.
+- `site.nav` and other lists order titles by their bytes, so accented
+  titles (`À propos`) sort after unaccented ones.
+- Dates are formatted in English (`May 12, 2024`) in every language.
+- The sitemap does not mark translations with `hreflang` links; templates
+  can add `<link rel="alternate" hreflang>` from `page.translations`.
+- Pages without a translation fall back to nothing: a language switcher
+  should link to `site.languages` home pages when `page.translations` is
+  empty.
+
 ## Dev server
 
 - `serve` listens on IPv4 loopback (`127.0.0.1`) only. Browsers that resolve

@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="{{ site.lang }}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% if page.title %}{{ page.title }} | {% endif %}{{ site.title }}</title>
+{%- for t in page.translations %}
+<link rel="alternate" hreflang="{{ t.code }}" href="{{ t.url }}">
+{%- endfor %}
+<link rel="stylesheet" href="{{ site.baseurl }}/css/site.css">
+</head>
+<body>
+<header>
+<a class="brand" href="{% for l in site.languages %}{% if l.code == site.lang %}{{ l.url }}{% endif %}{% endfor %}">{{ site.title }}</a>
+<nav>
+{%- for item in site.nav %} <a href="{{ item.url }}"{% if item.url == page.url %} class="current"{% endif %}>{{ item.title }}</a>{% endfor %}
+</nav>
+<nav class="languages" aria-label="Languages">
+{%- for l in site.languages %}{% if l.code == site.lang %} <strong>{{ l.name }}</strong>{% else %} <a href="{{ l.url }}" lang="{{ l.code }}">{{ l.name }}</a>{% endif %}{% endfor %}
+</nav>
+</header>
+<main>
+{{ content }}
+{%- if page.translations %}
+<p class="translations">{{ site.i18n.read_in }}{% for t in page.translations %} <a href="{{ t.url }}" lang="{{ t.code }}">{{ t.name }}</a>{% endfor %}</p>
+{%- endif %}
+</main>
+</body>
+</html>

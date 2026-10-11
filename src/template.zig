@@ -661,7 +661,8 @@ fn parseExpr(lx: *Lexer) ParseError!Expr {
             if (path.len >= 2 and std.mem.eql(u8, path[0], "page") and
                 (std.mem.eql(u8, path[1], "breadcrumbs") or std.mem.eql(u8, path[1], "previous") or
                     std.mem.eql(u8, path[1], "next") or std.mem.eql(u8, path[1], "related") or
-                    std.mem.eql(u8, path[1], "menus") or std.mem.eql(u8, path[1], "backlinks")))
+                    std.mem.eql(u8, path[1], "menus") or std.mem.eql(u8, path[1], "backlinks") or
+                    std.mem.eql(u8, path[1], "translations")))
             {
                 lx.p.reads_collections = true;
             }

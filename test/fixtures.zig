@@ -132,3 +132,25 @@ test "markdown fixtures" {
     }
     try testing.expectEqual(@as(usize, 0), failures);
 }
+
+test "the languages example builds both languages" {
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena_state.deinit();
+    var src = try mortise.SiteDir.open(testing.io, paths.i18n_example);
+    defer src.close();
+    var diag: mortise.pipeline.Diagnostic = .{};
+    const site = mortise.pipeline.build(arena_state.allocator(), src, &diag) catch |err| {
+        std.debug.print("examples/i18n failed to build: {f}\n", .{diag});
+        return err;
+    };
+    for ([_][]const u8{ "index.html", "fr/index.html", "about/index.html", "fr/about/index.html", "fr/guide/index.html", "2024/03/01/hello/index.html", "fr/2024/03/01/hello/index.html", "feed.xml", "fr/feed.xml" }) |p| {
+        if (site.find(p) == null) {
+            std.debug.print("examples/i18n is missing {s}\n", .{p});
+            return error.TestExpectedOutput;
+        }
+    }
+    const about = site.find("about/index.html").?.data.bytes;
+    try testing.expect(std.mem.indexOf(u8, about, "<html lang=\"en\">") != null);
+    try testing.expect(std.mem.indexOf(u8, about, "<link rel=\"alternate\" hreflang=\"fr\" href=\"/fr/about/\">") != null);
+    try testing.expect(std.mem.indexOf(u8, site.find("fr/index.html").?.data.bytes, "Derniers articles") != null);
+}
