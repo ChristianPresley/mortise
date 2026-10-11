@@ -101,6 +101,17 @@ job:
 - Editing any page re-renders every page that has wikilinks or shows
   backlinks, since either can change when another page's title does.
 
+## Math
+
+- Only the TeX listed in [markdown.md](markdown.md#math) is understood: no
+  macros (`\newcommand`), no `\tag` or equation numbers, no `\color`, and no
+  chemistry or diagram packages.
+- Math errors name the file and the formula, not the line.
+- Typesetting is left to the browser's MathML support, which differs a
+  little between browsers; very old browsers show the formula's text.
+- `...` must sit inside one paragraph: a blank line inside it ends the
+  math. Use a `math` code block for long display math.
+
 ## Data files
 
 - Changing anything in `_data/` rebuilds the whole site, since any page may

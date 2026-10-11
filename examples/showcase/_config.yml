@@ -26,3 +26,6 @@ images:
 llms: true
 # feed.json beside feed.xml.
 json_feed: true
+
+# TeX between dollar signs becomes MathML.
+math: true

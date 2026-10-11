@@ -1751,6 +1751,7 @@ fn loadPage(b: *Builder, path: []const u8, is_post: bool) Error!?Page {
             const at = std.mem.indexOf(u8, doc.body, e.directive[4..]) orelse 0;
             return b.fail(path, doc.body_line + std.mem.count(u8, doc.body[0..at], "\n"), "{s}", .{e.message});
         }
+        if (rendered.math_error) |me| return b.fail(path, 0, "math '{s}': {s}", .{ std.mem.trim(u8, me.source, " \n"), me.message });
         page.html = rendered.html;
         page.toc = try tocHtml(arena, rendered.headings);
         page.uses_components = rendered.uses_components;
@@ -3025,6 +3026,7 @@ fn markdownOptions(b: *Builder, config_fields: frontmatter.Map) Error!markdown.O
     return .{
         .heading_anchors = try enabled(b, config_fields, "heading_anchors"),
         .copy_buttons = try enabled(b, config_fields, "copy_code"),
+        .math = try optIn(b, config_fields, "math"),
     };
 }
 
@@ -4721,4 +4723,18 @@ test "versioned docs: switcher links, latest links and per-version navigation" {
     try expectBuildError(&.{.{ "_config.yml", "versions: [v1, v1]\n" }}, "_config.yml", 1, "'v1' is listed twice");
     try expectBuildError(&.{.{ "_config.yml", "versions: [a/b]\n" }}, "_config.yml", 1, "plain directory name");
     try expectBuildError(&.{.{ "_config.yml", "versions: [2.0]\n" }}, "_config.yml", 1, "write version numbers in quotes");
+}
+
+test "math: true typesets dollar math, and bad math fails the build" {
+    var t: TestSite = try .init(&.{
+        .{ "_config.yml", "math: true\n" },
+        .{ "a.md", "Euler: $e^{i\\pi} + 1 = 0$\n" },
+    });
+    defer t.deinit();
+    try testing.expect(std.mem.indexOf(u8, try t.output("a/index.html"), "<msup><mi>e</mi><mrow><mi>i</mi><mi>\u{3c0}</mi></mrow></msup>") != null);
+    try expectBuildError(&.{
+        .{ "_config.yml", "math: true\n" },
+        .{ "a.md", "Oops: $\\frac{1}$\n" },
+    }, "a.md", 0, "math '\\frac{1}': missing argument");
+    try expectBuildError(&.{.{ "_config.yml", "math: yes\n" }}, "_config.yml", 1, "'math' must be true or false");
 }

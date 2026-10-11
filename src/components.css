@@ -437,3 +437,9 @@ pre:hover > .mt-copy, .mt-copy:focus-visible { opacity: 1; }
 .mt-chart-pie path, .mt-chart-donut path { stroke: var(--mt-chart-bg, Canvas); stroke-width: 2; }
 .mt-chart rect:hover, .mt-chart path:hover { fill-opacity: .8; }
 .mt-chart-data { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+
+/* Math from $...$, $$...$$ and math code blocks: MathML typeset by the
+   browser, in a font with a math table so big operators and brackets
+   stretch. */
+math { font-family: math, "Cambria Math", "STIX Two Math", "Latin Modern Math", serif; }
+math[display="block"] { margin: 1rem 0; overflow-x: auto; overflow-y: hidden; }

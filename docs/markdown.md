@@ -230,6 +230,46 @@ page becomes `<a class="wikilink wikilink-missing" title="No page named
 more than one page fails the build, listing them, so the link never points
 at the wrong one.
 
+### Math
+
+A fenced block with the language `math` holds TeX and is typeset as
+display math. With `math: true` in `_config.yml`, so is `$$...$$`, and
+`$...$` is inline math. A single `$` opens only before a non-space and
+closes only after one, and not just before a digit, so `$5 or $10`
+stays text; `\$` is always a dollar sign.
+
+```markdown
+The roots of $ax^2 + bx + c = 0$ are
+
+$$
+x = \frac{-b \pm \sqrt{b^2 - 4ac}}{2a}
+$$
+```
+
+The build turns TeX into MathML, which browsers typeset themselves: no
+scripts or web fonts. Each `<math>` element keeps the TeX as an
+annotation. `mortise.css` gives math a font with a math table
+(`font-family: math`), so large operators and brackets stretch.
+
+The supported TeX covers:
+
+| Kind          | Commands                                                         |
+| ------------- | ---------------------------------------------------------------- |
+| Structure     | `^`, `_`, `{...}`, `\frac`, `\dfrac`, `\tfrac`, `\binom`, `\sqrt`, `\sqrt[n]` |
+| Letters       | Greek (`\alpha`... `\Omega`, `\varepsilon`...), `\infty`, `\partial`, `\nabla`, `\ell`, `\hbar`, `\emptyset` |
+| Operators     | `\pm`, `\times`, `\cdot`, `\div`, `\cup`, `\cap`, `\wedge`, `\vee`, ... |
+| Relations     | `\leq`, `\geq`, `\neq`, `\approx`, `\equiv`, `\sim`, `\in`, `\subset`, `\to`, `\Rightarrow`, `\iff`, ... |
+| Big operators | `\sum`, `\prod`, `\int`, `\iint`, `\oint`, `\bigcup`, `\bigcap`, ... |
+| Functions     | `\sin`, `\cos`, `\log`, `\ln`, `\exp`, `\lim`, `\max`, `\min`, `\det`, `\operatorname{...}`, ... |
+| Text and fonts| `\text`, `\mathbf`, `\mathit`, `\mathrm`, `\mathbb`, `\mathcal`, `\mathfrak`, `\mathsf`, `\mathtt`, `\boldsymbol` |
+| Accents       | `\hat`, `\bar`, `\overline`, `\vec`, `\tilde`, `\dot`, `\ddot`, `\underline`, ... |
+| Fences        | `\left( ... \right)`, with `.`, `\{`, `\langle`, `\lfloor`, `\vert`, ... |
+| Spacing       | `\,`, `\:`, `\;`, `\!`, `\quad`, `\qquad` |
+| Environments  | `matrix`, `pmatrix`, `bmatrix`, `Bmatrix`, `vmatrix`, `Vmatrix`, `cases`, `aligned`, `array` |
+
+Anything else, such as an unknown command or an unclosed brace, fails the
+build with the file, the formula and the reason.
+
 ### Images
 
 `![alt](source "title")` renders as `<img src="..." alt="..." />`. The alt
@@ -269,5 +309,5 @@ These render as plain paragraph text:
 - Reference-style links and link reference definitions.
 - HTML entities and numeric character references (`&amp;` renders as
   `&amp;amp;`).
-- Extensions other than tables, strikethrough, highlight, wikilinks, task lists, footnotes,
+- Extensions other than tables, strikethrough, highlight, wikilinks, math, task lists, footnotes,
   definition lists, and the [components](components.md).

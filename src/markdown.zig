@@ -10,6 +10,7 @@ const Writer = std.Io.Writer;
 const highlight = @import("highlight.zig");
 const snippet = @import("snippet.zig");
 const chart = @import("chart.zig");
+const tex = @import("tex.zig");
 
 pub const Error = Allocator.Error || Writer.Error;
 
@@ -38,6 +39,8 @@ pub const Document = struct {
     include_error: ?IncludeError = null,
     /// The first `chart` block that could not be drawn, if any.
     chart_error: ?chart.Diagnostic = null,
+    /// The first math that could not be typeset: its source and why.
+    math_error: ?MathError = null,
 };
 
 pub const IncludeError = struct {
@@ -73,6 +76,8 @@ pub const Includer = struct {
     readFn: *const fn (ctx: *anyopaque, path: []const u8, why: *[]const u8) ?[]const u8,
 };
 
+pub const MathError = struct { source: []const u8, message: []const u8 };
+
 /// The stylesheet for components, written to the site as `mortise.css`.
 pub const components_css = @embedFile("components.css");
 
@@ -89,6 +94,8 @@ pub const Options = struct {
     /// Renders `{{< shortcode >}}` lines. Without one, they render as
     /// plain paragraphs.
     shortcoder: ?Shortcoder = null,
+    /// Typeset `$...$` and `$$...$$` as math. `math` code blocks always are.
+    math: bool = false,
 };
 
 /// Shows the copy buttons of `Options.copy_buttons` and copies a block's
@@ -115,12 +122,14 @@ pub fn toDocument(arena: Allocator, src: []const u8) Allocator.Error!Document {
 pub fn toDocumentWith(arena: Allocator, src: []const u8, options: Options) Allocator.Error!Document {
     var aw: Writer.Allocating = .init(arena);
     var r: Renderer = .{ .arena = arena, .options = options };
+    r.inline_opts = .{ .math = options.math, .math_error = &r.math_error };
     // An allocating writer only fails when it runs out of memory.
     renderWith(&r, src, &aw.writer) catch return error.OutOfMemory;
     const html = try aw.toOwnedSlice();
-    // Every component's markup carries an mt- class.
-    const uses = std.mem.indexOf(u8, html, "class=\"mt-") != null;
-    return .{ .html = html, .headings = r.headings.items, .uses_components = uses, .include_error = r.include_error, .chart_error = r.chart_error };
+    // Every component's markup carries an mt- class; math needs the math
+    // font rule.
+    const uses = std.mem.indexOf(u8, html, "class=\"mt-") != null or std.mem.indexOf(u8, html, "<math") != null;
+    return .{ .html = html, .headings = r.headings.items, .uses_components = uses, .include_error = r.include_error, .chart_error = r.chart_error, .math_error = r.math_error };
 }
 
 /// Renders `src` to HTML on `w`. Scratch memory comes from `arena`.
@@ -1028,6 +1037,8 @@ const Renderer = struct {
     footnotes: std.StringHashMapUnmanaged([]const u8) = .empty,
     /// Set by the first `chart` block with a bad spec.
     chart_error: ?chart.Diagnostic = null,
+    inline_opts: InlineOptions = .{},
+    math_error: ?MathError = null,
 
     /// A unique id for a heading whose plain text is `text` (see
     /// `slugify`). Repeats get `-1`, `-2`, and so on.
@@ -1081,7 +1092,7 @@ fn renderTabs(r: *Renderer, kind: ContainerKind, children: []const Block, w: *Wr
     for (tabs.items, 0..) |t, k| {
         try w.print("<input type=\"radio\" class=\"mt-tab-input\" name=\"mt-tabs-{d}\" id=\"mt-tabs-{d}-{d}\"{s}>", .{ group, group, k, if (k == 0) " checked" else "" });
         try w.print("<label class=\"mt-tab-label\" for=\"mt-tabs-{d}-{d}\">", .{ group, k });
-        try renderInline(arena, t.label, w);
+        try renderInline(r.inline_opts, arena, t.label, w);
         try w.writeAll("</label>\n");
     }
     for (tabs.items) |t| {
@@ -1175,11 +1186,11 @@ fn trackSpans(arena: Allocator, open: *std.ArrayList([]const u8), html: []const 
     }
 }
 
-fn writeCell(arena: Allocator, w: *Writer, tag: []const u8, text: []const u8, a: Align) Error!void {
+fn writeCell(opts: InlineOptions, arena: Allocator, w: *Writer, tag: []const u8, text: []const u8, a: Align) Error!void {
     try w.print("<{s}", .{tag});
     if (a != .none) try w.print(" align=\"{s}\"", .{@tagName(a)});
     try w.writeAll(">");
-    try renderInline(arena, text, w);
+    try renderInline(opts, arena, text, w);
     try w.print("</{s}>\n", .{tag});
 }
 
@@ -1203,11 +1214,11 @@ fn renderBlock(r: *Renderer, b: Block, tight: bool, w: *Writer) Error!void {
             try w.writeAll("<dl class=\"mt-dl\">\n");
             for (items) |item| {
                 try w.writeAll("<dt>");
-                try renderInline(arena, item.term, w);
+                try renderInline(r.inline_opts, arena, item.term, w);
                 try w.writeAll("</dt>\n");
                 for (item.defs) |d| {
                     try w.writeAll("<dd>");
-                    try renderInline(arena, d, w);
+                    try renderInline(r.inline_opts, arena, d, w);
                     try w.writeAll("</dd>\n");
                 }
             }
@@ -1222,7 +1233,7 @@ fn renderBlock(r: *Renderer, b: Block, tight: bool, w: *Writer) Error!void {
             .tabs, .code_group => try renderTabs(r, c.kind, c.children, w),
             .details => {
                 try w.writeAll("<details class=\"mt-details\">\n<summary>");
-                try renderInline(arena, if (c.title.len > 0) c.title else "Details", w);
+                try renderInline(r.inline_opts, arena, if (c.title.len > 0) c.title else "Details", w);
                 try w.writeAll("</summary>\n");
                 try renderBlocks(r, c.children, false, w);
                 try w.writeAll("</details>\n");
@@ -1232,7 +1243,7 @@ fn renderBlock(r: *Renderer, b: Block, tight: bool, w: *Writer) Error!void {
                 try renderBlocks(r, c.children, false, w);
                 if (c.title.len > 0) {
                     try w.writeAll("<figcaption>");
-                    try renderInline(arena, c.title, w);
+                    try renderInline(r.inline_opts, arena, c.title, w);
                     try w.writeAll("</figcaption>\n");
                 }
                 try w.writeAll("</figure>\n");
@@ -1241,7 +1252,7 @@ fn renderBlock(r: *Renderer, b: Block, tight: bool, w: *Writer) Error!void {
                 try w.print("<div class=\"mt-{s}\">\n", .{@tagName(c.kind)});
                 if (c.title.len > 0) {
                     try w.print("<p class=\"mt-{s}-title\">", .{@tagName(c.kind)});
-                    try renderInline(arena, c.title, w);
+                    try renderInline(r.inline_opts, arena, c.title, w);
                     try w.writeAll("</p>\n");
                 }
                 try renderBlocks(r, c.children, false, w);
@@ -1250,13 +1261,13 @@ fn renderBlock(r: *Renderer, b: Block, tight: bool, w: *Writer) Error!void {
         },
         .table => |t| {
             try w.writeAll("<table>\n<thead>\n<tr>\n");
-            for (t.header, t.aligns) |cell, a| try writeCell(arena, w, "th", cell, a);
+            for (t.header, t.aligns) |cell, a| try writeCell(r.inline_opts, arena, w, "th", cell, a);
             try w.writeAll("</tr>\n</thead>\n");
             if (t.rows.len > 0) {
                 try w.writeAll("<tbody>\n");
                 for (t.rows) |row| {
                     try w.writeAll("<tr>\n");
-                    for (row, t.aligns) |cell, a| try writeCell(arena, w, "td", cell, a);
+                    for (row, t.aligns) |cell, a| try writeCell(r.inline_opts, arena, w, "td", cell, a);
                     try w.writeAll("</tr>\n");
                 }
                 try w.writeAll("</tbody>\n");
@@ -1269,7 +1280,7 @@ fn renderBlock(r: *Renderer, b: Block, tight: bool, w: *Writer) Error!void {
             try w.writeAll("</blockquote>\n");
         },
         .heading => |h| {
-            const nodes = try parseInlines(arena, h.text);
+            const nodes = try parseInlines(r.inline_opts, arena, h.text);
             try w.print("<h{d} id=\"", .{h.level});
             const text = try plainText(arena, nodes);
             const id = try r.headingId(text);
@@ -1286,10 +1297,10 @@ fn renderBlock(r: *Renderer, b: Block, tight: bool, w: *Writer) Error!void {
         },
         .paragraph => |p| {
             if (tight) {
-                try renderInline(arena, p, w);
+                try renderInline(r.inline_opts, arena, p, w);
             } else {
                 try w.writeAll("<p>");
-                try renderInline(arena, p, w);
+                try renderInline(r.inline_opts, arena, p, w);
                 try w.writeAll("</p>\n");
             }
         },
@@ -1302,6 +1313,9 @@ fn renderBlock(r: *Renderer, b: Block, tight: bool, w: *Writer) Error!void {
                     r.chart_error = diag;
                 },
             };
+        } else if (std.mem.eql(u8, c.info, "math")) {
+            try writeMath(arena, c.text, true, w, &r.math_error);
+            try w.writeByte('\n');
         } else try renderCode(arena, c, r.options.copy_buttons, w),
         .include => |text| {
             const directive = try std.mem.concat(arena, u8, &.{ "<<< ", text });
@@ -1367,7 +1381,7 @@ fn renderBlock(r: *Renderer, b: Block, tight: bool, w: *Writer) Error!void {
                 } else try w.writeAll("<li>");
                 for (children, 0..) |child, idx| {
                     if (l.tight and child == .paragraph) {
-                        try renderInline(arena, if (idx == 0 and task != null) child.paragraph[4..] else child.paragraph, w);
+                        try renderInline(r.inline_opts, arena, if (idx == 0 and task != null) child.paragraph[4..] else child.paragraph, w);
                         if (idx + 1 < children.len) try w.writeAll("\n");
                     } else {
                         if (idx == 0) try w.writeAll("\n");
@@ -1431,12 +1445,61 @@ const InlineParser = struct {
     }
 };
 
-fn renderInline(arena: Allocator, s: []const u8, w: *Writer) Error!void {
-    const nodes = try parseInlines(arena, s);
+/// What inline parsing needs from the document's options.
+const InlineOptions = struct {
+    math: bool = false,
+    /// Where to record the first math error.
+    math_error: ?*?MathError = null,
+};
+
+/// Typesets TeX as MathML, or records the first failure and writes the
+/// source as code.
+fn writeMath(arena: Allocator, src: []const u8, display: bool, w: *Writer, err: ?*?MathError) Error!void {
+    var diag: tex.Diagnostic = .{};
+    tex.write(arena, src, display, w, &diag) catch |e| switch (e) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.WriteFailed => return error.WriteFailed,
+        error.InvalidMath => {
+            if (err) |slot| if (slot.* == null) {
+                slot.* = .{ .source = src, .message = diag.message };
+            };
+            try w.writeAll("<code>");
+            try escapeHtml(w, src);
+            try w.writeAll("</code>");
+        },
+    };
+}
+
+/// Inline math at `s[i..]`: `$$...$$` (display) or `$...$`. A single `$`
+/// opens only before a non-space and closes only after one, and not before
+/// a digit, so prices such as `$5 and $10` stay text.
+fn mathSpan(s: []const u8, i: usize) ?struct { src: []const u8, display: bool, end: usize } {
+    if (std.mem.startsWith(u8, s[i..], "$$")) {
+        const close = std.mem.indexOfPos(u8, s, i + 2, "$$") orelse return null;
+        if (close == i + 2) return null;
+        return .{ .src = s[i + 2 .. close], .display = true, .end = close + 2 };
+    }
+    if (i + 1 >= s.len or std.ascii.isWhitespace(s[i + 1])) return null;
+    var j = i + 1;
+    while (j < s.len) : (j += 1) {
+        if (s[j] == '\\') {
+            j += 1;
+            continue;
+        }
+        if (s[j] != '$') continue;
+        if (std.ascii.isWhitespace(s[j - 1])) return null;
+        if (j + 1 < s.len and std.ascii.isDigit(s[j + 1])) return null;
+        return .{ .src = s[i + 1 .. j], .display = false, .end = j + 1 };
+    }
+    return null;
+}
+
+fn renderInline(opts: InlineOptions, arena: Allocator, s: []const u8, w: *Writer) Error!void {
+    const nodes = try parseInlines(opts, arena, s);
     for (nodes) |n| try renderNode(n, w);
 }
 
-fn parseInlines(arena: Allocator, s: []const u8) Allocator.Error![]const Inline {
+fn parseInlines(opts: InlineOptions, arena: Allocator, s: []const u8) Allocator.Error![]const Inline {
     var p: InlineParser = .{ .arena = arena, .s = s };
     var text_start: usize = 0;
     var i: usize = 0;
@@ -1526,6 +1589,17 @@ fn parseInlines(arena: Allocator, s: []const u8) Allocator.Error![]const Inline 
                     text_start = i;
                 } else i += 1;
             },
+            '$' => {
+                const span = if (opts.math) mathSpan(s, i) else null;
+                if (span) |m| {
+                    try p.addText(s[text_start..i]);
+                    var aw: Writer.Allocating = .init(arena);
+                    writeMath(arena, m.src, m.display, &aw.writer, opts.math_error) catch return error.OutOfMemory;
+                    try p.add(.{ .raw = .{ .html = aw.written(), .plain = m.src } });
+                    i = m.end;
+                    text_start = i;
+                } else i += 1;
+            },
             '<' => {
                 if (autolink(s[i..])) |len| {
                     try p.addText(s[text_start..i]);
@@ -1596,7 +1670,7 @@ fn wikilinkHtml(arena: Allocator, wl: Wikilink) Allocator.Error!@FieldType(Inlin
     w.writeAll("\">") catch return error.OutOfMemory;
     // A written label may hold inline Markdown; a page name is text.
     if (wl.label.len > 0) {
-        renderInline(arena, label, w) catch return error.OutOfMemory;
+        renderInline(.{}, arena, label, w) catch return error.OutOfMemory;
     } else escapeHtml(w, label) catch return error.OutOfMemory;
     w.writeAll("</a>") catch return error.OutOfMemory;
     return .{ .html = try aw.toOwnedSlice(), .plain = label };
@@ -2103,6 +2177,33 @@ test "wikilinks" {
     try expectHtml("<p><a class=\"wikilink\" href=\"mortise:wikilink:Install#Linux\">Install \u{203a} Linux</a> <a class=\"wikilink\" href=\"mortise:wikilink:#Usage\">Usage</a></p>\n", "[[Install#Linux]] [[#Usage]]");
     // Not wikilinks: empty, spanning lines, or with brackets inside.
     try expectHtml("<p>[[]] [[a\nb]] [[a [b] c]]</p>\n", "[[]] [[a\nb]] [[a [b] c]]");
+}
+
+fn expectMath(expected_part: []const u8, src: []const u8, math: bool) !void {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const doc = try toDocumentWith(arena.allocator(), src, .{ .math = math });
+    if (std.mem.indexOf(u8, doc.html, expected_part) == null) {
+        std.debug.print("expected '{s}' in:\n{s}\n", .{ expected_part, doc.html });
+        return error.TestUnexpectedResult;
+    }
+}
+
+test "math" {
+    // Inline and display math, only when turned on.
+    try expectMath("<p>Area <math xmlns=\"http://www.w3.org/1998/Math/MathML\"><semantics><mrow><mi>\u{3c0}</mi><msup><mi>r</mi><mn>2</mn></msup></mrow>", "Area $\\pi r^2$ here.", true);
+    try expectMath("<p>Area $\\pi r^2$ here.</p>", "Area $\\pi r^2$ here.", false);
+    try expectMath("display=\"block\"><semantics><mrow><mi>x</mi></mrow>", "$$\nx\n$$", true);
+    // Prices are not math.
+    try expectMath("<p>From $5 to $10, or $ 3 $.</p>", "From $5 to $10, or $ 3 $.", true);
+    // A math code block is display math either way.
+    try expectMath("<math xmlns=\"http://www.w3.org/1998/Math/MathML\" display=\"block\"><semantics><mrow><mfrac><mi>a</mi><mi>b</mi></mfrac></mrow>", "```math\n\\frac{a}{b}\n```", false);
+
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const bad = try toDocumentWith(arena.allocator(), "Try $\\nope$.", .{ .math = true });
+    try testing.expectEqualStrings("\\nope", bad.math_error.?.source);
+    try testing.expect(std.mem.indexOf(u8, bad.html, "<code>\\nope</code>") != null);
 }
 
 test "escaping" {

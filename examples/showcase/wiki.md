@@ -23,6 +23,25 @@ Each page lists the pages that link to it under "Linked from".
 - [x] Components and code groups
 - [ ] Your next feature
 
+## Math
+
+With `math: true` in `_config.yml`, TeX between dollar signs becomes
+MathML the browser typesets itself: the roots of $ax^2 + bx + c = 0$ are
+
+$$
+x = \frac{-b \pm \sqrt{b^2 - 4ac}}{2a}
+$$
+
+A `math` code block is always display math:
+
+```math
+\sum_{k=1}^{n} k = \frac{n(n+1)}{2} \qquad
+|x| = \begin{cases} x & x \geq 0 \\ -x & x < 0 \end{cases} \qquad
+\det \begin{pmatrix} a & b \\ c & d \end{pmatrix} = ad - bc
+```
+
+Prices such as $5 or $10 stay as they are.
+
 ## Footnotes
 
 Mortise builds every page at once[^speed], and a save reaches the browser
