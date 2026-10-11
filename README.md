@@ -299,6 +299,9 @@ my-site/
   directories as versions of the same pages, with `page.versions` for a
   switcher, `page.outdated` and `page.latest_url` for an old-version notice,
   and `page.version_nav` for a sidebar per version.
+- [Font subsetting](docs/fonts.md): `fonts: subset: [fonts/inter.ttf]` makes
+  `mortise build` shrink a site's own fonts to the characters its pages use,
+  keeping ligatures and kerning.
 - Templates see `site` (config values plus `site.posts`, newest first, and
   `site.pages`), `page` (frontmatter plus `url`, `path`, and for posts `date`
   and `slug`), and in layouts `content`.
@@ -325,6 +328,7 @@ See the [Markdown subset](docs/markdown.md),
 | `src/llms.zig`        | llms.txt, llms-full.txt and Markdown twins        |
 | `src/i18n.zig`        | Languages of pages and translations               |
 | `src/yaml.zig`        | YAML reader for data documents such as OpenAPI    |
+| `src/fonts.zig`       | TrueType and WOFF font subsetting                 |
 | `src/watch.zig`       | Native file watchers                              |
 | `src/server.zig`      | Dev server and Server-Sent Events live reload     |
 | `src/check.zig`       | `mortise check` link and anchor checker           |

@@ -449,6 +449,18 @@ job:
   with `page.latest_url`.
 - Version names that look like numbers must be quoted in `versions:`.
 
+## Fonts
+
+- Only fonts with TrueType outlines (`glyf`) are subset; CFF-outline fonts
+  (most `.otf` files) and WOFF2 files fail the build when listed.
+- Characters come from the text of HTML pages. Text added by scripts, CSS
+  `content:`, or attributes such as `title` and `placeholder` is not seen;
+  list such characters under `fonts: keep:`. Printable ASCII is always kept.
+- Glyph ids are kept, so tables such as `hmtx` and `GPOS` keep their full
+  size; a subset is typically a third to a half of the original rather
+  than a few kilobytes.
+- Variable fonts keep all their variation data.
+
 ## Dev server
 
 - `serve` listens on IPv4 loopback (`127.0.0.1`) only. Browsers that resolve

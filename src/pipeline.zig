@@ -30,6 +30,7 @@ const minify = @import("minify.zig");
 const llms = @import("llms.zig");
 const i18n = @import("i18n.zig");
 const Language = i18n.Language;
+const fonts = @import("fonts.zig");
 const data_files = @import("data.zig");
 const schema = @import("schema.zig");
 const openapi = @import("openapi.zig");
@@ -412,6 +413,10 @@ pub const Options = struct {
     /// Config settings that replace or add to those in `_config.yml`, for
     /// tools that build one site several ways (such as the theme gallery).
     config: []const frontmatter.Entry = &.{},
+    /// Shrink the fonts listed under `fonts: subset:` to the characters
+    /// the site uses. `mortise build` turns this on; the dev server serves
+    /// whole fonts, so new text never misses a glyph while editing.
+    subset_fonts: bool = false,
 };
 
 /// `build` with options.
@@ -885,6 +890,58 @@ fn addTranslations(arena: Allocator, pages: []Page, langs: []const Language) All
         try entries.append(arena, .{ .key = "lang", .value = .{ .string = langs[p.lang].code } });
         try entries.append(arena, .{ .key = "translations", .value = .{ .list = list.items } });
         p.object = .{ .entries = entries.items };
+    }
+}
+
+/// Replaces each font under `fonts: subset:` with a copy holding only the
+/// characters of the site's pages, printable ASCII, and `fonts: keep:`.
+fn subsetFonts(b: *Builder, outputs: []Output, config_fields: frontmatter.Map) Error!void {
+    const v = config_fields.get("fonts") orelse return;
+    const arena = b.arena;
+    const line = fieldLine(try b.read(config_path), "fonts");
+    if (v != .map) return b.fail(config_path, line, "'fonts' must hold settings such as 'subset: [fonts/inter.ttf]'", .{});
+    var paths: []const frontmatter.Value = &.{};
+    var keep: []const u8 = "";
+    for (v.map.entries) |e| {
+        if (std.mem.eql(u8, e.key, "subset")) {
+            paths = if (e.value == .list) e.value.list else if (e.value == .string) &.{e.value} else return b.fail(config_path, line, "'fonts.subset' must list font files", .{});
+        } else if (std.mem.eql(u8, e.key, "keep")) {
+            keep = if (e.value == .string) e.value.string else return b.fail(config_path, line, "'fonts.keep' must be text", .{});
+        } else return b.fail(config_path, line, "unknown font setting '{s}'; use subset or keep", .{e.key});
+    }
+    // Check the list on every build, so a typo shows up in `serve` too.
+    for (paths) |p| {
+        if (p != .string) return b.fail(config_path, line, "'fonts.subset' must list font files", .{});
+        const path = std.mem.trimStart(u8, p.string, "/");
+        const found = for (outputs) |o| {
+            if (std.mem.eql(u8, o.path, path) and o.data == .copy) break true;
+        } else false;
+        if (!found) return b.fail(config_path, line, "font '{s}' in 'fonts.subset' is not a file of the site", .{p.string});
+    }
+    if (!b.options.subset_fonts or paths.len == 0) return;
+
+    var chars: std.AutoArrayHashMapUnmanaged(u21, void) = .empty;
+    for (32..127) |c| try chars.put(arena, @intCast(c), {});
+    try fonts.collectText(arena, keep, &chars);
+    for (outputs) |o| {
+        if (!std.mem.endsWith(u8, o.path, ".html") and !std.mem.endsWith(u8, o.path, ".htm")) continue;
+        const html = switch (o.data) {
+            .bytes => |bytes| bytes,
+            .copy => try b.read(o.source),
+        };
+        try fonts.collectText(arena, html, &chars);
+    }
+    for (paths) |p| {
+        const path = std.mem.trimStart(u8, p.string, "/");
+        for (outputs) |*o| {
+            if (!std.mem.eql(u8, o.path, path) or o.data != .copy) continue;
+            var fd: fonts.Diagnostic = .{};
+            const small = fonts.subset(arena, try b.read(o.source), chars.keys(), &fd) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                else => return b.fail(o.source, 0, "cannot subset this font: {s}", .{fd.message}),
+            };
+            o.data = .{ .bytes = small };
+        }
     }
 }
 
@@ -1589,6 +1646,7 @@ fn finish(b: *Builder, config_fields: frontmatter.Map, pages: []Page, statics: [
     if (b.site_url) |url| try addGenerated(b, &outputs, config_fields, pages, url, langs);
     try addImageVariants(b, &outputs, pages);
     if (try optIn(b, config_fields, "llms")) try addLlms(b, &outputs, config_fields, pages);
+    try subsetFonts(b, outputs.items, config_fields);
 
     std.mem.sortUnstable(Output, outputs.items, {}, outputOrder);
     for (outputs.items[0..outputs.items.len -| 1], outputs.items[@min(1, outputs.items.len)..]) |a, c| {
@@ -4959,4 +5017,27 @@ test "builds are deterministic, also when pages load in parallel" {
         try testing.expectError(error.BuildFailed, t.build(&diag));
         try testing.expectEqualStrings("docs/d3.md", diag.path);
     }
+}
+
+test "fonts listed under fonts.subset shrink to the site's characters in production builds" {
+    var t: TestSite = try .init(&.{
+        .{ "_config.yml", "fonts:\n  subset: [fonts/t.ttf]\n" },
+        .{ "index.md", "Only A here.\n" },
+    });
+    defer t.deinit();
+    const src = SiteDir.borrow(testing.io, t.tmp.dir);
+    const font = try fonts.testFont(t.arena.allocator());
+    try src.writeFile("fonts/t.ttf", font);
+    var diag: Diagnostic = .{};
+    // The dev server serves the whole font.
+    const dev = try buildWith(t.arena.allocator(), src, .{}, &diag);
+    try testing.expect(dev.find("fonts/t.ttf").?.data == .copy);
+    const prod = try buildWith(t.arena.allocator(), src, .{ .subset_fonts = true }, &diag);
+    // The test font's characters are all ASCII, which is always kept, so
+    // this only shows the font was rewritten; fonts.zig tests the glyphs.
+    const small = prod.find("fonts/t.ttf").?.data.bytes;
+    try testing.expectEqual(fonts.Format.sfnt, fonts.format(small).?);
+
+    try expectBuildError(&.{.{ "_config.yml", "fonts:\n  subset: [fonts/missing.ttf]\n" }}, "_config.yml", 1, "font 'fonts/missing.ttf' in 'fonts.subset' is not a file of the site");
+    try expectBuildError(&.{.{ "_config.yml", "fonts:\n  sub: [x]\n" }}, "_config.yml", 1, "unknown font setting 'sub'");
 }

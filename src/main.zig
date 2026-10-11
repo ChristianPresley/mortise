@@ -166,7 +166,7 @@ fn cmdBuild(ctx: Ctx, rest: []const [:0]const u8) u8 {
     const start = Io.Clock.Timestamp.now(io, .awake);
     var diag: pipeline.Diagnostic = .{};
     var today_buf: [10]u8 = undefined;
-    const options: pipeline.Options = .{ .drafts = args.drafts, .strict = args.strict, .future = args.future, .today = mortise.scaffold.today(io, &today_buf), .fingerprint = true };
+    const options: pipeline.Options = .{ .drafts = args.drafts, .strict = args.strict, .future = args.future, .today = mortise.scaffold.today(io, &today_buf), .fingerprint = true, .subset_fonts = true };
     const site = pipeline.buildWith(arena, src, options, &diag) catch |e| {
         switch (e) {
             error.BuildFailed => ctx.err.print("error: {f}\n", .{diag}) catch {},
