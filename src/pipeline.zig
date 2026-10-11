@@ -2040,7 +2040,8 @@ const FileIncluder = struct {
 fn loadApiPage(b: *Builder, path: []const u8) Error!Page {
     const arena = b.arena;
     var od: openapi.Diagnostic = .{};
-    const r = openapi.render(arena, try b.read(path), &od) catch |err| switch (err) {
+    const format: openapi.Format = if (openapi.isYaml(path)) .yaml else .json;
+    const r = openapi.render(arena, try b.read(path), format, &od) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         error.InvalidSpec => return b.fail(path, od.line, "{s}", .{od.message}),
     };

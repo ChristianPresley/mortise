@@ -1,11 +1,17 @@
 # OpenAPI reference pages
 
-Put an OpenAPI 3 document in `_api/NAME.json` and every build turns it into
-a page at `/api/NAME/`. The page is plain HTML rendered at build time: no
-JavaScript and no request to any API.
+Put an OpenAPI 3 document in `_api/NAME.json` or `_api/NAME.yaml` (or
+`.yml`) and every build turns it into a page at `/api/NAME/`. The page is
+plain HTML rendered at build time: no JavaScript and no request to any API.
 
-The showcase's [`_api/pets.json`](../examples/showcase/_api/pets.json) is
-a complete example.
+The showcase's [`_api/pets.json`](../examples/showcase/_api/pets.json) and
+[`_api/accounts.yaml`](../examples/showcase/_api/accounts.yaml) are complete
+examples, one in each format. A spec gives the same page in either.
+
+YAML specs are read by Mortise's own YAML reader, which handles what
+OpenAPI documents use: nested mappings and lists, flow collections,
+quoted and block strings (`|`, `>`), comments, anchors, aliases and merge
+keys. Status codes used as keys can be written plainly (`200:`) or quoted.
 
 ## What the page shows
 
@@ -72,13 +78,13 @@ The showcase's `_layouts/api.html` and `api/index.html` use both.
 
 ## Errors
 
-Invalid JSON fails the build with the file and line. A document that is not
+Invalid JSON or YAML fails the build with the file and line. A document that is not
 OpenAPI 3 (`"openapi": "3.x"`) or has no `paths` fails with a message.
 
 ## Limitations
 
-- JSON only. YAML specs need converting first, since Mortise's YAML subset
-  cannot hold a whole OpenAPI document.
+- A YAML file holds one document; several documents separated by `---`,
+  complex keys (`? key`), and custom tags are not supported.
 - Only local `$ref`s (`#/...`) are followed; references to other files are
   shown by name.
 - Security schemes, callbacks, links, webhooks, and response headers are

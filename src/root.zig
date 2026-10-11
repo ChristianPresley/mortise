@@ -28,6 +28,7 @@ pub const i18n = @import("i18n.zig");
 pub const data = @import("data.zig");
 pub const schema = @import("schema.zig");
 pub const openapi = @import("openapi.zig");
+pub const yaml = @import("yaml.zig");
 pub const themes = @import("themes.zig");
 pub const tokens = @import("tokens.zig");
 pub const icons = @import("icons.zig");

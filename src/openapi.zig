@@ -13,13 +13,20 @@ const Writer = std.Io.Writer;
 const JsonValue = std.json.Value;
 const markdown = @import("markdown.zig");
 const highlight = @import("highlight.zig");
+const yaml = @import("yaml.zig");
 const escapeHtml = markdown.escapeHtml;
 
 pub const dir_prefix = "_api/";
 
+/// Whether `path` is an OpenAPI document: `_api/NAME.json`, `.yaml` or `.yml`.
 pub fn isSpec(path: []const u8) bool {
-    return std.mem.startsWith(u8, path, dir_prefix) and std.mem.endsWith(u8, path, ".json") and
-        std.mem.indexOfScalarPos(u8, path, dir_prefix.len, '/') == null;
+    if (!std.mem.startsWith(u8, path, dir_prefix) or std.mem.indexOfScalarPos(u8, path, dir_prefix.len, '/') != null) return false;
+    return std.mem.endsWith(u8, path, ".json") or isYaml(path);
+}
+
+/// Whether a spec's path says it is YAML rather than JSON.
+pub fn isYaml(path: []const u8) bool {
+    return std.mem.endsWith(u8, path, ".yaml") or std.mem.endsWith(u8, path, ".yml");
 }
 
 pub const Diagnostic = struct { line: usize = 0, message: []const u8 = "" };
@@ -102,6 +109,19 @@ fn refOf(v: JsonValue) ?[]const u8 {
     return if (r == .string) r.string else null;
 }
 
+fn parseJson(arena: Allocator, json: []const u8, diag: *Diagnostic) Error!JsonValue {
+    var scanner = std.json.Scanner.initCompleteInput(arena, json);
+    var jd: std.json.Diagnostics = .{};
+    scanner.enableDiagnostics(&jd);
+    return std.json.parseFromTokenSourceLeaky(JsonValue, arena, &scanner, .{}) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => {
+            diag.* = .{ .line = @intCast(jd.getLine()), .message = std.fmt.allocPrint(arena, "invalid JSON ({s})", .{@errorName(err)}) catch "invalid JSON" };
+            return error.InvalidSpec;
+        },
+    };
+}
+
 fn str(o: std.json.ObjectMap, key: []const u8) ?[]const u8 {
     const v = o.get(key) orelse return null;
     return if (v == .string) v.string else null;
@@ -117,16 +137,21 @@ fn arr(o: std.json.ObjectMap, key: []const u8) ?[]const JsonValue {
     return if (v == .array) v.array.items else null;
 }
 
-/// Parses and renders an OpenAPI 3 JSON document.
-pub fn render(arena: Allocator, json: []const u8, diag: *Diagnostic) Error!Rendered {
-    var scanner = std.json.Scanner.initCompleteInput(arena, json);
-    var jd: std.json.Diagnostics = .{};
-    scanner.enableDiagnostics(&jd);
-    const doc = std.json.parseFromTokenSourceLeaky(JsonValue, arena, &scanner, .{}) catch |err| switch (err) {
-        error.OutOfMemory => return error.OutOfMemory,
-        else => {
-            diag.* = .{ .line = @intCast(jd.getLine()), .message = std.fmt.allocPrint(arena, "invalid JSON ({s})", .{@errorName(err)}) catch "invalid JSON" };
-            return error.InvalidSpec;
+pub const Format = enum { json, yaml };
+
+/// Parses and renders an OpenAPI 3 document written in JSON or YAML.
+pub fn render(arena: Allocator, source: []const u8, format: Format, diag: *Diagnostic) Error!Rendered {
+    const doc = switch (format) {
+        .json => try parseJson(arena, source, diag),
+        .yaml => blk: {
+            var yd: yaml.Diagnostic = .{};
+            break :blk yaml.parse(arena, source, &yd) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                error.InvalidYaml => {
+                    diag.* = .{ .line = yd.line, .message = yd.message };
+                    return error.InvalidSpec;
+                },
+            };
         },
     };
     if (doc != .object or str(doc.object, "openapi") == null or !std.mem.startsWith(u8, str(doc.object, "openapi").?, "3.")) {
@@ -582,7 +607,7 @@ test "renders operations, parameters, responses, schemas, and examples" {
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
     var diag: Diagnostic = .{};
-    const r = try render(arena.allocator(), petstore, &diag);
+    const r = try render(arena.allocator(), petstore, .json, &diag);
     try testing.expectEqualStrings("Pets", r.title);
     const h = r.html;
     const expect = struct {
@@ -620,9 +645,25 @@ test "invalid specs are reported" {
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena.deinit();
     var diag: Diagnostic = .{};
-    try testing.expectError(error.InvalidSpec, render(arena.allocator(), "{\n\"openapi\": \"2.0\"}", &diag));
+    try testing.expectError(error.InvalidSpec, render(arena.allocator(), "{\n\"openapi\": \"2.0\"}", .json, &diag));
     try testing.expect(std.mem.indexOf(u8, diag.message, "OpenAPI 3") != null);
-    try testing.expectError(error.InvalidSpec, render(arena.allocator(), "{\n\"openapi\": \"3.0.0\",\n}", &diag));
+    try testing.expectError(error.InvalidSpec, render(arena.allocator(), "{\n\"openapi\": \"3.0.0\",\n}", .json, &diag));
     try testing.expectEqual(@as(usize, 3), diag.line);
     try testing.expect(isSpec("_api/pets.json") and !isSpec("_api/x/pets.json") and !isSpec("api/pets.json"));
+    try testing.expect(isSpec("_api/pets.yaml") and isSpec("_api/pets.yml") and isYaml("_api/pets.yml"));
+    // YAML errors carry the YAML line.
+    try testing.expectError(error.InvalidSpec, render(arena.allocator(), "openapi: 3.0.0\npaths:\n\tx: 1\n", .yaml, &diag));
+    try testing.expectEqual(@as(usize, 3), diag.line);
+}
+
+test "a YAML spec renders exactly like the same spec in JSON" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    var diag: Diagnostic = .{};
+    // JSON is YAML, so the JSON test spec read as YAML must give the same
+    // page.
+    const json = try render(arena.allocator(), petstore, .json, &diag);
+    const yml = try render(arena.allocator(), petstore, .yaml, &diag);
+    try testing.expectEqualStrings(json.html, yml.html);
+    try testing.expectEqualStrings(json.toc, yml.toc);
 }

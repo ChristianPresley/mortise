@@ -161,8 +161,8 @@ my-site/
 - Posts can set `tags: [zig, web]` (or one tag as a string). `site.tags`
   lists every tag, sorted by name, each with `name` and its `posts`, newest
   first.
-- [OpenAPI reference pages](docs/openapi.md): each `_api/NAME.json`
-  OpenAPI 3 document becomes a static page at `/api/NAME/` with every
+- [OpenAPI reference pages](docs/openapi.md): each `_api/NAME.json` or`
+  `_api/NAME.yaml` OpenAPI 3 document becomes a static page at `/api/NAME/` with every
   operation, parameter, schema, and an example body.
 - [Wikilinks](docs/markdown.md#wikilinks): `[[Getting Started]]`,
   `[[docs/install]]` or `[[Install#Linux|label]]` link pages by title, file
@@ -324,6 +324,7 @@ See the [Markdown subset](docs/markdown.md),
 | `src/pipeline.zig`    | Source tree to output files                       |
 | `src/llms.zig`        | llms.txt, llms-full.txt and Markdown twins        |
 | `src/i18n.zig`        | Languages of pages and translations               |
+| `src/yaml.zig`        | YAML reader for data documents such as OpenAPI    |
 | `src/watch.zig`       | Native file watchers                              |
 | `src/server.zig`      | Dev server and Server-Sent Events live reload     |
 | `src/check.zig`       | `mortise check` link and anchor checker           |
