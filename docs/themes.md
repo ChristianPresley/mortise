@@ -140,3 +140,61 @@ warning: _config.yml:3: low contrast: 'muted' on 'bg' is 1.32:1 in the dark sche
 ```
 
 Warnings do not stop the build.
+
+## Theme layouts
+
+Built-in themes come with layouts and includes, so a site can be only
+content and a `theme:` line:
+
+```yaml
+# _config.yml
+title: Field Notes
+theme: visor
+```
+
+```markdown
+---
+layout: post
+title: First light
+---
+```
+
+| Layout     | Use                                                        |
+| ---------- | ---------------------------------------------------------- |
+| `default`  | The page frame: head, header with `site.nav`, `{{ content }}`, footer |
+| `page`     | `default` with the page title as a heading                 |
+| `post`     | `default` with title, date, tags and previous/next links   |
+| `home`     | `default` with the site title, description and every post  |
+
+The includes are `head.html` (stylesheets and feed link), `header.html`
+(site name, navigation, and `site.scheme_toggle`) and `footer.html`. A
+site's own file with the same path, such as `_includes/footer.html` or
+`_layouts/post.html`, replaces the theme's file and nothing else, so a site
+can change one piece and keep the rest. The layouts follow the hooks below,
+and a small base stylesheet (every rule inside `:where()`, so a site's own
+CSS always wins) lays the page out.
+
+## Site themes
+
+A site can define its own theme in `_themes/NAME/` and pick it with
+`theme: NAME`:
+
+```
+_themes/night/
+  theme.yml        base: visor
+  theme.css        rules added after the base theme's stylesheet
+  tokens.yml       tokens that replace or add to the base's
+  _layouts/...     layouts that replace the base's, one file at a time
+  _includes/...
+```
+
+`base` names the theme this one builds on: a built-in theme or another
+site theme, up to eight deep. The result is the base's stylesheet followed
+by the new one (with every `@import` moved to the top), the base's tokens
+with the new ones applied, the base's rendered images, and the base's
+layouts and includes except those the new theme has. A site theme named
+like a built-in one (`_themes/visor/`) takes its place. The site's own
+`_layouts/` and `_includes/` still win over every theme, and
+`theme_tokens:` in `_config.yml` still applies last.
+
+Edits under `_themes/` rebuild the whole site.

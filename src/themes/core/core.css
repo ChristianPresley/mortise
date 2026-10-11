@@ -1,0 +1,17 @@
+/* Mortise core layout: the page structure of the built-in themes' layouts.
+   Every selector is wrapped in :where(), so it has no specificity and any
+   rule in a site's own stylesheet wins over it. */
+:where(body) { box-sizing: border-box; max-width: 60rem; margin: 0 auto; padding: 0 1.25rem 2rem; font: 17px/1.65 system-ui, sans-serif; }
+:where(body > header) { display: flex; flex-wrap: wrap; gap: .5rem 1.25rem; align-items: center; padding: 1rem 0; margin-bottom: 1.5rem; }
+:where(body > header .brand) { font-weight: 700; text-decoration: none; color: inherit; }
+:where(body > header nav) { display: flex; flex-wrap: wrap; gap: .25rem 1rem; flex: 1; }
+:where(body > header nav a) { text-decoration: none; }
+:where(body > main) { min-height: 60vh; }
+:where(body > footer) { margin-top: 3rem; padding-top: 1rem; font-size: .85rem; opacity: .8; }
+:where(.posts) { padding-left: 1.1rem; }
+:where(.meta) { opacity: .8; font-size: .9rem; }
+:where(.pager) { display: flex; justify-content: space-between; gap: 1rem; margin-top: 2.5rem; }
+:where(.pager a) { display: flex; flex-direction: column; text-decoration: none; }
+:where(.pager .next) { text-align: right; margin-left: auto; }
+:where(img) { max-width: 100%; height: auto; }
+:where(pre) { overflow-x: auto; }

@@ -150,7 +150,10 @@ my-site/
   Their colors are [design tokens](docs/themes.md#design-tokens) you can
   override with `theme_tokens:`; token pairs give light and dark modes
   with `{{ site.scheme_toggle }}`, and the build warns about WCAG
-  contrast problems.
+  contrast problems. Themes ship `default`, `page`, `post` and `home`
+  [layouts](docs/themes.md#theme-layouts) a site's own files replace one
+  at a time, and a site can define [its own themes](docs/themes.md#site-themes)
+  in `_themes/NAME/` that build on a built-in one with `base: visor`.
 - Built-in [components](docs/components.md): callouts (`> [!NOTE]`),
   cards, grids, details, figures, buttons, and steps (`:::card Title` ...
   `:::`), plus `:badge[New]` and `:kbd[Ctrl]`, styled by a `mortise.css`

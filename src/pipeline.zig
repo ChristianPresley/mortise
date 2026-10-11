@@ -281,6 +281,8 @@ const Builder = struct {
     strict: bool = false,
     /// The site's design tokens, or null without a theme or theme_tokens.
     token_set: ?tokens.Set = null,
+    /// The theme named by `theme:` and its bases, most derived first.
+    theme_chain: []const ThemeLayer = &.{},
     warnings: std.ArrayList(Diagnostic) = .empty,
 
     fn fail(b: *Builder, path: []const u8, line: usize, comptime fmt: []const u8, args: anytype) Error {
@@ -433,7 +435,9 @@ pub fn rebuild(arena: Allocator, src: SiteDir, prev: *const Site, changed: []con
         // render cache, which keeps every unchanged asset.
         if (std.mem.eql(u8, path, config_path) or std.mem.eql(u8, path, "*") or
             std.mem.startsWith(u8, path, data_files.dir_prefix) or
-            std.mem.startsWith(u8, path, assets.dir_prefix)) return buildWith(arena, src, st.options, diag);
+            std.mem.startsWith(u8, path, assets.dir_prefix) or
+            // A site theme can change any page.
+            std.mem.startsWith(u8, path, "_themes/")) return buildWith(arena, src, st.options, diag);
         // Pages that include the file with `<<<` load again; the file's
         // own role, if any, is handled below.
         for (st.pages, 0..) |p, i| {
@@ -653,43 +657,151 @@ fn addComponentsCss(b: *Builder, outputs: *std.ArrayList(Output), config_fields:
 /// Writes `/theme.css`: the design tokens, then the stylesheet of the
 /// theme named by `theme:` in the config, unless the site has its own
 /// file at that path.
-fn addThemeCss(b: *Builder, outputs: *std.ArrayList(Output), config_fields: frontmatter.Map) Error!void {
+fn addThemeCss(b: *Builder, outputs: *std.ArrayList(Output)) Error!void {
     const set = b.token_set orelse return;
-    const theme = try configTheme(b, config_fields);
-    if (theme) |t| try addThemeAssets(b, outputs, t, fieldLine(try b.read(config_path), "theme"));
+    const line = fieldLine(try b.read(config_path), "theme");
+    // A theme's images replace its base's images of the same name.
+    for (b.theme_chain) |layer| try addThemeAssets(b, outputs, layer, line);
     if (hasOutput(outputs.items, themes.css_path)) return;
+    // Base stylesheets come first so the derived theme's rules win; every
+    // layer's @import rules move to the top, where CSS requires them.
+    var imports: std.ArrayList(u8) = .empty;
+    var rules: std.ArrayList(u8) = .empty;
+    var i = b.theme_chain.len;
+    while (i > 0) {
+        i -= 1;
+        const css = b.theme_chain[i].css;
+        const split = importsEnd(css);
+        try imports.appendSlice(b.arena, css[0..split]);
+        try rules.appendSlice(b.arena, css[split..]);
+    }
     const token_css = try tokens.css(b.arena, set);
-    const css = if (theme) |t| try insertAfterImports(b.arena, t.css, token_css) else token_css;
-    try outputs.append(b.arena, .{ .path = themes.css_path, .source = config_path, .data = .{ .bytes = css } });
+    const all_css = try std.mem.concat(b.arena, u8, &.{ imports.items, if (imports.items.len > 0) "\n" else "", token_css, "\n", rules.items });
+    try outputs.append(b.arena, .{ .path = themes.css_path, .source = config_path, .data = .{ .bytes = all_css } });
 }
 
-/// The theme named by `theme:`, or null when there is none.
-fn configTheme(b: *Builder, config_fields: frontmatter.Map) Error!?themes.Theme {
-    const v = config_fields.get("theme") orelse return null;
+/// One theme of the chain a site uses: the theme it names, then that
+/// theme's base, and so on.
+const ThemeLayer = struct {
+    name: []const u8,
+    css: []const u8 = "",
+    tokens: []const u8 = "",
+    assets: []const themes.Asset = &.{},
+    /// A built-in theme's layouts and includes.
+    files: []const themes.File = &.{},
+    /// A site theme's directory, `_themes/NAME/`, holding its files.
+    dir: ?[]const u8 = null,
+};
+
+/// The most themes a chain may hold.
+const max_theme_depth = 8;
+
+/// The themes named by `theme:` and their bases, most derived first: a
+/// site theme in `_themes/NAME/` when there is one, else a built-in.
+fn themeChain(b: *Builder, config_fields: frontmatter.Map) Error![]const ThemeLayer {
+    const v = config_fields.get("theme") orelse return &.{};
     const line = fieldLine(try b.read(config_path), "theme");
     if (v != .string) return b.fail(config_path, line, "'theme' must be the name of a theme: {s}", .{themes.names});
-    return themes.find(v.string) orelse
-        b.fail(config_path, line, "unknown theme '{s}'; the themes are: {s}", .{ v.string, themes.names });
+    var chain: std.ArrayList(ThemeLayer) = .empty;
+    var name: ?[]const u8 = v.string;
+    while (name) |n| {
+        if (chain.items.len >= max_theme_depth) return b.fail(config_path, line, "themes build on each other more than {d} deep (does '{s}' build on itself?)", .{ max_theme_depth, n });
+        const dir = try std.fmt.allocPrint(b.arena, "_themes/{s}/", .{n});
+        const manifest = try std.mem.concat(b.arena, u8, &.{ dir, "theme.yml" });
+        if (sitepath.isNormalized(manifest) and b.exists(manifest)) {
+            var fd: frontmatter.Diagnostic = .{};
+            const fields = frontmatter.parseFile(b.arena, try b.read(manifest), &fd) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                error.InvalidFrontmatter => return b.fail(manifest, fd.line, "{s}", .{fd.message}),
+            };
+            var layer: ThemeLayer = .{ .name = n, .dir = dir };
+            const css_file = try std.mem.concat(b.arena, u8, &.{ dir, "theme.css" });
+            if (b.exists(css_file)) layer.css = try b.read(css_file);
+            const tokens_file = try std.mem.concat(b.arena, u8, &.{ dir, "tokens.yml" });
+            if (b.exists(tokens_file)) layer.tokens = try b.read(tokens_file);
+            try chain.append(b.arena, layer);
+            name = null;
+            if (fields.get("base")) |base| {
+                if (base != .string) return b.fail(manifest, fieldLine(try b.read(manifest), "base"), "'base' must be the name of a theme", .{});
+                name = base.string;
+            }
+            continue;
+        }
+        const t = themes.find(n) orelse {
+            if (chain.items.len == 0) return b.fail(config_path, line, "unknown theme '{s}'; the themes are: {s}, or a site theme in _themes/NAME/theme.yml", .{ n, themes.names });
+            const last = chain.items[chain.items.len - 1];
+            return b.fail(try std.mem.concat(b.arena, u8, &.{ last.dir orelse "", "theme.yml" }), 0, "theme '{s}' builds on '{s}', which is not a theme", .{ last.name, n });
+        };
+        if (t.hidden and chain.items.len == 0) return b.fail(config_path, line, "unknown theme '{s}'; the themes are: {s}", .{ n, themes.names });
+        try chain.append(b.arena, .{ .name = t.name, .css = t.css, .tokens = t.tokens, .assets = t.assets, .files = t.files });
+        name = t.base;
+    }
+    return chain.items;
 }
 
-/// The design tokens of the theme, with `theme_tokens:` from the config
-/// applied, or null for a site with neither. Warns about low contrast.
+const ThemeFile = struct { data: []const u8, source: []const u8 };
+
+/// A layout or include (`_layouts/post.html`) from the site's theme chain:
+/// its contents and the path to report and track it by.
+fn themeFile(b: *Builder, path: []const u8) Error!?ThemeFile {
+    for (b.theme_chain) |layer| {
+        if (layer.dir) |dir| {
+            const p = try std.mem.concat(b.arena, u8, &.{ dir, path });
+            if (b.exists(p)) return .{ .data = try b.read(p), .source = p };
+        } else for (layer.files) |f| {
+            if (std.mem.eql(u8, f.path, path)) return .{ .data = f.data, .source = try std.fmt.allocPrint(b.arena, "(theme {s}) {s}", .{ layer.name, path }) };
+        }
+    }
+    return null;
+}
+
+/// The end of the leading `@import` rules (and comments around them).
+fn importsEnd(css: []const u8) usize {
+    var pos: usize = 0;
+    var i: usize = 0;
+    while (i < css.len) {
+        if (std.ascii.isWhitespace(css[i])) {
+            i += 1;
+            continue;
+        }
+        if (std.mem.startsWith(u8, css[i..], "/*")) {
+            i = if (std.mem.indexOfPos(u8, css, i + 2, "*/")) |e| e + 2 else css.len;
+            continue;
+        }
+        if (!std.mem.startsWith(u8, css[i..], "@import")) break;
+        i = if (std.mem.indexOfScalarPos(u8, css, i, ';')) |e| e + 1 else css.len;
+        pos = i;
+    }
+    if (pos > 0 and pos < css.len and css[pos] == '\n') pos += 1;
+    return pos;
+}
+
+/// The design tokens of the theme chain, base first, with `theme_tokens:`
+/// from the config applied, or null for a site with neither. Warns about
+/// low contrast.
 fn tokenSet(b: *Builder, config_fields: frontmatter.Map) Error!?tokens.Set {
-    const theme = try configTheme(b, config_fields);
     const overrides = config_fields.get("theme_tokens");
-    if (theme == null and overrides == null) return null;
+    if (b.theme_chain.len == 0 and overrides == null) return null;
     var d: tokens.Diagnostic = .{};
     var set: tokens.Set = .{ .scheme = .both, .tokens = &.{} };
-    if (theme) |t| {
+    var first = true;
+    var i = b.theme_chain.len;
+    while (i > 0) {
+        i -= 1;
+        const t = b.theme_chain[i];
+        if (t.tokens.len == 0) continue;
+        const where = if (t.dir) |dir| try std.mem.concat(b.arena, u8, &.{ dir, "tokens.yml" }) else config_path;
         var fd: frontmatter.Diagnostic = .{};
         const fields = frontmatter.parseFile(b.arena, t.tokens, &fd) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
-            error.InvalidFrontmatter => return b.fail(config_path, 0, "theme '{s}' has broken tokens: line {d}: {s}", .{ t.name, fd.line, fd.message }),
+            error.InvalidFrontmatter => return b.fail(where, fd.line, "theme '{s}' has broken tokens: {s}", .{ t.name, fd.message }),
         };
-        set = tokens.parse(b.arena, fields, &d) catch |err| switch (err) {
+        const result = if (first) tokens.parse(b.arena, fields, &d) else tokens.override(b.arena, set, fields, &d);
+        set = result catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
-            error.InvalidTokens => return b.fail(config_path, 0, "theme '{s}' has a broken token '{s}': {s}", .{ t.name, d.key, d.message }),
+            error.InvalidTokens => return b.fail(where, 0, "theme '{s}' has a broken token '{s}': {s}", .{ t.name, d.key, d.message }),
         };
+        first = false;
     }
     if (overrides) |o| {
         const data = try b.read(config_path);
@@ -721,32 +833,9 @@ fn nestedLine(data: []const u8, parent: []const u8, key: []const u8) usize {
     return start;
 }
 
-/// `css` with `insert` placed after its leading `@import` rules, which
-/// must come first in a stylesheet.
-fn insertAfterImports(arena: Allocator, css: []const u8, insert: []const u8) Allocator.Error![]const u8 {
-    var pos: usize = 0;
-    var i: usize = 0;
-    while (i < css.len) {
-        // Skip whitespace and comments.
-        if (std.ascii.isWhitespace(css[i])) {
-            i += 1;
-            continue;
-        }
-        if (std.mem.startsWith(u8, css[i..], "/*")) {
-            i = if (std.mem.indexOfPos(u8, css, i + 2, "*/")) |e| e + 2 else css.len;
-            continue;
-        }
-        if (!std.mem.startsWith(u8, css[i..], "@import")) break;
-        i = if (std.mem.indexOfScalarPos(u8, css, i, ';')) |e| e + 1 else css.len;
-        pos = i;
-    }
-    if (pos > 0 and pos < css.len and css[pos] == '\n') pos += 1;
-    return std.mem.concat(arena, u8, &.{ css[0..pos], if (pos > 0) "\n" else "", insert, "\n", css[pos..] });
-}
-
 /// Renders a theme's images into `/theme/`, except those the site
 /// replaces with its own file.
-fn addThemeAssets(b: *Builder, outputs: *std.ArrayList(Output), theme: themes.Theme, line: usize) Error!void {
+fn addThemeAssets(b: *Builder, outputs: *std.ArrayList(Output), theme: ThemeLayer, line: usize) Error!void {
     for (theme.assets) |a| {
         const name = try std.fmt.allocPrint(b.arena, "{s}/{s}", .{ themes.assets_dir, a.name });
         const png = try std.fmt.allocPrint(b.arena, "{s}.png", .{name});
@@ -1050,6 +1139,7 @@ fn finish(b: *Builder, config_fields: frontmatter.Map, pages: []Page, statics: [
         }
     }
 
+    b.theme_chain = try themeChain(b, config_fields);
     b.token_set = try tokenSet(b, config_fields);
     var site_entries: std.ArrayList(Entry) = .empty;
     // A light/dark switch, for token sets with both schemes.
@@ -1112,7 +1202,7 @@ fn finish(b: *Builder, config_fields: frontmatter.Map, pages: []Page, statics: [
     if (tag_pages) try addTagPages(b, &outputs, tags.list);
     try addCards(b, &outputs, pages);
     try addComponentsCss(b, &outputs, config_fields, pages);
-    try addThemeCss(b, &outputs, config_fields);
+    try addThemeCss(b, &outputs);
     try addAliases(b, &outputs, config_fields, pages);
     if (icon_config) |c| try addIcons(b, &outputs, c);
     if (has_search) try addSearch(b, &outputs, pages);
@@ -2006,26 +2096,32 @@ fn loadLayout(b: *Builder, name: []const u8, used_by: []const u8) Error!Layout {
     try b.addDep(path);
     if (b.layouts.get(path)) |l| return l;
 
+    // The site's own layout, else the theme's.
+    var source: []const u8 = path;
     const data = b.src.readFile(arena, path) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
-        error.FileNotFound => return b.fail(used_by, 0, "layout '{s}' not found (looked for {s})", .{ name, path }),
+        error.FileNotFound => blk: {
+            const f = (try themeFile(b, path)) orelse return b.fail(used_by, 0, "layout '{s}' not found (looked for {s})", .{ name, path });
+            source = f.source;
+            break :blk f.data;
+        },
         else => return b.fail(path, 0, "cannot read file: {s}", .{@errorName(err)}),
     };
     var fd: frontmatter.Diagnostic = .{};
     const doc = frontmatter.parse(arena, data, &fd) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
-        error.InvalidFrontmatter => return b.fail(path, fd.line, "{s}", .{fd.message}),
+        error.InvalidFrontmatter => return b.fail(source, fd.line, "{s}", .{fd.message}),
     };
-    try b.line_offsets.put(arena, path, doc.body_line - 1);
+    try b.line_offsets.put(arena, source, doc.body_line - 1);
     var td: template.Diagnostic = .{};
     const tpl = try arena.create(template.Template);
-    tpl.* = template.parse(arena, path, doc.body, &td) catch |err| switch (err) {
+    tpl.* = template.parse(arena, source, doc.body, &td) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         error.TemplateSyntax => return b.templateFail(td),
     };
     var parent: ?[]const u8 = null;
     if (doc.fields.get("layout")) |l| {
-        if (l != .string) return b.fail(path, fieldLine(data, "layout"), "'layout' must be a string", .{});
+        if (l != .string) return b.fail(source, fieldLine(data, "layout"), "'layout' must be a string", .{});
         parent = l.string;
     }
     const layout: Layout = .{ .tpl = tpl, .parent = parent };
@@ -2070,12 +2166,21 @@ fn loadInclude(ctx: *anyopaque, name: []const u8, diag: *template.Diagnostic) te
         return t;
     }
 
+    // The site's own include, else the theme's.
+    var source: []const u8 = path;
     const data = b.src.readFile(arena, path) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
-        else => return error.TemplateNotFound,
+        else => blk: {
+            const f = (themeFile(b, path) catch |e| switch (e) {
+                error.OutOfMemory => return error.OutOfMemory,
+                error.BuildFailed => return error.TemplateNotFound,
+            }) orelse return error.TemplateNotFound;
+            source = f.source;
+            break :blk f.data;
+        },
     };
     const tpl = try arena.create(template.Template);
-    tpl.* = try template.parse(arena, path, data, diag);
+    tpl.* = try template.parse(arena, source, data, diag);
     try b.templates.put(arena, path, tpl);
     b.useTemplate(tpl);
     return tpl;
@@ -2331,7 +2436,7 @@ test "theme assets render into /theme/ unless the site overrides them" {
     var b: Builder = .{ .arena = t.arena.allocator(), .src = SiteDir.borrow(testing.io, t.tmp.dir), .diag = undefined };
     var diag: Diagnostic = .{};
     b.diag = &diag;
-    const theme: themes.Theme = .{ .name = "test", .css = "", .assets = &.{
+    const theme: ThemeLayer = .{ .name = "test", .assets = &.{
         .{ .name = "dot", .spec = "kind: reticle\nsize: 16\n" },
         .{ .name = "scope", .spec = "kind: radar\nsize: 16\nframes: 2\n" },
     } };
@@ -2343,7 +2448,7 @@ test "theme assets render into /theme/ unless the site overrides them" {
     try testing.expectEqualStrings("theme/scope.css", outputs.items[2].path);
     try testing.expect(std.mem.indexOf(u8, outputs.items[2].data.bytes, ".scope {") != null);
 
-    const bad: themes.Theme = .{ .name = "test", .css = "", .assets = &.{.{ .name = "x", .spec = "kind: radar\nsize: 1\n" }} };
+    const bad: ThemeLayer = .{ .name = "test", .assets = &.{.{ .name = "x", .spec = "kind: radar\nsize: 1\n" }} };
     try testing.expectError(error.BuildFailed, addThemeAssets(&b, &outputs, bad, 3));
     try testing.expectEqual(@as(usize, 3), diag.line);
     try testing.expect(std.mem.indexOf(u8, diag.message, "theme 'test', asset 'x', line 2: 'size' must be") != null);
@@ -3138,4 +3243,66 @@ test "templates extend layouts and fill their blocks" {
     }
 
     try expectBuildError(&.{.{ "x.html", "---\n---\n{% extends \"missing\" %}" }}, "x.html", 3, "the layout 'missing' to extend was not found");
+}
+
+test "a theme's layouts serve sites without their own, one file at a time" {
+    var t: TestSite = try .init(&.{
+        .{ "_config.yml", "title: Site\ntheme: visor\n" },
+        .{ "index.md", "---\nlayout: home\n---\nWelcome.\n" },
+        .{ "_posts/2024-01-05-hi.md", "---\ntitle: Hi\nlayout: post\n---\nPost.\n" },
+        .{ "_includes/footer.html", "<footer>mine</footer>" },
+    });
+    defer t.deinit();
+    var diag: Diagnostic = .{};
+    const site = t.build(&diag) catch |err| {
+        std.debug.print("{f}\n", .{diag});
+        return err;
+    };
+    const home = site.find("index.html").?.data.bytes;
+    try testing.expect(std.mem.startsWith(u8, home, "<!doctype html>"));
+    try testing.expect(std.mem.indexOf(u8, home, "<link rel=\"stylesheet\" href=\"/theme.css\">") != null);
+    try testing.expect(std.mem.indexOf(u8, home, "<a href=\"/2024/01/05/hi/\">Hi</a>") != null);
+    // The site's footer replaces the theme's; the header is still the theme's.
+    try testing.expect(std.mem.indexOf(u8, home, "<footer>mine</footer>") != null);
+    try testing.expect(std.mem.indexOf(u8, home, "<a class=\"brand\" href=\"/\">Site</a>") != null);
+    try testing.expect(std.mem.indexOf(u8, site.find("2024/01/05/hi/index.html").?.data.bytes, "<p class=\"meta\">January 5, 2024") != null);
+}
+
+test "site themes build on built-in themes" {
+    var t: TestSite = try .init(&.{
+        .{ "_config.yml", "title: Site\ntheme: night\n" },
+        .{ "_themes/night/theme.yml", "base: visor\n" },
+        .{ "_themes/night/theme.css", "@import url(\"fonts.css\");\n.night { color: var(--m-accent); }\n" },
+        .{ "_themes/night/tokens.yml", "accent: \"#ff9c00\"\n" },
+        .{ "_themes/night/_includes/footer.html", "<footer>night</footer>" },
+        .{ "about.md", "---\nlayout: page\ntitle: About\n---\nA\n" },
+    });
+    defer t.deinit();
+    var diag: Diagnostic = .{};
+    const site = t.build(&diag) catch |err| {
+        std.debug.print("{f}\n", .{diag});
+        return err;
+    };
+    const css = site.find(themes.css_path).?.data.bytes;
+    // Imports first, then tokens (the base's, with the override), then the
+    // base's rules, then the site theme's.
+    try testing.expect(std.mem.startsWith(u8, css, "@import url(\"fonts.css\");"));
+    try testing.expect(std.mem.indexOf(u8, css, "  --m-accent: #ff9c00;\n") != null);
+    try testing.expect(std.mem.indexOf(u8, css, "  --m-bg: #04070b;\n") != null);
+    const visor_at = std.mem.indexOf(u8, css, "Mortise theme \"visor\"").?;
+    try testing.expect(std.mem.indexOf(u8, css, ".night {").? > visor_at);
+    try testing.expect(site.find("theme/panel.png") != null);
+    const about = site.find("about/index.html").?.data.bytes;
+    try testing.expect(std.mem.indexOf(u8, about, "<h1>About</h1>") != null);
+    try testing.expect(std.mem.indexOf(u8, about, "<footer>night</footer>") != null);
+
+    try expectBuildError(&.{
+        .{ "_config.yml", "theme: a\n" },
+        .{ "_themes/a/theme.yml", "base: nope\n" },
+    }, "_themes/a/theme.yml", 0, "theme 'a' builds on 'nope', which is not a theme");
+    try expectBuildError(&.{
+        .{ "_config.yml", "theme: a\n" },
+        .{ "_themes/a/theme.yml", "base: a\n" },
+    }, "_config.yml", 1, "more than 8 deep");
+    try expectBuildError(&.{.{ "_config.yml", "title: T\ntheme: core\n" }}, "_config.yml", 2, "unknown theme 'core'");
 }

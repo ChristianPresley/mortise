@@ -115,6 +115,15 @@ job:
 - Aliases are paths on this site; they cannot redirect to other sites, and
   `_redirects` lists exact paths without wildcards or splats.
 
+## Themes
+
+- Pages use a theme's layouts only when they name one (`layout: post`);
+  there are no default layouts per page kind.
+- Site themes cannot ship rendered images; put specs in the site's
+  `_render/theme/` instead.
+- A built-in theme's files are reported as `(theme NAME) _layouts/FILE`
+  in errors; copy the file into the site to change it.
+
 ## Design tokens
 
 - Token values are hex colors only (`#rgb` or `#rrggbb`); no `rgb()`,

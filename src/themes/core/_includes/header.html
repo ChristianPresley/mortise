@@ -1,0 +1,9 @@
+<header>
+<a class="brand" href="{{ site.baseurl }}/">{{ site.title }}</a>
+<nav>
+{%- for item in site.nav %}
+<a href="{{ item.url }}"{% if item.url == page.url %} class="current"{% endif %}>{{ item.title }}</a>
+{%- endfor %}
+</nav>
+{{ site.scheme_toggle | default("") }}
+</header>
