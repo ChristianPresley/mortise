@@ -1,0 +1,18 @@
+---
+layout: page
+title: Tags
+---
+{%- assign tags = site.posts | map: "tags" | uniq | sort_natural %}
+<p>{{ tags.size }} tags across {{ site.posts.size }} notes.</p>
+<table>{% tablerow tag in tags cols: 3 %}
+  {%- assign tagged = site.posts | where: "tags", tag %}
+  <a href="#{{ tag | slugify }}">#{{ tag }}</a> <small>{{ tagged.size }}</small>
+{% endtablerow %}</table>
+{% for tag in tags %}
+<h2 id="{{ tag | slugify }}">#{{ tag }}</h2>
+<ul>
+  {%- for post in site.posts %}{% if post.tags contains tag %}
+  <li><a href="{{ post.url | relative_url }}">{{ post.title }}</a></li>
+  {%- endif %}{% endfor %}
+</ul>
+{% endfor %}

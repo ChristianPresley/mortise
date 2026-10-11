@@ -1,0 +1,7 @@
+<li class="card {% cycle 'warm', 'cool' %}">
+  <time>{{ post.date | date: "%b %-d" }}</time>
+  <a href="{{ post.url | relative_url }}">{{ post.title }}</a>
+  {%- if post.tags.size > 0 %}
+  <span class="tags">{% for tag in post.tags %}<span>#{{ tag }}</span>{% endfor %}</span>
+  {%- endif %}
+</li>

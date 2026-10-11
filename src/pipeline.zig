@@ -43,6 +43,7 @@ const git = @import("git.zig");
 const seo = @import("seo.zig");
 const images = @import("images.zig");
 const links = @import("links.zig");
+const datetime = @import("datetime.zig");
 const Value = template.Value;
 const Entry = template.Entry;
 
@@ -257,6 +258,11 @@ pub const Page = struct {
     assets_used: []const []const u8 = &.{},
     /// Resized images its `<img>` tags refer to.
     image_variants: []const images.Variant = &.{},
+    /// With `liquid: true`, what running Liquid in the Markdown body read;
+    /// added to `sources`, `reads_collections` and `assets_used`.
+    body_sources: []const []const u8 = &.{},
+    body_reads_collections: bool = false,
+    body_assets: []const []const u8 = &.{},
 };
 
 const Layout = struct {
@@ -338,6 +344,16 @@ const Builder = struct {
     page_variants: std.ArrayList(images.Variant) = .empty,
     /// Set by `links.resolve` when a wikilink is ambiguous.
     link_error: links.Failure = .{},
+    /// `liquid: true` in the config: templates and Markdown bodies are
+    /// Liquid, as in Jekyll.
+    liquid: bool = false,
+    /// The build's time, for `site.time` and `"now" | date`, in seconds
+    /// since the Unix epoch.
+    now: i64 = 0,
+    /// Every page and post, for `{% link %}` and `{% post_url %}`.
+    pages: []const Page = &.{},
+    /// While Liquid runs in a Markdown body: HTML kept out of Markdown.
+    stash: ?*std.ArrayList([]const u8) = null,
 
     fn fail(b: *Builder, path: []const u8, line: usize, comptime fmt: []const u8, args: anytype) Error {
         b.diag.* = .{
@@ -1446,148 +1462,33 @@ fn finish(b: *Builder, config_fields: frontmatter.Map, pages: []Page, statics: [
     const arena = b.arena;
     b.statics = statics;
     b.fingerprint = b.options.fingerprint and try enabled(b, config_fields, "fingerprint");
+    b.liquid = try configFlag(b, config_fields, "liquid", false);
     b.strict = b.options.strict orelse blk: {
-        const v = config_fields.get("strict") orelse break :blk b.options.strict_by_default;
+        // Liquid templates are written for Liquid's lax rendering, so even
+        // `serve` is not strict for them unless asked.
+        const v = config_fields.get("strict") orelse break :blk b.options.strict_by_default and !b.liquid;
         if (v != .boolean) return b.fail(config_path, 0, "'strict' must be true or false", .{});
         break :blk v.boolean;
     };
+    b.now = @divFloor(std.Io.Clock.real.now(b.src.io).toMilliseconds(), 1000);
+    b.pages = pages;
 
-    // Pages and posts are visible to every template through `site`. On a
-    // site with several languages, each language has its own `site`, which
-    // lists only that language's pages and posts.
-    const multi = b.languages.len > 0;
-    const langs: []const Language = if (multi) b.languages else &.{.{ .code = "", .name = "" }};
-    // Wikilinks name other pages, so they are resolved on every build.
-    var backlinks = try links.resolve(arena, pages, b.baseurl, &b.link_error);
-    if (b.link_error.message.len > 0) return b.fail(b.link_error.path, 0, "{s}", .{b.link_error.message});
-    for (pages) |*p| {
-        if (p.base.entries.len == 0) p.base = try pageObject(arena, p);
-    }
-    // Each language's pages, in `pageOrder`, and where they are in `pages`.
-    const by_lang = try arena.alloc([]Page, langs.len);
-    const where = try arena.alloc([]usize, langs.len);
-    if (!multi) {
-        try addNavigation(arena, pages);
-        by_lang[0] = pages;
-        where[0] = &.{};
-    } else {
-        for (by_lang, where, 0..) |*subset, *idx, li| {
-            var list: std.ArrayList(Page) = .empty;
-            var at: std.ArrayList(usize) = .empty;
-            for (pages, 0..) |p, i| if (p.lang == li) {
-                try list.append(arena, p);
-                try at.append(arena, i);
-            };
-            // Previous and next stay within the language.
-            try addNavigation(arena, list.items);
-            for (list.items, at.items) |p, i| pages[i].object = p.object;
-            subset.* = list.items;
-            idx.* = at.items;
-        }
-        try addTranslations(arena, pages, langs);
-    }
-    const versions = try loadVersions(b, config_fields);
-    if (versions.len > 0) try addVersions(arena, pages, versions, b.baseurl);
-    const taxonomies = try taxonomyNames(b, config_fields);
-    if (config_fields.get("related")) |v| {
-        if (v != .int or v.int < 1 or v.int > 50) return b.fail(config_path, fieldLine(try b.read(config_path), "related"), "'related' must be how many related pages to list, 1 to 50", .{});
-        try addRelated(arena, pages, taxonomies, @intCast(v.int));
-    }
-    b.menus = try menuIndex(b, pages);
-    const menu_root = try std.fmt.allocPrint(arena, "{s}/", .{b.baseurl});
-    for (pages) |*p| {
-        var entries: std.ArrayList(Entry) = .empty;
-        try entries.appendSlice(arena, p.object.entries);
-        try entries.append(arena, .{ .key = "menus", .value = try pageMenus(arena, b.menus, p.url, menu_root) });
-        p.object = .{ .entries = entries.items };
-    }
-    try links.addBacklinks(arena, pages, &backlinks);
-    // The per-language copies take the finished objects.
-    if (multi) for (by_lang, where) |subset, idx| {
-        for (subset, idx) |*p, i| p.object = pages[i].object;
-    };
-
-    b.theme_chain = try themeChain(b, config_fields);
-    b.token_set = try tokenSet(b, config_fields);
-    // The config's settings, shared by every language's `site`.
-    var config_entries: std.ArrayList(Entry) = .empty;
-    // A light/dark switch, for token sets with both schemes.
-    const toggle = if (b.token_set) |s| (if (s.scheme == .both) tokens.scheme_toggle_html else "") else "";
-    try config_entries.append(arena, .{ .key = "scheme_toggle", .value = .{ .html = toggle } });
-    for (config_fields.entries) |e| {
-        if (std.mem.eql(u8, e.key, "posts") or std.mem.eql(u8, e.key, "pages") or
-            std.mem.eql(u8, e.key, "data") or std.mem.eql(u8, e.key, "tags") or std.mem.eql(u8, e.key, "nav") or std.mem.eql(u8, e.key, "menus") or
-            std.mem.eql(u8, e.key, "apis") or (multi and (std.mem.eql(u8, e.key, "lang") or std.mem.eql(u8, e.key, "i18n"))))
-        {
-            return b.fail(config_path, 0, "'{s}' is set by Mortise; use another key", .{e.key});
-        }
-        if (std.mem.eql(u8, e.key, "baseurl")) {
-            try config_entries.append(arena, .{ .key = e.key, .value = .{ .string = b.baseurl } });
-            continue;
-        }
-        // `site.taxonomies`, `site.versions` and `site.languages` are built
-        // from these settings.
-        if (std.mem.eql(u8, e.key, "taxonomies") or std.mem.eql(u8, e.key, "versions")) continue;
-        if (multi and std.mem.eql(u8, e.key, "languages")) continue;
-        try config_entries.append(arena, .{ .key = e.key, .value = try convert(arena, e.value) });
-    }
-    // Always defined, so templates can use it in strict mode.
-    if (config_fields.get("baseurl") == null) try config_entries.append(arena, .{ .key = "baseurl", .value = .{ .string = "" } });
-    const languages_value = if (multi) try languageList(arena, langs, b.baseurl) else Value.nil;
-
-    const tag_pages = b.exists(tag_layout);
-    const icon_config = try iconConfig(b, config_fields);
-    const icon_tags = if (icon_config) |c| try icons.tags(arena, c, b.baseurl) else "";
-    const has_search = if (config_fields.get("search")) |v| (if (v == .boolean) v.boolean else return b.fail(config_path, fieldLine(try b.read(config_path), "search"), "'search' must be true or false", .{})) else false;
-    const search_box: Value = .{ .html = if (has_search) try search.box(arena, b.baseurl) else "" };
-    const term_pages = taxonomies.len > 0 and b.exists(term_layout);
-    const taxonomy_pages = taxonomies.len > 0 and b.exists(taxonomy_layout);
-    const taxonomy_index = try taxonomyIndex(arena, pages, taxonomies, if (term_pages) b.baseurl else null);
-    const sites = try arena.alloc(template.Object, langs.len);
-    const lang_posts = try arena.alloc([]const Value, langs.len);
-    const lang_tags = try arena.alloc(Value, langs.len);
-    var post_count: usize = 0;
-    for (langs, by_lang, sites, lang_posts, lang_tags, 0..) |lang, subset, *site, *posts_out, *tags_out, li| {
-        var post_values: std.ArrayList(Value) = .empty;
-        var page_values: std.ArrayList(Value) = .empty;
-        for (subset) |*p| {
-            if (p.is_post) {
-                try post_values.append(arena, .{ .object = p.object });
-                post_count += 1;
-            } else {
-                try page_values.append(arena, .{ .object = p.object });
-            }
-        }
-        // The language's root: the baseurl, then `/CODE` except for the
-        // default language.
-        const root = if (li == 0) b.baseurl else try std.mem.concat(arena, u8, &.{ b.baseurl, "/", lang.code });
-        var site_entries: std.ArrayList(Entry) = .empty;
-        try site_entries.appendSlice(arena, config_entries.items);
-        try site_entries.append(arena, .{ .key = "posts", .value = .{ .list = post_values.items } });
-        try site_entries.append(arena, .{ .key = "pages", .value = .{ .list = page_values.items } });
-        try site_entries.append(arena, .{ .key = "data", .value = b.data });
-        try site_entries.append(arena, .{ .key = "nav", .value = try navTree(arena, subset, root) });
-        try site_entries.append(arena, .{ .key = "apis", .value = try apiIndex(arena, subset) });
-        if (versions.len > 0) try site_entries.append(arena, .{ .key = "versions", .value = try versionList(arena, versions, b.baseurl) });
-        try site_entries.append(arena, .{ .key = "menus", .value = b.menus });
-        tags_out.* = try tagIndex(arena, subset, if (tag_pages) root else null);
-        try site_entries.append(arena, .{ .key = "tags", .value = tags_out.* });
-        try site_entries.append(arena, .{ .key = "icon_tags", .value = .{ .html = icon_tags } });
-        try site_entries.append(arena, .{ .key = "search_box", .value = search_box });
-        try site_entries.append(arena, .{ .key = "taxonomies", .value = taxonomy_index });
-        if (multi) {
-            try site_entries.append(arena, .{ .key = "lang", .value = .{ .string = lang.code } });
-            try site_entries.append(arena, .{ .key = "languages", .value = languages_value });
-            // `_data/i18n/CODE.yml`, the language's strings for templates.
-            const strings: Value = if (b.data.object.get("i18n")) |all| (if (all == .object) all.object.get(lang.code) orelse Value{ .object = .{} } else Value{ .object = .{} }) else .{ .object = .{} };
-            try site_entries.append(arena, .{ .key = "i18n", .value = strings });
-        }
-        site.* = .{ .entries = site_entries.items };
-        posts_out.* = post_values.items;
-    }
-    b.site = sites[0];
-    b.images = try imageConfig(b, config_fields);
-    for (statics) |s| try b.static_outputs.put(arena, s.path, s);
+    var view = try buildSites(b, config_fields, pages);
+    // Liquid in Markdown bodies runs first, as in Jekyll, with the site as
+    // the bodies stood before; the sites are then built again from the
+    // results.
+    if (b.liquid and try renderLiquidBodies(b, pages, render, view.sites)) view = try buildSites(b, config_fields, pages);
+    const langs = view.langs;
+    const sites = view.sites;
+    const lang_posts = view.lang_posts;
+    const lang_tags = view.lang_tags;
+    const post_count = view.post_count;
+    const tag_pages = view.tag_pages;
+    const icon_config = view.icon_config;
+    const has_search = view.has_search;
+    const term_pages = view.term_pages;
+    const taxonomy_pages = view.taxonomy_pages;
+    const taxonomy_index = view.taxonomy_index;
 
     var rendered: usize = 0;
     var outputs: std.ArrayList(Output) = .empty;
@@ -1598,9 +1499,11 @@ fn finish(b: *Builder, config_fields: frontmatter.Map, pages: []Page, statics: [
         if (render == null or render.?[i]) {
             b.site = sites[p.lang];
             b.deps = .empty;
-            b.reads_collections = false;
+            try b.deps.appendSlice(arena, p.body_sources);
+            b.reads_collections = p.body_reads_collections;
             b.reads_seo = false;
             b.page_assets = .empty;
+            try b.page_assets.appendSlice(arena, p.body_assets);
             b.page_variants = .empty;
             try b.addDep(p.source);
             for (p.included_files) |f| try b.addDep(f);
@@ -1742,6 +1645,232 @@ fn overrideConfig(arena: Allocator, fields: frontmatter.Map, overrides: []const 
     }
     for (overrides) |o| if (fields.get(o.key) == null) try out.append(arena, o);
     return .{ .entries = out.items };
+}
+
+/// Everything `buildSites` works out for the render that follows.
+const Sites = struct {
+    langs: []const Language,
+    /// Each language's `site`, default language first.
+    sites: []const template.Object,
+    lang_posts: []const []const Value,
+    lang_tags: []const Value,
+    post_count: usize,
+    tag_pages: bool,
+    icon_config: ?icons.Config,
+    has_search: bool,
+    term_pages: bool,
+    taxonomy_pages: bool,
+    taxonomy_index: Value,
+};
+
+/// Builds each page's object and each language's `site`, which every
+/// template sees.
+fn buildSites(b: *Builder, config_fields: frontmatter.Map, pages: []Page) Error!Sites {
+    const arena = b.arena;
+    // Pages and posts are visible to every template through `site`. On a
+    // site with several languages, each language has its own `site`, which
+    // lists only that language's pages and posts.
+    const multi = b.languages.len > 0;
+    const langs: []const Language = if (multi) b.languages else &.{.{ .code = "", .name = "" }};
+    // Wikilinks name other pages, so they are resolved on every build.
+    var backlinks = try links.resolve(arena, pages, b.baseurl, &b.link_error);
+    if (b.link_error.message.len > 0) return b.fail(b.link_error.path, 0, "{s}", .{b.link_error.message});
+    for (pages) |*p| {
+        if (p.base.entries.len == 0) p.base = try pageObject(arena, p);
+    }
+    // Each language's pages, in `pageOrder`, and where they are in `pages`.
+    const by_lang = try arena.alloc([]Page, langs.len);
+    const where = try arena.alloc([]usize, langs.len);
+    if (!multi) {
+        try addNavigation(arena, pages);
+        by_lang[0] = pages;
+        where[0] = &.{};
+    } else {
+        for (by_lang, where, 0..) |*subset, *idx, li| {
+            var list: std.ArrayList(Page) = .empty;
+            var at: std.ArrayList(usize) = .empty;
+            for (pages, 0..) |p, i| if (p.lang == li) {
+                try list.append(arena, p);
+                try at.append(arena, i);
+            };
+            // Previous and next stay within the language.
+            try addNavigation(arena, list.items);
+            for (list.items, at.items) |p, i| pages[i].object = p.object;
+            subset.* = list.items;
+            idx.* = at.items;
+        }
+        try addTranslations(arena, pages, langs);
+    }
+    const versions = try loadVersions(b, config_fields);
+    if (versions.len > 0) try addVersions(arena, pages, versions, b.baseurl);
+    const taxonomies = try taxonomyNames(b, config_fields);
+    if (config_fields.get("related")) |v| {
+        if (v != .int or v.int < 1 or v.int > 50) return b.fail(config_path, fieldLine(try b.read(config_path), "related"), "'related' must be how many related pages to list, 1 to 50", .{});
+        try addRelated(arena, pages, taxonomies, @intCast(v.int));
+    }
+    b.menus = try menuIndex(b, pages);
+    const menu_root = try std.fmt.allocPrint(arena, "{s}/", .{b.baseurl});
+    for (pages) |*p| {
+        var entries: std.ArrayList(Entry) = .empty;
+        try entries.appendSlice(arena, p.object.entries);
+        try entries.append(arena, .{ .key = "menus", .value = try pageMenus(arena, b.menus, p.url, menu_root) });
+        p.object = .{ .entries = entries.items };
+    }
+    try links.addBacklinks(arena, pages, &backlinks);
+    // The per-language copies take the finished objects.
+    if (multi) for (by_lang, where) |subset, idx| {
+        for (subset, idx) |*p, i| p.object = pages[i].object;
+    };
+
+    b.theme_chain = try themeChain(b, config_fields);
+    b.token_set = try tokenSet(b, config_fields);
+    // The config's settings, shared by every language's `site`.
+    var config_entries: std.ArrayList(Entry) = .empty;
+    // A light/dark switch, for token sets with both schemes.
+    const toggle = if (b.token_set) |s| (if (s.scheme == .both) tokens.scheme_toggle_html else "") else "";
+    try config_entries.append(arena, .{ .key = "scheme_toggle", .value = .{ .html = toggle } });
+    for (config_fields.entries) |e| {
+        if (std.mem.eql(u8, e.key, "posts") or std.mem.eql(u8, e.key, "pages") or
+            std.mem.eql(u8, e.key, "data") or std.mem.eql(u8, e.key, "tags") or std.mem.eql(u8, e.key, "nav") or std.mem.eql(u8, e.key, "menus") or
+            std.mem.eql(u8, e.key, "apis") or (multi and (std.mem.eql(u8, e.key, "lang") or std.mem.eql(u8, e.key, "i18n"))))
+        {
+            return b.fail(config_path, 0, "'{s}' is set by Mortise; use another key", .{e.key});
+        }
+        if (std.mem.eql(u8, e.key, "baseurl")) {
+            try config_entries.append(arena, .{ .key = e.key, .value = .{ .string = b.baseurl } });
+            continue;
+        }
+        // `site.taxonomies`, `site.versions` and `site.languages` are built
+        // from these settings.
+        if (std.mem.eql(u8, e.key, "taxonomies") or std.mem.eql(u8, e.key, "versions")) continue;
+        if (multi and std.mem.eql(u8, e.key, "languages")) continue;
+        try config_entries.append(arena, .{ .key = e.key, .value = try convert(arena, e.value) });
+    }
+    // Always defined, so templates can use it in strict mode.
+    if (config_fields.get("baseurl") == null) try config_entries.append(arena, .{ .key = "baseurl", .value = .{ .string = "" } });
+    if (b.liquid and config_fields.get("time") == null) {
+        const t = datetime.DateTime.fromUnix(b.now, 0);
+        const time = try std.fmt.allocPrint(arena, "{d:0>4}-{d:0>2}-{d:0>2} {d:0>2}:{d:0>2}:{d:0>2} +0000", .{ @as(u32, @intCast(t.year)), t.month, t.day, t.hour, t.minute, t.second });
+        try config_entries.append(arena, .{ .key = "time", .value = .{ .string = time } });
+    }
+    const languages_value = if (multi) try languageList(arena, langs, b.baseurl) else Value.nil;
+
+    const tag_pages = b.exists(tag_layout);
+    const icon_config = try iconConfig(b, config_fields);
+    const icon_tags = if (icon_config) |c| try icons.tags(arena, c, b.baseurl) else "";
+    const has_search = if (config_fields.get("search")) |v| (if (v == .boolean) v.boolean else return b.fail(config_path, fieldLine(try b.read(config_path), "search"), "'search' must be true or false", .{})) else false;
+    const search_box: Value = .{ .html = if (has_search) try search.box(arena, b.baseurl) else "" };
+    const term_pages = taxonomies.len > 0 and b.exists(term_layout);
+    const taxonomy_pages = taxonomies.len > 0 and b.exists(taxonomy_layout);
+    const taxonomy_index = try taxonomyIndex(arena, pages, taxonomies, if (term_pages) b.baseurl else null);
+    const sites = try arena.alloc(template.Object, langs.len);
+    const lang_posts = try arena.alloc([]const Value, langs.len);
+    const lang_tags = try arena.alloc(Value, langs.len);
+    var post_count: usize = 0;
+    for (langs, by_lang, sites, lang_posts, lang_tags, 0..) |lang, subset, *site, *posts_out, *tags_out, li| {
+        var post_values: std.ArrayList(Value) = .empty;
+        var page_values: std.ArrayList(Value) = .empty;
+        for (subset) |*p| {
+            if (p.is_post) {
+                try post_values.append(arena, .{ .object = p.object });
+                post_count += 1;
+            } else {
+                try page_values.append(arena, .{ .object = p.object });
+            }
+        }
+        // The language's root: the baseurl, then `/CODE` except for the
+        // default language.
+        const root = if (li == 0) b.baseurl else try std.mem.concat(arena, u8, &.{ b.baseurl, "/", lang.code });
+        var site_entries: std.ArrayList(Entry) = .empty;
+        try site_entries.appendSlice(arena, config_entries.items);
+        try site_entries.append(arena, .{ .key = "posts", .value = .{ .list = post_values.items } });
+        try site_entries.append(arena, .{ .key = "pages", .value = .{ .list = page_values.items } });
+        try site_entries.append(arena, .{ .key = "data", .value = b.data });
+        try site_entries.append(arena, .{ .key = "nav", .value = try navTree(arena, subset, root) });
+        try site_entries.append(arena, .{ .key = "apis", .value = try apiIndex(arena, subset) });
+        if (versions.len > 0) try site_entries.append(arena, .{ .key = "versions", .value = try versionList(arena, versions, b.baseurl) });
+        try site_entries.append(arena, .{ .key = "menus", .value = b.menus });
+        tags_out.* = try tagIndex(arena, subset, if (tag_pages) root else null);
+        try site_entries.append(arena, .{ .key = "tags", .value = tags_out.* });
+        try site_entries.append(arena, .{ .key = "icon_tags", .value = .{ .html = icon_tags } });
+        try site_entries.append(arena, .{ .key = "search_box", .value = search_box });
+        try site_entries.append(arena, .{ .key = "taxonomies", .value = taxonomy_index });
+        if (multi) {
+            try site_entries.append(arena, .{ .key = "lang", .value = .{ .string = lang.code } });
+            try site_entries.append(arena, .{ .key = "languages", .value = languages_value });
+            // `_data/i18n/CODE.yml`, the language's strings for templates.
+            const strings: Value = if (b.data.object.get("i18n")) |all| (if (all == .object) all.object.get(lang.code) orelse Value{ .object = .{} } else Value{ .object = .{} }) else .{ .object = .{} };
+            try site_entries.append(arena, .{ .key = "i18n", .value = strings });
+        }
+        site.* = .{ .entries = site_entries.items };
+        posts_out.* = post_values.items;
+    }
+    b.site = sites[0];
+    b.images = try imageConfig(b, config_fields);
+    for (b.statics) |s| try b.static_outputs.put(arena, s.path, s);
+    return .{
+        .langs = langs,
+        .sites = sites,
+        .lang_posts = lang_posts,
+        .lang_tags = lang_tags,
+        .post_count = post_count,
+        .tag_pages = tag_pages,
+        .icon_config = icon_config,
+        .has_search = has_search,
+        .term_pages = term_pages,
+        .taxonomy_pages = taxonomy_pages,
+        .taxonomy_index = taxonomy_index,
+    };
+}
+
+/// Runs Liquid in the Markdown bodies that hold any, before they become
+/// HTML. Returns whether any body changed.
+fn renderLiquidBodies(b: *Builder, pages: []Page, render: ?[]const bool, sites: []const template.Object) Error!bool {
+    const arena = b.arena;
+    var changed = false;
+    for (pages, 0..) |*p, i| {
+        if (!p.is_markdown or p.api != null) continue;
+        if (render) |r| if (!r[i]) continue;
+        if (std.mem.indexOf(u8, p.body, "{{") == null and std.mem.indexOf(u8, p.body, "{%") == null) continue;
+        b.site = sites[p.lang];
+        b.deps = .empty;
+        b.reads_collections = false;
+        b.page_assets = .empty;
+        try b.line_offsets.put(arena, p.source, p.body_line - 1);
+        var td: template.Diagnostic = .{};
+        const tpl = try arena.create(template.Template);
+        tpl.* = template.parseWith(arena, p.source, p.body, .{ .liquid = true }, &td) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.TemplateSyntax => return b.templateFail(td),
+        };
+        var stash: std.ArrayList([]const u8) = .empty;
+        b.stash = &stash;
+        defer b.stash = null;
+        const source = try renderTemplate(b, tpl, p, null);
+        // The same Markdown options as when the page loaded, so `<<<`
+        // includes and shortcodes still work.
+        var inc: FileIncluder = .{ .b = b, .page = p.source };
+        var md_options = b.markdown_options;
+        md_options.includer = .{ .ctx = &inc, .readFn = FileIncluder.read };
+        var sc: ShortcodeRenderer = .{ .b = b, .page = try convert(arena, .{ .map = p.fields }) };
+        md_options.shortcoder = .{ .ctx = &sc, .renderFn = ShortcodeRenderer.render };
+        const doc = try markdown.toDocumentWith(arena, source, md_options);
+        if (doc.include_error) |e| return b.fail(p.source, 0, "{s}", .{e.message});
+        if (doc.chart_error) |ce| return b.fail(p.source, 0, "chart, line {d} of its block: {s}", .{ ce.line, ce.message });
+        if (doc.diagram_error) |de| return b.fail(p.source, 0, "diagram, line {d} of its block: {s}", .{ de.line, de.message });
+        if (doc.math_error) |me| return b.fail(p.source, 0, "math '{s}': {s}", .{ std.mem.trim(u8, me.source, " \n"), me.message });
+        p.html = try template.restoreStashed(arena, doc.html, stash.items);
+        p.toc = try tocHtml(arena, doc.headings);
+        p.uses_components = doc.uses_components;
+        p.included_files = inc.files.items;
+        p.wikilink_html = if (std.mem.indexOf(u8, p.html.?, markdown.wikilink_prefix) != null) p.html else null;
+        p.base = try pageObject(arena, p);
+        p.body_sources = b.deps.items;
+        p.body_reads_collections = b.reads_collections;
+        p.body_assets = b.page_assets.items;
+        changed = true;
+    }
+    return changed;
 }
 
 fn startsWithFrontmatter(b: *Builder, path: []const u8) Error!bool {
@@ -3063,7 +3192,7 @@ fn renderPage(b: *Builder, p: *const Page) Error![]const u8 {
         try b.line_offsets.put(arena, p.source, p.body_line - 1);
         var td: template.Diagnostic = .{};
         const tpl = try arena.create(template.Template);
-        tpl.* = template.parse(arena, p.source, p.body, &td) catch |err| switch (err) {
+        tpl.* = template.parseWith(arena, p.source, p.body, .{ .liquid = b.liquid }, &td) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             error.TemplateSyntax => return b.templateFail(td),
         };
@@ -3189,7 +3318,15 @@ fn renderTemplate(b: *Builder, tpl: *const template.Template, p: *const Page, co
     const root: template.Object = .{ .entries = entries[0..n] };
     b.useTemplate(tpl);
     var td: template.Diagnostic = .{};
-    return template.renderAllocWith(b.arena, tpl, root, .{ .ctx = b, .loadFn = loadInclude, .extendsFn = loadExtends }, .{ .strict = b.strict, .assets = .{ .ctx = b, .lookupFn = lookupAsset } }, &td) catch |err| switch (err) {
+    const loader: template.Loader = .{ .ctx = b, .loadFn = loadInclude, .extendsFn = loadExtends, .relativeFn = loadRelative };
+    return template.renderAllocWith(b.arena, tpl, root, loader, .{
+        .strict = b.strict,
+        .liquid = b.liquid,
+        .now = b.now,
+        .assets = .{ .ctx = b, .lookupFn = lookupAsset },
+        .links = .{ .ctx = b, .lookupFn = lookupLink },
+        .stash = b.stash,
+    }, &td) catch |err| switch (err) {
         error.OutOfMemory => error.OutOfMemory,
         error.WriteFailed => error.OutOfMemory,
         error.TemplateRender, error.TemplateSyntax => b.templateFail(td),
@@ -3222,7 +3359,7 @@ fn loadLayout(b: *Builder, name: []const u8, used_by: []const u8) Error!Layout {
     try b.line_offsets.put(arena, source, doc.body_line - 1);
     var td: template.Diagnostic = .{};
     const tpl = try arena.create(template.Template);
-    tpl.* = template.parse(arena, source, doc.body, &td) catch |err| switch (err) {
+    tpl.* = template.parseWith(arena, source, doc.body, .{ .liquid = b.liquid }, &td) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         error.TemplateSyntax => return b.templateFail(td),
     };
@@ -3337,16 +3474,48 @@ fn loadExtends(ctx: *anyopaque, name: []const u8, diag: *template.Diagnostic) te
     return layout.tpl;
 }
 
+/// Loads `_includes/NAME`; a NAME without an extension, as Liquid's
+/// `{% render 'card' %}` writes it, may also be `NAME.liquid` or
+/// `NAME.html`.
 fn loadInclude(ctx: *anyopaque, name: []const u8, diag: *template.Diagnostic) template.Loader.LoadError!*const template.Template {
     const b: *Builder = @ptrCast(@alignCast(ctx));
     const arena = b.arena;
     const raw = try std.fmt.allocPrint(arena, "_includes/{s}", .{name});
-    const path = sitepath.normalize(arena, raw) catch |err| switch (err) {
+    var path = sitepath.normalize(arena, raw) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         else => return error.TemplateNotFound,
     };
     // An include name with `..` must not reach outside `_includes/`.
     if (!std.mem.startsWith(u8, path, "_includes/")) return error.TemplateNotFound;
+    if (sitepath.extension(path).len == 0 and !b.exists(path)) {
+        for ([_][]const u8{ ".liquid", ".html" }) |ext| {
+            const with_ext = try std.mem.concat(arena, u8, &.{ path, ext });
+            if (b.exists(with_ext)) {
+                path = with_ext;
+                break;
+            }
+        }
+    }
+    return loadTemplateFile(b, path, diag);
+}
+
+/// Loads `{% include_relative NAME %}`: NAME relative to the file that
+/// holds the tag.
+fn loadRelative(ctx: *anyopaque, from: []const u8, name: []const u8, diag: *template.Diagnostic) template.Loader.LoadError!*const template.Template {
+    const b: *Builder = @ptrCast(@alignCast(ctx));
+    const arena = b.arena;
+    // As in Jekyll, the name may not climb out of the file's directory.
+    if (std.mem.indexOf(u8, name, "..") != null) return error.TemplateNotFound;
+    const raw = if (sitepath.dirname(from)) |dir| try std.mem.concat(arena, u8, &.{ dir, "/", name }) else name;
+    const path = sitepath.normalize(arena, raw) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return error.TemplateNotFound,
+    };
+    return loadTemplateFile(b, path, diag);
+}
+
+fn loadTemplateFile(b: *Builder, path: []const u8, diag: *template.Diagnostic) template.Loader.LoadError!*const template.Template {
+    const arena = b.arena;
     try b.addDep(path);
     if (b.templates.get(path)) |t| {
         b.useTemplate(t);
@@ -3367,10 +3536,39 @@ fn loadInclude(ctx: *anyopaque, name: []const u8, diag: *template.Diagnostic) te
         },
     };
     const tpl = try arena.create(template.Template);
-    tpl.* = try template.parse(arena, source, data, diag);
+    tpl.* = try template.parseWith(arena, source, data, .{ .liquid = b.liquid }, diag);
     try b.templates.put(arena, path, tpl);
     b.useTemplate(tpl);
     return tpl;
+}
+
+/// Answers `{% link PATH %}` with the URL of the page, post or static file
+/// at PATH, and `{% post_url NAME %}` with the URL of the post whose file
+/// is NAME (`2024-01-05-hello`), with or without its directory.
+fn lookupLink(ctx: *anyopaque, kind: template.Links.Kind, target: []const u8, why: *[]const u8) Allocator.Error!?[]const u8 {
+    const b: *Builder = @ptrCast(@alignCast(ctx));
+    // The URL changes when the other page's does.
+    b.reads_collections = true;
+    const t = std.mem.trimStart(u8, target, "/");
+    switch (kind) {
+        .link => {
+            for (b.pages) |p| {
+                if (std.mem.eql(u8, p.source, t)) return p.url;
+            }
+            if (findStatic(b.statics, t)) return try std.fmt.allocPrint(b.arena, "{s}/{s}", .{ b.baseurl, t });
+            why.* = "no page, post or file has that path";
+        },
+        .post_url => {
+            for (b.pages) |p| {
+                if (!p.is_post) continue;
+                const stem_path = p.source[0 .. p.source.len - sitepath.extension(p.source).len];
+                const in_posts = stem_path["_posts/".len..];
+                if (std.mem.eql(u8, in_posts, t) or std.mem.eql(u8, sitepath.basename(stem_path), t)) return p.url;
+            }
+            why.* = "no post in _posts/ has that name";
+        },
+    }
+    return null;
 }
 
 /// Writes every output into `out`, copying static files from `src`, and
@@ -4617,6 +4815,81 @@ test "site themes build on built-in themes" {
         .{ "_themes/a/theme.yml", "base: a\n" },
     }, "_config.yml", 1, "more than 8 deep");
     try expectBuildError(&.{.{ "_config.yml", "title: T\ntheme: core\n" }}, "_config.yml", 2, "unknown theme 'core'");
+}
+
+fn expectContains(haystack: []const u8, needle: []const u8) !void {
+    if (std.mem.indexOf(u8, haystack, needle) == null) {
+        std.debug.print("expected '{s}' in:\n{s}\n", .{ needle, haystack });
+        return error.TestUnexpectedResult;
+    }
+}
+
+test "liquid: true builds a Jekyll-style site" {
+    var t: TestSite = try .init(&.{
+        .{ "_config.yml", "title: Jek & Co\nliquid: true\nbaseurl: /blog\nurl: https://example.com\n" },
+        .{ "_layouts/default.html", "<title>{{ page.title | default: site.title }}</title>\n{%- include nav.html active=page.url %}\n{{ content }}" },
+        .{ "_layouts/post.html", "---\nlayout: default\n---\n<article><time>{{ page.date | date_to_string }}</time>{{ content }}</article>" },
+        .{ "_includes/nav.html", "<nav>{% for p in site.pages %}<a href=\"{{ p.url | relative_url }}\"{% if p.url == include.active %} class=\"on\"{% endif %}>{{ p.title }}</a>{% endfor %}</nav>" },
+        .{ "_includes/card.liquid", "<b>{{ post.title }}</b>" },
+        .{ "index.html", "---\ntitle: Home\nlayout: default\n---\n{% for post in site.posts %}{% render 'card', post: post %}{% endfor %}|{{ site.posts.first.content | strip_html | strip }}|{{ site.time | date: '%Y' | size }}" },
+        .{ "about.md", "---\ntitle: About\nlayout: default\n---\nSee [the first post]({% post_url 2024-01-05-hello %}) and [home]({% link index.html %}).\n\n{% raw %}{{ kept }}{% endraw %} {% include_relative snippet.txt %}\n" },
+        .{ "snippet.txt", "Snippet." },
+        .{ "_posts/2024-01-05-hello.md", "---\ntitle: Hello\nlayout: post\n---\n{% assign n = 3 %}Count: {{ n | times: 2 }}.\n" },
+    });
+    defer t.deinit();
+    const a = t.arena.allocator();
+    const src = SiteDir.borrow(testing.io, t.tmp.dir);
+    var diag: Diagnostic = .{};
+    var site = t.build(&diag) catch |err| {
+        std.debug.print("build failed: {f}\n", .{diag});
+        return err;
+    };
+
+    const index = site.find("index.html").?.data.bytes;
+    try expectContains(index, "<title>Home</title><nav>");
+    // Mortise URLs hold the baseurl already; relative_url does not add it twice.
+    try expectContains(index, "<a href=\"/blog/\" class=\"on\">Home</a>");
+    try expectContains(index, "<a href=\"/blog/about/\">About</a>");
+    // Other pages see a post's content after its Liquid ran.
+    try expectContains(index, "<b>Hello</b>|Count: 6.|4");
+    const post = site.find("2024/01/05/hello/index.html").?.data.bytes;
+    try expectContains(post, "<title>Hello</title>");
+    try expectContains(post, "<article><time>05 Jan 2024</time><p>Count: 6.</p>\n</article>");
+    const about = site.find("about/index.html").?.data.bytes;
+    try expectContains(about, "<p>See <a href=\"/blog/2024/01/05/hello/\">the first post</a> and <a href=\"/blog/\">home</a>.</p>\n<p>{{ kept }} Snippet.</p>");
+
+    // A file named by include_relative is a dependency of its page.
+    try src.writeFile("snippet.txt", "Changed.");
+    site = try rebuild(a, src, &site, &.{"snippet.txt"}, &diag);
+    try testing.expectEqual(@as(usize, 1), site.rendered);
+    try expectContains(site.find("about/index.html").?.data.bytes, "{{ kept }} Changed.");
+    // A post's body: the post, and the pages that list posts.
+    try src.writeFile("_posts/2024-01-05-hello.md", "---\ntitle: Hello\nlayout: post\n---\nCount: {{ 4 | plus: 1 }}.\n");
+    site = try rebuild(a, src, &site, &.{"_posts/2024-01-05-hello.md"}, &diag);
+    try expectContains(site.find("index.html").?.data.bytes, "|Count: 5.|");
+    try expectSameOutputs(try t.build(&diag), site);
+}
+
+test "Liquid errors in Markdown bodies name the file line" {
+    try expectBuildError(&.{
+        .{ "_config.yml", "liquid: true\n" },
+        .{ "_posts/2024-01-05-a.md", "---\ntitle: A\n---\nfine\n\n{{ x | nope }}\n" },
+    }, "_posts/2024-01-05-a.md", 6, "unknown filter 'nope'");
+    try expectBuildError(&.{
+        .{ "_config.yml", "liquid: true\n" },
+        .{ "a.md", "---\ntitle: A\n---\n{% post_url 2020-01-01-missing %}\n" },
+    }, "a.md", 4, "no post in _posts/ has that name");
+    try expectBuildError(&.{
+        .{ "_config.yml", "liquid: yes please\n" },
+    }, "_config.yml", 1, "'liquid' must be true or false");
+}
+
+test "without liquid: true, Markdown bodies are not templates" {
+    var t: TestSite = try .init(&.{
+        .{ "a.md", "---\ntitle: A\n---\nWrite `{{ page.title }}`.\n" },
+    });
+    defer t.deinit();
+    try expectContains(try t.output("a/index.html"), "<code>{{ page.title }}</code>");
 }
 
 test "the asset filter fingerprints static files and gives SRI hashes" {

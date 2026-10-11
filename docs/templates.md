@@ -10,6 +10,11 @@ Mortise templates are HTML files with three kinds of tags:
 
 Layouts live in `_layouts/` and includes in `_includes/`.
 
+Templates also read Liquid, as Jekyll and Shopify write it: `assign`,
+`capture`, `case`, `unless`, `{% raw %}`, `| filter: argument`, Liquid's
+and Jekyll's filters, and the rest. [liquid.md](liquid.md) lists them, and
+how `liquid: true` makes a site behave as Jekyll does.
+
 ## Output
 
 ```html
@@ -30,10 +35,13 @@ Layouts live in `_layouts/` and includes in `_includes/`.
 ## Filters
 
 Filters follow a `|` and run left to right: `{{ page.title | upper | raw }}`.
-Arguments go in parentheses, separated by commas: `truncate(80, "...")`.
+Arguments go in parentheses, separated by commas: `truncate(80, "...")`,
+or after a colon as in Liquid: `truncate: 80, "..."`.
 Filters also work on a loop's list:
 `{% for post in site.posts | where("tags", "zig") | limit(5) %}`.
-The filters are built in; there is no way to add more.
+The filters are built in; there is no way to add more. Besides the ones
+below, Liquid's and Jekyll's filters are available; see
+[liquid.md](liquid.md#filters).
 
 Text:
 
@@ -43,7 +51,7 @@ Text:
 | `upper`, `lower`      | ASCII uppercase or lowercase                                   |
 | `default("x")`        | Use `"x"` when the value is missing, `false`, `0`, empty       |
 | `date`                | Format `YYYY-MM-DD` (time part ignored) as `January 5, 2024`   |
-| `date("%Y-%m")`       | Format with `%Y` year, `%m` month (`01`), `%d` day (`05`), `%e` day (`5`), `%B` month name, `%b` short month name, `%%` |
+| `date("%Y-%m")`       | Format with `strftime` directives: `%Y` year, `%m` month (`01`), `%d` day (`05`), `%e` day (`5`), `%B` month name, `%b` short month name, `%A` weekday, `%H:%M` time, `%%`, and the rest of Ruby's |
 | `slugify`             | `Hello, World!` → `hello-world`                                |
 | `truncate(n)`         | At most `n` characters, cut at a word when one is near, then `…`; `truncate(n, "...")` picks the ending. HTML is stripped first |
 | `strip_html`          | Remove tags, keeping the text                                  |
@@ -139,10 +147,14 @@ when unset).
 
 - A value is false when it is missing, `false`, `0`, an empty string, or an
   empty list. Everything else is true.
-- Comparisons: `==` and `!=`. Strings compare by content; integers and
-  floats compare numerically.
+- Comparisons: `==`, `!=`, `<`, `>`, `<=`, `>=`, and `contains` (a
+  substring, a list item, or an object key). Strings compare by content;
+  integers and floats compare numerically. Ordering a number against a
+  string is an error.
 - `not` negates one comparison. `and` binds tighter than `or`. There are no
   parentheses.
+- `elsif` may be written for `elif`, and `{% unless %}` negates a
+  condition.
 
 ## Loops
 

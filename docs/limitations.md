@@ -305,9 +305,8 @@ job:
 ## Templates
 
 - Built-in filters only; no custom filters.
-- Conditions support `==`, `!=`, `not`, `and` and `or`, without parentheses
-  or ordering comparisons (`<`, `>`). Filters work in output tags and loop
-  lists, not in conditions.
+- Conditions have no parentheses. Filters work in output tags, `assign` and
+  loop lists, not in conditions.
 - Outside strict mode (the default for `build`), missing variables render
   as nothing, so a typo in a variable name produces empty output rather
   than an error. Strict mode does not check conditions, or fields of a
@@ -320,7 +319,40 @@ job:
   text without spaces (Chinese, Japanese) counts as few words.
 - `sort` compares strings byte by byte, not by locale.
 - `json` output is safe inside `<script>` but not inside an HTML attribute.
-- `date` formats know `%Y %m %d %e %B %b %%` and English month names only.
+- Dates use English month and day names. Outside Liquid mode an unknown
+  `date` directive is an error.
+
+## Liquid
+
+- Mortise's Markdown does not pass raw HTML through as kramdown does. HTML
+  that `include`, `render` and `highlight` write into a Markdown body is
+  kept as it is, and an include that writes Markdown is converted, but
+  HTML typed into Markdown is escaped.
+- Not supported from Jekyll: front matter `defaults:`, collections other
+  than posts, `permalink:` styles (`pretty`, `:categories`), categories,
+  `site.categories`, `site.static_files`, `site.html_pages`,
+  `site.collections`, `page.id`, the `layout` variable, `jekyll.environment`,
+  plugins and their tags (`{% seo %}`, `{% feed_meta %}`; Mortise writes
+  feeds and SEO tags itself), and `sassify`/`scssify`.
+- A date without a zone is UTC; Jekyll's `timezone:` is not read. `%Z`
+  writes `UTC` for a zero offset and nothing for others. Dates Ruby's
+  `Time.parse` reads in other forms than those in
+  [liquid.md](liquid.md#filters) are passed through by `date` and are an
+  error for Jekyll's date filters.
+- Numbers are 64-bit: whole numbers that overflow are an error rather than
+  growing, and decimals are binary floats rather than Ruby's `BigDecimal`,
+  so `"0.1" | times: 3` gives `0.30000000000000004` where Liquid gives `0.3`.
+- Errors stop the build with the file and line, as in Jekyll, rather than
+  appearing in the page as in Liquid's lax mode: unknown tags and filters,
+  comparing a number with a string, dividing by zero, and invalid numbers.
+- `include` without `with` does not bind a variable named after the
+  template, an old Shopify behavior. `render` can read `site` and `page`.
+- Changing case (`upcase`, `capitalize`, `sort_natural`) is ASCII-only.
+  `slugify` treats every non-ASCII character as a letter, and its `latin`
+  mode knows common accented Latin letters only.
+- Objects print as Ruby 3.3 shows them (`{"a"=>1}`).
+- `sample` is seeded the same way on every build, so it picks the same
+  items each time.
 
 ## Link checking
 

@@ -1,0 +1,25 @@
+---
+layout: default
+---
+<section class="intro">
+  <h1>{{ site.title }}</h1>
+  <p>{{ site.description }}.</p>
+</section>
+
+{%- assign by_year = site.posts | group_by_exp: "post", "post.date | date: '%Y'" %}
+{%- for year in by_year %}
+<h2 class="year">{{ year.name }} <small>{{ year.size }} {% if year.size == 1 %}note{% else %}notes{% endif %}</small></h2>
+<ul class="cards">
+  {%- for post in year.items %}
+  {% include post-card.liquid post=post %}
+  {%- endfor %}
+</ul>
+{%- endfor %}
+
+{%- assign featured = site.posts | where: "featured", true | first %}
+{%- if featured %}
+<aside class="featured">
+  <strong>Start here:</strong> <a href="{{ featured.url | relative_url }}">{{ featured.title }}</a>
+  — {{ featured.excerpt | strip_html | truncatewords: 14 }}
+</aside>
+{%- endif %}

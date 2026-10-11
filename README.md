@@ -302,13 +302,17 @@ my-site/
 - [Font subsetting](docs/fonts.md): `fonts: subset: [fonts/inter.ttf]` makes
   `mortise build` shrink a site's own fonts to the characters its pages use,
   keeping ligatures and kerning.
+- [Liquid](docs/liquid.md): templates read Liquid as Jekyll and Shopify
+  write it, with Liquid's and Jekyll's filters and tags, and
+  `liquid: true` makes a Jekyll site build as Jekyll would, Liquid in
+  Markdown included (see [examples/liquid](examples/liquid)).
 - Templates see `site` (config values plus `site.posts`, newest first, and
   `site.pages`), `page` (frontmatter plus `url`, `path`, and for posts `date`
   and `slug`), and in layouts `content`.
 
 See the [Markdown subset](docs/markdown.md),
 [frontmatter format](docs/frontmatter.md),
-[template syntax](docs/templates.md), and
+[template syntax](docs/templates.md), [Liquid](docs/liquid.md), and
 [known limitations](docs/limitations.md).
 
 ## Source layout
@@ -323,7 +327,9 @@ See the [Markdown subset](docs/markdown.md),
 | `src/tex.zig`         | TeX math to MathML                                |
 | `src/diagram.zig`     | Flowcharts and sequence diagrams as SVG           |
 | `src/frontmatter.zig` | Restricted YAML frontmatter                       |
-| `src/template.zig`    | Template engine                                   |
+| `src/template.zig`    | Template engine, Mortise and Liquid syntax        |
+| `src/filters.zig`     | Template filters: Mortise, Liquid and Jekyll      |
+| `src/datetime.zig`    | Date parsing and `strftime` formatting            |
 | `src/pipeline.zig`    | Source tree to output files                       |
 | `src/llms.zig`        | llms.txt, llms-full.txt and Markdown twins        |
 | `src/i18n.zig`        | Languages of pages and translations               |

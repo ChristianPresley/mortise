@@ -1,0 +1,8 @@
+# A Jekyll-style site written in Liquid. Build it with:
+#   zig build run -- build examples/liquid
+# `liquid: true` makes templates and Markdown bodies Liquid, as in Jekyll.
+liquid: true
+title: Field Notes
+description: Short notes from a workshop, written the way a Jekyll site is
+author: Ada Fernhill
+url: https://example.com

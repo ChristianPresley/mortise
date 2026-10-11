@@ -1,0 +1,7 @@
+<footer class="site">
+  <div class="wrap">
+    {%- assign words = 0 %}
+    {%- for post in site.posts %}{% assign n = post.content | number_of_words %}{% assign words = words | plus: n %}{% endfor %}
+    <p>{{ site.posts.size }} notes, {{ words }} words, by {{ site.author }}.</p>
+  </div>
+</footer>

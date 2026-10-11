@@ -1,0 +1,16 @@
+---
+layout: default
+---
+<article class="post">
+  <p class="meta">
+    <time datetime="{{ page.date | date_to_xml_schema }}">{{ page.date | date: "%B %-d, %Y" }}</time>
+    · {{ content | number_of_words }} words
+    {%- if page.tags.size > 0 %} · {{ page.tags | array_to_sentence_string }}{% endif %}
+  </p>
+  <h1>{{ page.title | smartify }}</h1>
+  {{ content }}
+  <nav class="pager">
+    {%- if page.previous %}<a href="{{ page.previous.url | relative_url }}">← {{ page.previous.title }}</a>{% endif %}
+    {%- if page.next %}<a class="next" href="{{ page.next.url | relative_url }}">{{ page.next.title }} →</a>{% endif %}
+  </nav>
+</article>
