@@ -178,11 +178,12 @@ my-site/
   draws an image at `/PATH.png` during the build: starfields, HUD panel
   frames for CSS `border-image`, radar scopes, planets, and hologram
   wireframes, with sprite-sheet CSS animations for the animated ones.
-- Eight built-in [themes](docs/themes.md), picked with `theme:` in
+- Nine built-in [themes](docs/themes.md), picked with `theme:` in
   `_config.yml`: `visor` (a helmet HUD), `lcars` (a starship console),
   `phosphor` (a CRT terminal), `cyberdeck` (neon hacker deck), `freighter`
   (an old ship's mainframe), `grid` (a world drawn in light), `codex` (a
-  starship encyclopedia) and `cockpit` (a flight deck). They add no fonts
+  starship encyclopedia), `cockpit` (a flight deck) and `scanvisor` (a
+  scan visor with energy tanks). They add no fonts
   or scripts; `zig build theme-gallery` previews them all.
   Their colors are [design tokens](docs/themes.md#design-tokens) you can
   override with `theme_tokens:`; token pairs give light and dark modes

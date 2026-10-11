@@ -1,0 +1,246 @@
+/* Mortise theme "scanvisor": a bounty hunter's helmet visor in scan mode.
+   An orange frame curves around the edges of the glass, the site name is
+   an energy readout with reserve tanks, callouts are scan-data panels
+   with a sweeping scan line, and steps are energy tanks that fill.
+   Colors come from the --m- design tokens; no fonts, images or scripts.
+   Motion stops under prefers-reduced-motion. */
+
+:root {
+  --s-teal: var(--m-accent);
+  --s-orange: var(--m-accent2);
+  --s-glow: color-mix(in srgb, var(--m-accent) 55%, transparent);
+  --s-line: color-mix(in srgb, var(--m-accent) 30%, transparent);
+  --s-panel: color-mix(in srgb, var(--m-surface) 86%, transparent);
+  --s-display: "Bahnschrift", "Barlow Semi Condensed", "Arial Narrow", system-ui, sans-serif;
+  --s-mono: "Cascadia Code", ui-monospace, SFMono-Regular, Consolas, monospace;
+  /* Orange corner nubs on a panel. */
+  --s-n: linear-gradient(var(--s-orange), var(--s-orange));
+  --s-nubs:
+    var(--s-n) top left / 10px 3px no-repeat, var(--s-n) top left / 3px 10px no-repeat,
+    var(--s-n) bottom right / 10px 3px no-repeat, var(--s-n) bottom right / 3px 10px no-repeat;
+  --mt-border: var(--s-line);
+  --mt-surface: var(--s-panel);
+  --mt-subtle: color-mix(in srgb, var(--m-accent) 8%, transparent);
+  --mt-muted: var(--m-muted);
+  --mt-accent: var(--m-accent);
+  --mt-note: var(--m-accent);
+  --mt-tip: var(--m-accent);
+  --mt-important: var(--m-accent2);
+  --mt-warning: var(--m-accent2);
+  --mt-caution: var(--m-danger);
+  --mt-radius: 4px;
+}
+
+html {
+  scrollbar-color: var(--m-border) var(--m-bg);
+  background:
+    radial-gradient(ellipse 80% 60% at 50% 40%, color-mix(in srgb, var(--m-accent) 7%, transparent), transparent 70%) fixed,
+    var(--m-bg);
+}
+
+:root body {
+  color: var(--m-text);
+  background: transparent;
+  font-family: var(--s-display);
+  font-size: 17px;
+  letter-spacing: .02em;
+}
+
+/* The visor: an orange frame that curves around the glass, a faint
+   reflection, and darker edges. Fixed behind nothing, above everything,
+   and never in the way of the pointer. */
+:root body::before {
+  content: "";
+  position: fixed;
+  inset: 8px;
+  z-index: 2147483000;
+  pointer-events: none;
+  border: 2px solid transparent;
+  border-radius: 48% 48% 14% 14% / 12% 12% 6% 6%;
+  background:
+    linear-gradient(var(--m-bg), var(--m-bg)) padding-box,
+    linear-gradient(to bottom, var(--s-orange), color-mix(in srgb, var(--m-accent2) 25%, transparent) 30%, transparent 55%, color-mix(in srgb, var(--m-accent2) 35%, transparent)) border-box;
+  -webkit-mask: linear-gradient(#000 0 0) padding-box exclude, linear-gradient(#000 0 0);
+  mask: linear-gradient(#000 0 0) padding-box exclude, linear-gradient(#000 0 0);
+  opacity: .8;
+}
+:root body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 2147482999;
+  pointer-events: none;
+  background:
+    linear-gradient(115deg, transparent 30%, rgba(255, 255, 255, .025) 38%, transparent 46%),
+    radial-gradient(ellipse 110% 100% at 50% 45%, transparent 60%, rgba(0, 0, 0, .6) 100%);
+}
+
+::selection { background: var(--s-teal); color: var(--m-bg); }
+
+/* The top of the visor: the energy readout and the visor modes. */
+:root body > header { padding: 1.4rem 0 1rem; border-bottom: 1px solid var(--s-line); }
+:root body > header .brand {
+  display: inline-flex;
+  flex-direction: column;
+  color: var(--s-teal);
+  font-weight: 700;
+  font-size: 1.05rem;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  text-decoration: none;
+  text-shadow: 0 0 10px var(--s-glow);
+}
+:root body > header .brand::before {
+  content: "ENERGY 99";
+  color: var(--s-orange);
+  font-size: .62rem;
+  letter-spacing: .3em;
+  text-shadow: none;
+}
+/* Reserve tanks: a row of squares, the last one empty. */
+:root body > header .brand::after {
+  content: "";
+  width: 9px;
+  height: 9px;
+  margin-top: .35rem;
+  background: var(--s-teal);
+  box-shadow: 13px 0 var(--s-teal), 26px 0 var(--s-teal), 39px 0 0 -1px transparent, 39px 0 0 0 var(--s-line);
+  border-radius: 1px;
+}
+:root body > header nav { gap: .35rem; }
+:root body > header nav a {
+  padding: .22rem .9rem;
+  border: 1px solid color-mix(in srgb, var(--m-accent2) 55%, transparent);
+  border-radius: 99px;
+  color: var(--s-orange);
+  font-size: .76rem;
+  font-weight: 600;
+  letter-spacing: .16em;
+  text-transform: uppercase;
+  text-decoration: none;
+}
+:root body > header nav a:hover { background: color-mix(in srgb, var(--m-accent2) 14%, transparent); color: #fff; }
+:root body > header nav a.current { background: var(--s-orange); border-color: var(--s-orange); color: #160900; }
+
+/* Headings: targets acquired. */
+:root body :is(h1, h2, h3, h4) { font-family: var(--s-display); color: #fff; font-weight: 700; letter-spacing: .05em; }
+:root body h1 { font-size: 2.2rem; text-transform: uppercase; letter-spacing: .1em; text-shadow: 0 0 16px var(--s-glow); }
+:root body h1::before {
+  content: "";
+  display: inline-block;
+  width: .55em;
+  height: .55em;
+  margin-right: .45em;
+  vertical-align: .1em;
+  border: 2px solid var(--s-orange);
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 3px var(--m-bg), inset 0 0 0 6px var(--s-orange);
+  animation: s-lock 1s ease-out both;
+}
+@keyframes s-lock { from { transform: scale(2.4) rotate(-90deg); opacity: 0; } }
+:root body h2 { margin-top: 2.5rem; font-size: 1.3rem; text-transform: uppercase; letter-spacing: .1em; }
+:root body h2::before { content: "SCAN \25B8  "; color: var(--s-teal); font-size: .7em; letter-spacing: .25em; }
+:root body h3 { color: var(--s-teal); font-size: 1.05rem; }
+:root body :is(.mt-api, .mt-card, .mt-details, .mt-callout, .mt-tabs, .mt-api-card) h2::before { content: none; }
+
+:root body a { color: var(--s-teal); text-decoration-color: var(--s-line); text-underline-offset: 3px; }
+:root body a:hover { color: #fff; text-shadow: 0 0 8px var(--s-glow); }
+:root body :is(.lead, .meta, small) { color: var(--m-muted); }
+:root body strong { color: #fff; }
+:root body hr { border: 0; height: 1px; background: linear-gradient(90deg, var(--s-orange), var(--s-line) 25%, var(--s-line) 75%, var(--s-orange)); }
+:root body mark { background: color-mix(in srgb, var(--m-accent2) 25%, transparent); color: #fff; box-shadow: inset 0 -2px 0 var(--s-orange); }
+
+/* Panels: visor glass with orange corner nubs. */
+:root body :is(pre, .toc-box, .mt-card, .mt-details, .mt-figure, .mt-code, .mt-api-op, .mt-api-schema, .mt-api-card, .pager .prev, .pager .next) {
+  border: 1px solid var(--s-line);
+  border-radius: 4px;
+  background: var(--s-nubs), var(--s-panel);
+}
+:root body pre { padding: 1rem 1.2rem; background: var(--s-nubs), rgba(2, 8, 10, .92); color: var(--m-text); }
+:root body .mt-code pre { border: 0; background: rgba(2, 8, 10, .92); }
+:root body .mt-code-title { color: var(--s-orange); letter-spacing: .12em; text-transform: uppercase; }
+:root body code { font-family: var(--s-mono); }
+:root body :not(pre) > code { padding: .05rem .35rem; border-radius: 3px; background: color-mix(in srgb, var(--m-accent) 12%, transparent); color: #c4fff4; }
+:root body .hl-keyword { color: var(--s-orange); }
+:root body :is(.hl-literal, .hl-number) { color: #ffd166; }
+:root body .hl-string { color: var(--s-teal); }
+:root body .hl-comment { color: #557d79; font-style: italic; }
+:root body .hl-builtin { color: #9fe8ff; }
+
+:root body .toc-box strong { color: var(--s-orange); letter-spacing: .25em; text-transform: uppercase; font-size: .72rem; }
+
+/* Callouts: scan data, with a scan line passing over each one. */
+:root body .mt-callout {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--mt-tone) 45%, transparent);
+  border-radius: 4px;
+  background:
+    var(--s-nubs),
+    repeating-linear-gradient(0deg, transparent 0 3px, color-mix(in srgb, var(--mt-tone) 5%, transparent) 3px 4px),
+    linear-gradient(90deg, color-mix(in srgb, var(--mt-tone) 12%, var(--s-panel)), var(--s-panel) 70%);
+}
+:root body .mt-callout::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(to bottom, transparent, color-mix(in srgb, var(--mt-tone) 22%, transparent) 50%, transparent 52%);
+  background-size: 100% 300%;
+  animation: s-scan 3.2s linear infinite;
+}
+@keyframes s-scan { from { background-position: 0 100%; } to { background-position: 0 -100%; } }
+:root body .mt-callout-title { font-family: var(--s-mono); text-transform: uppercase; letter-spacing: .18em; font-size: .74rem; }
+:root body .mt-callout-title::after { content: "  \00b7  SCAN DATA"; color: var(--m-muted); font-weight: 400; }
+
+:root body table { border-collapse: collapse; }
+:root body :is(th, td) { border: 0; border-bottom: 1px solid var(--s-line); }
+:root body th { color: var(--s-orange); font-size: .76rem; letter-spacing: .15em; text-transform: uppercase; background: color-mix(in srgb, var(--m-accent2) 7%, transparent); }
+:root body tbody tr:hover { background: color-mix(in srgb, var(--m-accent) 6%, transparent); }
+:root body blockquote { border-left: 3px solid var(--s-orange); background: color-mix(in srgb, var(--m-accent2) 6%, transparent); color: var(--m-text); }
+
+:root body :is(.tag, .mt-badge) { border: 1px solid var(--s-orange); border-radius: 99px; background: none; color: var(--s-orange); font-size: .72rem; letter-spacing: .12em; text-transform: uppercase; }
+:root body .mt-kbd { border: 1px solid var(--s-teal); border-radius: 3px; background: var(--m-surface); color: #fff; box-shadow: 0 2px 0 var(--s-line); }
+:root body .mt-method { border-radius: 99px; }
+/* Steps: energy tanks that fill as you go down the list. */
+:root body .mt-steps li { border-left: 1px dashed var(--s-line); }
+:root body .mt-steps li::before {
+  border-radius: 2px;
+  background: linear-gradient(to top, var(--s-teal) 65%, color-mix(in srgb, var(--m-accent) 20%, transparent) 65%);
+  color: var(--m-bg);
+  box-shadow: 0 0 0 1px var(--s-teal), 0 0 10px var(--s-glow);
+  font-family: var(--s-mono);
+}
+:root body .mt-actions a { border: 1px solid var(--s-teal); border-radius: 99px; color: var(--s-teal); text-transform: uppercase; letter-spacing: .14em; font-size: .82rem; text-decoration: none; }
+:root body .mt-actions a:first-of-type { background: var(--s-orange); border-color: var(--s-orange); color: #160900; }
+:root body .mt-actions a:hover { box-shadow: 0 0 12px var(--s-glow); }
+:root body .mt-tab-label { border-radius: 99px; text-transform: uppercase; letter-spacing: .1em; }
+
+/* Progress bars, as an energy meter. */
+:root body progress { appearance: none; height: .8rem; border: 1px solid var(--s-teal); border-radius: 2px; background: transparent; }
+:root body progress::-webkit-progress-bar { background: transparent; }
+:root body progress::-webkit-progress-value { background: repeating-linear-gradient(90deg, var(--s-teal) 0 10px, transparent 10px 13px); }
+:root body progress::-moz-progress-bar { background: repeating-linear-gradient(90deg, var(--s-teal) 0 10px, transparent 10px 13px); }
+
+:root body .wiki-nav-title { color: var(--s-orange); letter-spacing: .3em; text-transform: uppercase; }
+:root body .wiki-nav a { color: var(--m-text); border-radius: 4px; }
+:root body .wiki-nav a:hover { background: color-mix(in srgb, var(--m-accent) 8%, transparent); color: #fff; }
+:root body .wiki-nav a.current { background: linear-gradient(90deg, color-mix(in srgb, var(--m-accent) 25%, transparent), transparent); color: #fff; box-shadow: inset 2px 0 var(--s-orange); }
+:root body .wiki-nav ul ul { border-left-color: var(--s-line); }
+:root body .breadcrumbs, :root body .breadcrumbs a { color: var(--m-muted); text-transform: uppercase; letter-spacing: .12em; font-size: .72rem; }
+:root body .breadcrumbs .here { color: var(--s-teal); }
+:root body .pager a { text-decoration: none; padding: .7rem 1rem; }
+:root body .pager small { color: var(--s-orange); text-transform: uppercase; letter-spacing: .2em; }
+:root body .posts li { list-style: none; padding-left: .8rem; border-left: 2px solid var(--s-line); }
+:root body .posts li:hover { border-left-color: var(--s-orange); }
+
+:root body > footer { margin-bottom: 1.5rem; border-top: 1px solid var(--s-line); color: var(--m-muted); text-transform: uppercase; letter-spacing: .14em; font-size: .74rem; opacity: 1; }
+:root body > footer p::before { content: "SCAN COMPLETE \00b7  "; color: var(--s-teal); }
+
+@media (prefers-reduced-motion: reduce) {
+  :root body *, :root body *::before, :root body *::after { animation: none !important; transition: none !important; }
+}
+@media (max-width: 760px) {
+  :root body::before { inset: 4px; border-radius: 24% 24% 8% 8% / 6% 6% 4% 4%; }
+  :root body .toc-box { float: none; margin: 0 0 1rem; }
+}

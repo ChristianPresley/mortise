@@ -1,0 +1,11 @@
+# Design tokens for the scanvisor theme: a bounty hunter's helmet visor in
+# scan mode, teal data inside an orange frame.
+scheme: dark
+bg: "#04090b"
+surface: "#0a171b"
+text: "#d6f2ee"
+muted: "#6c9893"
+accent: "#38e3c9"
+accent2: "#ff982e"
+border: "#1c3b3e"
+danger: "#ff4b4b"

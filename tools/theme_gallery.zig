@@ -20,6 +20,7 @@ const blurbs = [_]struct { []const u8, []const u8 }{
     .{ "grid", "A world drawn in light: a floor grid to the horizon, traced rounded panels." },
     .{ "codex", "A starship encyclopedia: holographic blue, hex lattice, cut-corner entries." },
     .{ "cockpit", "A trader's flight deck: orange vector light framed by canopy struts." },
+    .{ "scanvisor", "A bounty hunter's scan visor: orange frame, energy tanks, scan-data panels." },
 };
 
 pub fn main(init: std.process.Init) !void {

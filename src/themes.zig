@@ -76,6 +76,7 @@ pub const all = [_]Theme{
     plain("grid"),
     plain("codex"),
     plain("cockpit"),
+    plain("scanvisor"),
 };
 
 /// A theme on `core` made of `themes/NAME.css` and `themes/NAME/tokens.yml`.
@@ -108,6 +109,6 @@ test "find" {
     try std.testing.expect(find("visor") != null);
     try std.testing.expect(find("lcars") != null);
     try std.testing.expect(find("nope") == null);
-    try std.testing.expectEqualStrings("visor, lcars, phosphor, cyberdeck, freighter, grid, codex, cockpit", names);
+    try std.testing.expectEqualStrings("visor, lcars, phosphor, cyberdeck, freighter, grid, codex, cockpit, scanvisor", names);
     try std.testing.expect(file(find("core").?, "_layouts/post.html") != null);
 }

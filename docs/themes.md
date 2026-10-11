@@ -1,9 +1,9 @@
 # Themes
 
-Mortise has eight built-in themes. Pick one in `_config.yml`:
+Mortise has nine built-in themes. Pick one in `_config.yml`:
 
 ```yaml
-theme: visor   # or: lcars, phosphor, cyberdeck, freighter, grid, codex, cockpit
+theme: visor   # or: lcars, phosphor, cyberdeck, freighter, grid, codex, cockpit, scanvisor
 ```
 
 To see them all, build the [theme gallery](#theme-gallery).
@@ -141,6 +141,23 @@ The flight deck of a trading ship.
 - Console panels with an orange top edge and bevelled lower corners;
   ice blue for links and quotes.
 
+## scanvisor
+
+A bounty hunter's helmet visor in scan mode.
+
+- An orange frame curves around the edges of the window like the rim of the
+  visor, with a faint reflection on the glass.
+- The site name is an energy readout (`ENERGY 99`) with a row of reserve
+  tanks; nav links are rounded visor-mode buttons, the current one lit
+  orange.
+- `h1` locks on with a targeting reticle; each `h2` reads `SCAN ▸`.
+- Callouts are scan-data panels: striped glass, a `SCAN DATA` label, and a
+  scan line that sweeps down them.
+- Steps are energy tanks, and `<progress>` bars are segmented energy
+  meters.
+- Panels are visor glass with orange corner nubs; teal marks data and orange
+  marks what can be used.
+
 ## Theme gallery
 
 `zig build theme-gallery` builds the showcase with every built-in theme
@@ -193,10 +210,10 @@ theme_tokens:
 Every theme defines `bg`, `surface`, `text`, `muted`, `accent` and
 `border`; `visor` adds `accent2`, `success`, `important` and `danger`, and
 `lcars` its console palette (`peach`, `gold`, `lilac`, `violet`, `blue`,
-`success`, `danger`). Of the others, `cyberdeck`, `freighter`, `grid`, `codex`
-and `cockpit` use `accent2` for their second color, `cyberdeck` adds
-`warning` and `success`, and `phosphor`, `freighter`, `cyberdeck` and `cockpit`
-add `danger`. Your own CSS can use them too:
+`success`, `danger`). Of the others, `cyberdeck`, `freighter`, `grid`, `codex`,
+`cockpit` and `scanvisor` use `accent2` for their second color, `cyberdeck` adds
+`warning` and `success`, and `phosphor`, `freighter`, `cyberdeck`, `cockpit` and
+`scanvisor` add `danger`. Your own CSS can use them too:
 `color: var(--m-accent)`. New names in `theme_tokens` become new
 properties.
 
