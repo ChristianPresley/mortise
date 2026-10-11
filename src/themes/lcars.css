@@ -224,7 +224,7 @@ html { background: var(--m-bg); }
 }
 :root body h1::after { content: ""; flex: 1; min-width: 3rem; height: 1rem; border-radius: 999px; background: linear-gradient(90deg, var(--l-orange) 0 70%, #000 70% calc(70% + .3rem), var(--l-gold) calc(70% + .3rem)); }
 :root body main { counter-reset: l-sec; }
-:root body h2 {
+:root body h2:not(.mt-api-card *) {
   display: flex;
   align-items: center;
   gap: .6rem;
@@ -232,7 +232,7 @@ html { background: var(--m-bg); }
   color: var(--l-peach);
   font-size: 1.45rem;
 }
-:root body h2::before {
+:root body h2:not(.mt-api-card *)::before {
   counter-increment: l-sec;
   content: counter(l-sec, decimal-leading-zero) "-" counter(l-sec, upper-alpha);
   padding: .3rem .7rem .05rem;
@@ -241,7 +241,7 @@ html { background: var(--m-bg); }
   color: #000;
   font-size: .7rem;
 }
-:root body h2::after { content: ""; flex: 1; height: .55rem; border-radius: 0 999px 999px 0; background: var(--l-lilac); opacity: .85; }
+:root body h2:not(.mt-api-card *)::after { content: ""; flex: 1; height: .55rem; border-radius: 0 999px 999px 0; background: var(--l-lilac); opacity: .85; }
 :root body h3 { color: var(--l-blue); }
 :root body h4 { color: var(--l-lilac); }
 

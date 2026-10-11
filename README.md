@@ -42,7 +42,7 @@ Most of that time goes to copying the 27 MB debug binary and starting it.
 ```sh
 mortise new my-site                              # create a starter site
 mortise build [SITE_DIR] [--drafts] [--future] [--strict]  # build SITE_DIR (default .) into SITE_DIR/_site
-mortise check [SITE_DIR] [--drafts]              # report broken internal links and anchors
+mortise check [SITE_DIR] [--drafts]              # report broken links and accessibility problems
 mortise serve [SITE_DIR] [--port N] [--drafts] [--future]  # dev server on http://localhost:4000/
 mortise version
 ```
@@ -54,6 +54,12 @@ an `id` on the target page. Problems are printed as
 `OUTPUT:LINE: broken link "URL": REASON (from SOURCE)` and the command
 exits with status 1, so it can gate CI. Links with a scheme (`https:`,
 `mailto:`) are not fetched.
+
+The same pass lints every page for accessibility problems found in the
+markup: a missing `lang` or `<title>`, images without `alt`, links and
+buttons without text or an `aria-label`, form controls without a label,
+frames without a `title`, heading levels that skip (`<h2>` then `<h4>`),
+and repeated ids. They are printed the same way and also fail the command.
 
 `new` writes a small working site: a layout, a post layout, a header
 include, a paginated home page, an about page, a welcome post, and a
@@ -264,6 +270,7 @@ See the [Markdown subset](docs/markdown.md),
 | `src/server.zig`      | Dev server and Server-Sent Events live reload     |
 | `src/check.zig`       | `mortise check` link and anchor checker           |
 | `src/git.zig`         | Git history reader for `git_dates`                |
+| `src/a11y.zig`        | Accessibility lint run by `mortise check`         |
 | `src/main.zig`        | Command-line entry point                          |
 | `src/restart.zig`     | `serve --restart-on-rebuild` supervisor           |
 | `src/themes/`         | Built-in themes (`theme:` in `_config.yml`)       |

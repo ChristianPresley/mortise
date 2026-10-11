@@ -391,8 +391,8 @@ li.mt-task > input[type="checkbox"]:checked {
 /* An overview of every API: cards listing their operations. */
 .mt-api-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(18rem, 1fr)); gap: 1rem; margin: 1.5rem 0; }
 .mt-api-card { padding: 1rem 1.15rem; border: 1px solid var(--mt-border); border-radius: var(--mt-radius); background: var(--mt-surface); }
-.mt-api-card h3 { display: flex; justify-content: space-between; align-items: baseline; gap: .5rem; margin: 0 0 .35rem; font-size: 1.05rem; }
-.mt-api-card h3 a { color: inherit; text-decoration: none; }
+.mt-api-card :is(h2, h3) { display: flex; justify-content: space-between; align-items: baseline; gap: .5rem; margin: 0 0 .35rem; font-size: 1.05rem; }
+.mt-api-card :is(h2, h3) a { color: inherit; text-decoration: none; }
 .mt-api-card-text { margin: 0 0 .75rem; color: var(--mt-muted); font-size: .9rem; }
 .mt-api-card .mt-api-nav-op { padding: .2rem .25rem; }
 .mt-api-card-text p { margin: 0; }

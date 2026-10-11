@@ -20,7 +20,7 @@ const usage =
     \\Commands:
     \\  new       Create a new site in SITE_DIR (required; must be empty or missing)
     \\  build     Build SITE_DIR (default: the current directory) into SITE_DIR/_site
-    \\  check     Build SITE_DIR in memory and report broken internal links and anchors
+    \\  check     Build SITE_DIR in memory and report broken links and anchors and accessibility problems
     \\  serve     Serve SITE_DIR on localhost and reload the browser on every change
     \\  version   Print the version
     \\  help      Print this message
@@ -196,9 +196,10 @@ fn cmdCheck(ctx: Ctx, rest: []const [:0]const u8) u8 {
         return 1;
     };
     for (report.problems) |p| ctx.err.print("{f}\n", .{p}) catch {};
-    const summary = "Checked {d} links in {d} pages: {d} broken\n";
-    const counts = .{ report.links, report.pages, report.problems.len };
-    if (report.problems.len > 0) {
+    for (report.a11y) |p| ctx.err.print("{f}\n", .{p}) catch {};
+    const summary = "Checked {d} links in {d} pages: {d} broken, {d} accessibility problems\n";
+    const counts = .{ report.links, report.pages, report.problems.len, report.a11y.len };
+    if (report.problems.len > 0 or report.a11y.len > 0) {
         ctx.err.print(summary, counts) catch {};
         return 1;
     }

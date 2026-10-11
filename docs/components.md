@@ -69,7 +69,7 @@ A list item starting with `[ ]` or `[x]` gets a checkbox:
 - [ ] Ship it
 ```
 
-Output: `<li class="mt-task"><input type="checkbox" disabled checked> ...`.
+Output: `<li class="mt-task"><input type="checkbox" disabled checked aria-label="Done"> ...`.
 
 ## Footnotes
 

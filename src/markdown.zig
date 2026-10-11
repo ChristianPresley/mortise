@@ -1349,7 +1349,7 @@ fn renderBlock(r: *Renderer, b: Block, tight: bool, w: *Writer) Error!void {
                 // Task list item: `- [ ] text` or `- [x] text`.
                 const task = if (children.len > 0 and children[0] == .paragraph) taskMarker(children[0].paragraph) else null;
                 if (task) |done| {
-                    try w.print("<li class=\"mt-task\"><input type=\"checkbox\" disabled{s}> ", .{if (done) " checked" else ""});
+                    try w.print("<li class=\"mt-task\"><input type=\"checkbox\" disabled{s}> ", .{if (done) " checked aria-label=\"Done\"" else " aria-label=\"Not done\""});
                 } else try w.writeAll("<li>");
                 for (children, 0..) |child, idx| {
                     if (l.tight and child == .paragraph) {

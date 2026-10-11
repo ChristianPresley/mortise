@@ -6,6 +6,8 @@
 //! Links with a scheme (`https:`, `mailto:`, `data:`), protocol-relative
 //! links (`//host/...`) and links into `/__` (dev server endpoints) are
 //! not checked.
+//!
+//! The same pass runs the accessibility lint in a11y.zig on every page.
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
@@ -13,6 +15,7 @@ const Writer = std.Io.Writer;
 const SiteDir = @import("SiteDir.zig");
 const sitepath = @import("path.zig");
 const pipeline = @import("pipeline.zig");
+const a11y = @import("a11y.zig");
 
 pub const Problem = struct {
     /// Output path of the page with the link.
@@ -51,6 +54,8 @@ pub const Report = struct {
     pages: usize,
     /// Internal links checked.
     links: usize,
+    /// Accessibility problems, by page and line.
+    a11y: []const a11y.Issue = &.{},
 };
 
 /// One link or anchor found in a page.
@@ -68,6 +73,7 @@ const Scan = struct {
 /// copies unchanged.
 pub fn check(arena: Allocator, site: pipeline.Site, src: SiteDir) Allocator.Error!Report {
     var scans: std.StringHashMapUnmanaged(Scan) = .empty;
+    var issues: std.ArrayList(a11y.Issue) = .empty;
     for (site.outputs) |out| {
         if (!isHtml(out.path)) continue;
         const html = switch (out.data) {
@@ -75,6 +81,7 @@ pub fn check(arena: Allocator, site: pipeline.Site, src: SiteDir) Allocator.Erro
             .copy => src.readFile(arena, out.source) catch continue,
         };
         try scans.put(arena, out.path, try scan(arena, html));
+        try a11y.lint(arena, out.path, out.source, html, &issues);
     }
 
     var problems: std.ArrayList(Problem) = .empty;
@@ -99,7 +106,7 @@ pub fn check(arena: Allocator, site: pipeline.Site, src: SiteDir) Allocator.Erro
             });
         }
     }
-    return .{ .problems = problems.items, .pages = scans.count(), .links = links };
+    return .{ .problems = problems.items, .pages = scans.count(), .links = links, .a11y = issues.items };
 }
 
 const Result = enum { ok, missing_page, missing_anchor, outside_baseurl };

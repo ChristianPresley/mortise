@@ -91,10 +91,13 @@ test "the showcase example builds" {
             return error.TestExpectedOutput;
         }
     }
-    // Every internal link and anchor in the showcase resolves.
+    // Every internal link and anchor in the showcase resolves, and its
+    // pages pass the accessibility lint.
     const report = try mortise.check.check(arena_state.allocator(), site, src);
     for (report.problems) |p| std.debug.print("showcase: {f}\n", .{p});
+    for (report.a11y) |p| std.debug.print("showcase: {f}\n", .{p});
     try testing.expectEqual(@as(usize, 0), report.problems.len);
+    try testing.expectEqual(@as(usize, 0), report.a11y.len);
 }
 
 test "markdown fixtures" {

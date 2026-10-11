@@ -150,8 +150,8 @@ html {
 }
 @keyframes v-boot { 0% { opacity: 0; } 30% { opacity: .8; } 45% { opacity: .2; } 100% { opacity: 1; } }
 :root body main { counter-reset: v-obj; }
-:root body h2 { margin-top: 2.4rem; text-transform: uppercase; font-size: 1.35rem; letter-spacing: .1em; }
-:root body h2::before {
+:root body h2:not(.mt-api-card *) { margin-top: 2.4rem; text-transform: uppercase; font-size: 1.35rem; letter-spacing: .1em; }
+:root body h2:not(.mt-api-card *)::before {
   counter-increment: v-obj;
   content: "OBJ-" counter(v-obj, decimal-leading-zero) " //";
   display: block;

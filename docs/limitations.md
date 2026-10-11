@@ -246,6 +246,17 @@ job:
   mention.
 - OpenAPI pages (`_api/`) are not checked.
 
+## Accessibility lint
+
+- The lint reads markup only. Color contrast, focus
+  order, keyboard traps, and content added by JavaScript are not checked.
+- An `aria-labelledby` attribute counts as a name without checking that
+  the ids it lists exist.
+- Problems cannot be silenced per page or per rule; `check` reports them
+  all and exits with status 1.
+- Every heading on a page counts toward the skip check, including those in
+  layouts and includes.
+
 ## Site pipeline
 
 - `gzip: true` writes gzip only (no Brotli or Zstandard), and only in
