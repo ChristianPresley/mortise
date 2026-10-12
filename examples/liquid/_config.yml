@@ -14,3 +14,15 @@ defaults:
       type: posts
     values:
       layout: post
+  - scope:
+      type: tools
+    values:
+      layout: page
+
+# Collections: _tools/ is published at /tools/NAME/; _glossary/ is only
+# listed, as site.glossary.
+collections:
+  tools:
+    output: true
+    sort_by: order
+  glossary:

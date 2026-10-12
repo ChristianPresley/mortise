@@ -23,6 +23,8 @@ const sitepath = @import("path.zig");
 const markdown = @import("markdown.zig");
 const frontmatter = @import("frontmatter.zig");
 const fm_defaults = @import("defaults.zig");
+const collections = @import("collections.zig");
+const yaml = @import("yaml.zig");
 const template = @import("template.zig");
 const feeds = @import("feeds.zig");
 const gzip = @import("gzip.zig");
@@ -185,6 +187,7 @@ const State = struct {
     skipped: Skipped,
     config_fields: frontmatter.Map,
     defaults: []const fm_defaults.Default,
+    collections: []const collections.Collection,
     baseurl: []const u8,
     site_url: ?[]const u8,
     options: Options,
@@ -200,6 +203,13 @@ const State = struct {
 pub const Page = struct {
     source: []const u8,
     is_post: bool,
+    /// The collection holding the page (Liquid mode), such as `recipes`
+    /// for `_recipes/a.md`.
+    collection: ?[]const u8 = null,
+    /// A document of a collection without `output: true`: listed in
+    /// `site.LABEL` but not written. Such pages come last in a build's
+    /// list.
+    hidden: bool = false,
     is_markdown: bool,
     fields: frontmatter.Map,
     body: []const u8,
@@ -307,6 +317,8 @@ const Builder = struct {
     markdown_options: markdown.Options = .{},
     /// `defaults:` from the config (Liquid mode).
     defaults: []const fm_defaults.Default = &.{},
+    /// `collections:` from the config (Liquid mode).
+    collections: []const collections.Collection = &.{},
     history: History = .{},
     /// The config as a template value, for shortcodes, which render while
     /// pages load, before `site` is complete.
@@ -382,6 +394,14 @@ const Builder = struct {
     fn exists(b: *Builder, path: []const u8) bool {
         b.src.dir.access(b.src.io, path, .{}) catch return false;
         return true;
+    }
+
+    /// How templates are parsed: as Liquid in Liquid mode, knowing the
+    /// collections.
+    fn parseOptions(b: *const Builder) Allocator.Error!template.ParseOptions {
+        const labels = try b.arena.alloc([]const u8, b.collections.len);
+        for (b.collections, labels) |c, *l| l.* = c.label;
+        return .{ .liquid = b.liquid, .collections = labels };
     }
 
     fn addDep(b: *Builder, path: []const u8) Allocator.Error!void {
@@ -486,6 +506,17 @@ pub fn buildWith(arena: Allocator, src: SiteDir, options: Options, diag: *Diagno
             try addRendered(&b, &statics, path, assets.outputStem(path), try b.read(path));
             continue;
         }
+        if (collections.find(b.collections, path)) |c| {
+            // Documents have front matter; other files are copied, as in
+            // Jekyll, when the collection is published.
+            const ext = sitepath.extension(path);
+            if (std.mem.eql(u8, ext, ".md") or (std.mem.eql(u8, ext, ".html") and try startsWithFrontmatter(&b, path))) {
+                try jobs.append(arena, .{ .path = path, .is_post = false });
+            } else if (c.output and !sitepath.hasHiddenComponent(path[1..])) {
+                try statics.append(arena, .{ .path = path[1..], .source = path, .data = .copy });
+            }
+            continue;
+        }
         if (sitepath.hasHiddenComponent(path)) continue;
 
         const ext = sitepath.extension(path);
@@ -509,7 +540,31 @@ pub fn buildWith(arena: Allocator, src: SiteDir, options: Options, diag: *Diagno
         b.skipped.expired += job.skipped.expired;
     }
     std.mem.sortUnstable(Page, pages.items, {}, pageOrder);
-    return finish(&b, config_fields, pages.items, statics.items, null);
+    return finish(&b, config_fields, try hiddenLast(arena, pages.items), statics.items, null);
+}
+
+/// Moves documents of unpublished collections to the end, keeping the
+/// order otherwise, so that the pages written are a prefix of the list.
+fn hiddenLast(arena: Allocator, pages: []Page) Allocator.Error![]Page {
+    var hidden: std.ArrayList(Page) = .empty;
+    var n: usize = 0;
+    for (pages) |p| {
+        if (p.hidden) {
+            try hidden.append(arena, p);
+        } else {
+            pages[n] = p;
+            n += 1;
+        }
+    }
+    @memcpy(pages[n..], hidden.items);
+    return pages;
+}
+
+/// How many pages of `pages` (from `hiddenLast`) are written.
+fn shownCount(pages: []const Page) usize {
+    var n = pages.len;
+    while (n > 0 and pages[n - 1].hidden) n -= 1;
+    return n;
 }
 
 /// Updates `prev` after the source files in `changed` were modified,
@@ -529,6 +584,7 @@ pub fn rebuild(arena: Allocator, src: SiteDir, prev: *const Site, changed: []con
     const st = prev.state;
     var b: Builder = .{ .arena = arena, .src = src, .diag = diag, .baseurl = st.baseurl, .site_url = st.site_url, .data = st.data, .options = st.options, .skipped = st.skipped, .history = st.history, .schemas = st.schemas };
     b.defaults = st.defaults;
+    b.collections = st.collections;
     b.markdown_options = try markdownOptions(&b, st.config_fields);
     b.future = try showFuture(&b, st.config_fields);
     b.site_config = try convert(arena, .{ .map = st.config_fields });
@@ -578,6 +634,8 @@ pub fn rebuild(arena: Allocator, src: SiteDir, prev: *const Site, changed: []con
         // long as they are not new pages in disguise.
         // A new API spec adds a page.
         if (openapi.isSpec(path)) return buildWith(arena, src, st.options, diag);
+        // A new or removed document, or a file a collection copies.
+        if (collections.find(b.collections, path) != null) return buildWith(arena, src, st.options, diag);
         if (sitepath.hasHiddenComponent(path) and !std.mem.startsWith(u8, path, "_posts/")) continue;
         // Something unknown that no longer exists, such as an editor's
         // temporary file that was renamed over a page, changed nothing,
@@ -631,18 +689,21 @@ fn usesAny(sources: []const []const u8, paths: []const []const u8) bool {
     return false;
 }
 
-/// Reads `_config.yml`, and its `defaults:` into `b.defaults`.
+/// Reads `_config.yml`, its `defaults:` into `b.defaults` and its
+/// `collections:` into `b.collections`.
 fn loadConfig(b: *Builder) Error!frontmatter.Map {
-    // `defaults:` nests deeper than the frontmatter subset, so it is read
-    // on its own.
-    const split = try fm_defaults.split(b.arena, try b.read(config_path));
+    // `defaults:` and the mapping form of `collections:` nest deeper than
+    // the frontmatter subset, so they are read on their own.
+    const split = try yaml.takeBlock(b.arena, try b.read(config_path), "defaults");
+    const coll_split = try yaml.takeBlock(b.arena, split.rest, "collections");
     var fd: frontmatter.Diagnostic = .{};
-    const fields = frontmatter.parseFile(b.arena, split.rest, &fd) catch |err| switch (err) {
+    const fields = frontmatter.parseFile(b.arena, coll_split.rest, &fd) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         error.InvalidFrontmatter => return b.fail(config_path, fd.line, "{s}", .{fd.message}),
     };
+    const liquid = try configFlag(b, fields, "liquid", false);
     if (split.block) |block| {
-        if (!try configFlag(b, fields, "liquid", false)) {
+        if (!liquid) {
             return b.fail(config_path, split.line, "'defaults' needs 'liquid: true'; Mortise sites give fields defaults with 'default:' rules in _schemas/", .{});
         }
         var dd: fm_defaults.Diagnostic = .{};
@@ -651,6 +712,34 @@ fn loadConfig(b: *Builder) Error!frontmatter.Map {
             error.InvalidDefaults => return b.fail(config_path, dd.line, "{s}", .{dd.message}),
         };
     }
+    var cd: collections.Diagnostic = .{};
+    const coll_line = if (coll_split.block != null) coll_split.line else fieldLine(try b.read(config_path), "collections");
+    if (coll_split.block != null or fields.get("collections") != null) {
+        if (!liquid) {
+            return b.fail(config_path, coll_line, "'collections' needs 'liquid: true'; Mortise sites publish any folder not starting with '_' as pages", .{});
+        }
+    }
+    if (coll_split.block) |block| {
+        b.collections = collections.parse(b.arena, block, coll_split.line, &cd) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.InvalidCollections => return b.fail(config_path, cd.line, "{s}", .{cd.message}),
+        };
+    } else if (fields.get("collections")) |v| {
+        const msg = "'collections' must list names such as [recipes, staff]";
+        if (v != .list) return b.fail(config_path, coll_line, msg, .{});
+        const names = try b.arena.alloc([]const u8, v.list.len);
+        for (v.list, names) |item, *n| {
+            if (item != .string) return b.fail(config_path, coll_line, msg, .{});
+            n.* = item.string;
+        }
+        b.collections = collections.fromNames(b.arena, names, coll_line, &cd) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.InvalidCollections => return b.fail(config_path, cd.line, "{s}", .{cd.message}),
+        };
+    }
+    for (b.collections) |c| if (c.permalink != null) {
+        return b.fail(config_path, coll_line, "collection '{s}': 'permalink' is not supported yet; its documents publish at /{s}/NAME/", .{ c.label, c.label });
+    };
     return fields;
 }
 
@@ -1478,8 +1567,15 @@ fn addGenerated(b: *Builder, outputs: *std.ArrayList(Output), config_fields: fro
 
 /// Renders the pages selected by `render` (all when null) and assembles the
 /// site. `pages` must be in `pageOrder`.
-fn finish(b: *Builder, config_fields: frontmatter.Map, pages: []Page, statics: []const Output, render: ?[]const bool) Error!Site {
+fn finish(b: *Builder, config_fields: frontmatter.Map, all_pages: []Page, statics: []const Output, all_render: ?[]const bool) Error!Site {
     const arena = b.arena;
+    // Documents of unpublished collections come last (`hiddenLast`): they
+    // are listed in `site` but not written.
+    const shown = shownCount(all_pages);
+    const pages = all_pages[0..shown];
+    const hidden = all_pages[shown..];
+    const render = if (all_render) |r| r[0..shown] else null;
+    const hidden_render = if (all_render) |r| r[shown..] else null;
     b.statics = statics;
     b.fingerprint = b.options.fingerprint and try enabled(b, config_fields, "fingerprint");
     b.liquid = try configFlag(b, config_fields, "liquid", false);
@@ -1493,11 +1589,14 @@ fn finish(b: *Builder, config_fields: frontmatter.Map, pages: []Page, statics: [
     b.now = @divFloor(std.Io.Clock.real.now(b.src.io).toMilliseconds(), 1000);
     b.pages = pages;
 
-    var view = try buildSites(b, config_fields, pages);
+    var view = try buildSites(b, config_fields, pages, hidden);
     // Liquid in Markdown bodies runs first, as in Jekyll, with the site as
     // the bodies stood before; the sites are then built again from the
     // results.
-    if (b.liquid and try renderLiquidBodies(b, pages, render, view.sites)) view = try buildSites(b, config_fields, pages);
+    if (b.liquid) {
+        const changed = try renderLiquidBodies(b, pages, render, view.sites);
+        if (try renderLiquidBodies(b, hidden, hidden_render, view.sites) or changed) view = try buildSites(b, config_fields, pages, hidden);
+    }
     const langs = view.langs;
     const sites = view.sites;
     const lang_posts = view.lang_posts;
@@ -1589,7 +1688,7 @@ fn finish(b: *Builder, config_fields: frontmatter.Map, pages: []Page, statics: [
         .full = render == null,
         .baseurl = b.baseurl,
         .skipped = b.skipped,
-        .state = .{ .skipped = b.skipped, .config_fields = config_fields, .defaults = b.defaults, .baseurl = b.baseurl, .site_url = b.site_url, .options = b.options, .data = b.data, .history = b.history, .schemas = b.schemas, .pages = pages, .statics = statics },
+        .state = .{ .skipped = b.skipped, .config_fields = config_fields, .defaults = b.defaults, .collections = b.collections, .baseurl = b.baseurl, .site_url = b.site_url, .options = b.options, .data = b.data, .history = b.history, .schemas = b.schemas, .pages = all_pages, .statics = statics },
         .warnings = b.warnings.items,
         .gzip = if (config_fields.get("gzip")) |v| (if (v == .boolean) v.boolean else return b.fail(config_path, fieldLine(try b.read(config_path), "gzip"), "'gzip' must be true or false", .{})) else false,
         .minify = try configFlag(b, config_fields, "minify", false),
@@ -1685,7 +1784,7 @@ const Sites = struct {
 
 /// Builds each page's object and each language's `site`, which every
 /// template sees.
-fn buildSites(b: *Builder, config_fields: frontmatter.Map, pages: []Page) Error!Sites {
+fn buildSites(b: *Builder, config_fields: frontmatter.Map, pages: []Page, hidden: []Page) Error!Sites {
     const arena = b.arena;
     // Pages and posts are visible to every template through `site`. On a
     // site with several languages, each language has its own `site`, which
@@ -1697,6 +1796,11 @@ fn buildSites(b: *Builder, config_fields: frontmatter.Map, pages: []Page) Error!
     if (b.link_error.message.len > 0) return b.fail(b.link_error.path, 0, "{s}", .{b.link_error.message});
     for (pages) |*p| {
         if (p.base.entries.len == 0) p.base = try pageObject(arena, p);
+    }
+    // Unpublished documents take part in nothing but their collection.
+    for (hidden) |*p| {
+        if (p.base.entries.len == 0) p.base = try pageObject(arena, p);
+        p.object = p.base;
     }
     // Each language's pages, in `pageOrder`, and where they are in `pages`.
     const by_lang = try arena.alloc([]Page, langs.len);
@@ -1764,6 +1868,11 @@ fn buildSites(b: *Builder, config_fields: frontmatter.Map, pages: []Page) Error!
         // from these settings.
         if (std.mem.eql(u8, e.key, "taxonomies") or std.mem.eql(u8, e.key, "versions")) continue;
         if (multi and std.mem.eql(u8, e.key, "languages")) continue;
+        // `site.collections` and `site.LABEL` list the documents.
+        if (std.mem.eql(u8, e.key, "collections")) continue;
+        for (b.collections) |c| if (std.mem.eql(u8, c.label, e.key)) {
+            return b.fail(config_path, fieldLine(try b.read(config_path), e.key), "'{s}' names a collection, so it cannot also be a setting", .{e.key});
+        };
         try config_entries.append(arena, .{ .key = e.key, .value = try convert(arena, e.value) });
     }
     // Always defined, so templates can use it in strict mode.
@@ -1790,14 +1899,22 @@ fn buildSites(b: *Builder, config_fields: frontmatter.Map, pages: []Page) Error!
     for (langs, by_lang, sites, lang_posts, lang_tags, 0..) |lang, subset, *site, *posts_out, *tags_out, li| {
         var post_values: std.ArrayList(Value) = .empty;
         var page_values: std.ArrayList(Value) = .empty;
+        // Each collection's documents, published or not.
+        const docs = try arena.alloc(std.ArrayList(*const Page), b.collections.len);
+        @memset(docs, .empty);
         for (subset) |*p| {
             if (p.is_post) {
                 try post_values.append(arena, .{ .object = p.object });
                 post_count += 1;
+            } else if (p.collection) |label| {
+                try docs[collectionIndex(b.collections, label)].append(arena, p);
             } else {
                 try page_values.append(arena, .{ .object = p.object });
             }
         }
+        for (hidden) |*p| if (!multi or p.lang == li) {
+            try docs[collectionIndex(b.collections, p.collection.?)].append(arena, p);
+        };
         // The language's root: the baseurl, then `/CODE` except for the
         // default language.
         const root = if (li == 0) b.baseurl else try std.mem.concat(arena, u8, &.{ b.baseurl, "/", lang.code });
@@ -1805,6 +1922,19 @@ fn buildSites(b: *Builder, config_fields: frontmatter.Map, pages: []Page) Error!
         try site_entries.appendSlice(arena, config_entries.items);
         try site_entries.append(arena, .{ .key = "posts", .value = .{ .list = post_values.items } });
         try site_entries.append(arena, .{ .key = "pages", .value = .{ .list = page_values.items } });
+        if (b.liquid) {
+            // `site.collections` lists posts first, as Jekyll does.
+            var coll_values: std.ArrayList(Value) = .empty;
+            try coll_values.append(arena, try collectionValue(arena, .{ .label = "posts", .output = true }, post_values.items));
+            for (b.collections, docs) |c, *list| {
+                std.mem.sort(*const Page, list.items, c.sort_by, docLess);
+                const values = try arena.alloc(Value, list.items.len);
+                for (list.items, values) |p, *v| v.* = .{ .object = p.object };
+                try site_entries.append(arena, .{ .key = c.label, .value = .{ .list = values } });
+                try coll_values.append(arena, try collectionValue(arena, c, values));
+            }
+            try site_entries.append(arena, .{ .key = "collections", .value = .{ .list = coll_values.items } });
+        }
         try site_entries.append(arena, .{ .key = "data", .value = b.data });
         try site_entries.append(arena, .{ .key = "nav", .value = try navTree(arena, subset, root) });
         try site_entries.append(arena, .{ .key = "apis", .value = try apiIndex(arena, subset) });
@@ -1843,6 +1973,42 @@ fn buildSites(b: *Builder, config_fields: frontmatter.Map, pages: []Page) Error!
     };
 }
 
+fn collectionIndex(all: []const collections.Collection, label: []const u8) usize {
+    for (all, 0..) |c, i| if (std.mem.eql(u8, c.label, label)) return i;
+    unreachable;
+}
+
+/// A collection as `site.collections` lists it, with Jekyll's keys.
+fn collectionValue(arena: Allocator, c: collections.Collection, docs: []const Value) Allocator.Error!Value {
+    const entries = try arena.dupe(Entry, &.{
+        .{ .key = "label", .value = .{ .string = c.label } },
+        .{ .key = "docs", .value = .{ .list = docs } },
+        .{ .key = "output", .value = .{ .boolean = c.output } },
+        .{ .key = "relative_directory", .value = .{ .string = try std.fmt.allocPrint(arena, "_{s}", .{c.label}) } },
+    });
+    return .{ .object = .{ .entries = entries } };
+}
+
+/// Orders a collection's documents: by `sort_by`'s field when set (those
+/// without it last), otherwise by `date` when both have one; then by path.
+fn docLess(sort_by: ?[]const u8, a: *const Page, c: *const Page) bool {
+    const field = sort_by orelse "date";
+    const x = a.fields.get(field);
+    const y = c.fields.get(field);
+    if (x != null and y != null) {
+        const order: std.math.Order = switch (x.?) {
+            .int => |i| if (y.? == .int) std.math.order(i, y.?.int) else .eq,
+            .float => |f| if (y.? == .float) std.math.order(f, y.?.float) else .eq,
+            .string => |s| if (y.? == .string) std.mem.order(u8, s, y.?.string) else .eq,
+            else => .eq,
+        };
+        if (order != .eq) return order == .lt;
+    } else if (sort_by != null and (x == null) != (y == null)) {
+        return x != null;
+    }
+    return std.mem.lessThan(u8, a.source, c.source);
+}
+
 /// Runs Liquid in the Markdown bodies that hold any, before they become
 /// HTML. Returns whether any body changed.
 fn renderLiquidBodies(b: *Builder, pages: []Page, render: ?[]const bool, sites: []const template.Object) Error!bool {
@@ -1859,7 +2025,7 @@ fn renderLiquidBodies(b: *Builder, pages: []Page, render: ?[]const bool, sites: 
         try b.line_offsets.put(arena, p.source, p.body_line - 1);
         var td: template.Diagnostic = .{};
         const tpl = try arena.create(template.Template);
-        tpl.* = template.parseWith(arena, p.source, p.body, .{ .liquid = true }, &td) catch |err| switch (err) {
+        tpl.* = template.parseWith(arena, p.source, p.body, try b.parseOptions(), &td) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             error.TemplateSyntax => return b.templateFail(td),
         };
@@ -1954,7 +2120,11 @@ fn loadPage(b: *Builder, path: []const u8, is_post: bool) Error!?Page {
         error.OutOfMemory => return error.OutOfMemory,
         error.InvalidFrontmatter => return b.fail(path, fd.line, "{s}", .{fd.message}),
     };
-    if (b.defaults.len > 0) doc.fields = try fm_defaults.apply(arena, b.defaults, path, if (is_post) "posts" else "pages", doc.fields);
+    const coll = collections.find(b.collections, path);
+    if (b.defaults.len > 0) {
+        const kind = if (is_post) "posts" else if (coll) |c| c.label else "pages";
+        doc.fields = try fm_defaults.apply(arena, b.defaults, path, kind, doc.fields);
+    }
     try applySchema(b, path, data, is_post, &doc.fields);
     if (doc.fields.get("draft")) |d| {
         if (d != .boolean) return b.fail(path, fieldLine(data, "draft"), "'draft' must be true or false", .{});
@@ -1993,12 +2163,16 @@ fn loadPage(b: *Builder, path: []const u8, is_post: bool) Error!?Page {
     const is_markdown = std.mem.eql(u8, sitepath.extension(path), ".md");
     // A translation's URL is worked out from its path without the language.
     const lang = try i18n.detect(arena, b.languages, path);
-    const upath = lang.path;
+    // A collection's documents publish under its name: `_recipes/a.md` at
+    // `/recipes/a/`.
+    const upath = if (coll != null) lang.path[1..] else lang.path;
     var page: Page = .{
         .source = path,
         .lang = lang.index,
         .translation_key = lang.key,
         .is_post = is_post,
+        .collection = if (coll) |c| c.label else null,
+        .hidden = if (coll) |c| !c.output else false,
         .is_markdown = is_markdown,
         .fields = doc.fields,
         .body = doc.body,
@@ -2368,6 +2542,10 @@ fn pageObject(arena: Allocator, p: *const Page) Allocator.Error!template.Object 
     }
     try entries.append(arena, .{ .key = "url", .value = .{ .string = p.url } });
     try entries.append(arena, .{ .key = "path", .value = .{ .string = p.source } });
+    // The collection the document belongs to, as in Jekyll.
+    if (p.collection) |c| if (p.fields.get("collection") == null) {
+        try entries.append(arena, .{ .key = "collection", .value = .{ .string = c } });
+    };
     // `updated` from Git history; frontmatter `updated` is already a field.
     if (p.updated.len > 0 and p.fields.get("updated") == null) {
         try entries.append(arena, .{ .key = "updated", .value = .{ .string = p.updated } });
@@ -3213,7 +3391,7 @@ fn renderPage(b: *Builder, p: *const Page) Error![]const u8 {
         try b.line_offsets.put(arena, p.source, p.body_line - 1);
         var td: template.Diagnostic = .{};
         const tpl = try arena.create(template.Template);
-        tpl.* = template.parseWith(arena, p.source, p.body, .{ .liquid = b.liquid }, &td) catch |err| switch (err) {
+        tpl.* = template.parseWith(arena, p.source, p.body, try b.parseOptions(), &td) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             error.TemplateSyntax => return b.templateFail(td),
         };
@@ -3382,7 +3560,7 @@ fn loadLayout(b: *Builder, name: []const u8, used_by: []const u8) Error!Layout {
     try b.line_offsets.put(arena, source, doc.body_line - 1);
     var td: template.Diagnostic = .{};
     const tpl = try arena.create(template.Template);
-    tpl.* = template.parseWith(arena, source, doc.body, .{ .liquid = b.liquid }, &td) catch |err| switch (err) {
+    tpl.* = template.parseWith(arena, source, doc.body, try b.parseOptions(), &td) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         error.TemplateSyntax => return b.templateFail(td),
     };
@@ -3559,7 +3737,7 @@ fn loadTemplateFile(b: *Builder, path: []const u8, diag: *template.Diagnostic) t
         },
     };
     const tpl = try arena.create(template.Template);
-    tpl.* = try template.parseWith(arena, source, data, .{ .liquid = b.liquid }, diag);
+    tpl.* = try template.parseWith(arena, source, data, try b.parseOptions(), diag);
     try b.templates.put(arena, path, tpl);
     b.useTemplate(tpl);
     return tpl;
@@ -4943,6 +5121,61 @@ test "front matter defaults need liquid: true and the right shape" {
         // Lines after the block keep their numbers.
         .{ "_config.yml", "liquid: true\ndefaults:\n  - values: {}\ntitle: [a\n" },
     }, "_config.yml", 4, "");
+}
+
+test "collections list documents, and publish them with output: true" {
+    var t: TestSite = try .init(&.{
+        .{ "_config.yml", "liquid: true\ncollections:\n  recipes:\n    output: true\n    sort_by: order\n  staff:\ndefaults:\n  - scope:\n      type: recipes\n    values:\n      layout: recipe\n" },
+        .{ "_layouts/recipe.html", "<h1>{{ page.title }}</h1>{{ page.collection }}|{{ content }}" },
+        .{ "_recipes/pancakes.md", "---\ntitle: Pancakes\norder: 2\n---\nFlour and *eggs*." },
+        .{ "_recipes/bread.md", "---\ntitle: Bread\norder: 1\n---\nFlour and water." },
+        .{ "_recipes/photo.jpg", "jpeg" },
+        .{ "_staff/ada.md", "---\nname: Ada\n---\nWrites the {{ 'recipes' | upcase }}." },
+        .{ "_staff/bo.md", "---\nname: Bo\n---\nBakes." },
+        .{ "index.html", "---\n---\n{% for r in site.recipes %}<a href=\"{{ r.url }}\">{{ r.title }}</a>{% endfor %}|{% for s in site.staff %}{{ s.name }}: {{ s.content | strip_html | strip }} {% endfor %}|{% for c in site.collections %}{{ c.label }}={{ c.docs.size }}/{{ c.output }} {% endfor %}|{{ site.pages.size }}" },
+    });
+    defer t.deinit();
+    const a = t.arena.allocator();
+    const src = SiteDir.borrow(testing.io, t.tmp.dir);
+    var diag: Diagnostic = .{};
+    var site = t.build(&diag) catch |err| {
+        std.debug.print("build failed: {f}\n", .{diag});
+        return err;
+    };
+    const index = site.find("index.html").?.data.bytes;
+    // sort_by orders the recipes; staff go by path. Documents are not pages.
+    try expectContains(index, "<a href=\"/recipes/bread/\">Bread</a><a href=\"/recipes/pancakes/\">Pancakes</a>|Ada: Writes the RECIPES. Bo: Bakes. |posts=0/true recipes=2/true staff=2/false |1");
+    try expectContains(site.find("recipes/pancakes/index.html").?.data.bytes, "<h1>Pancakes</h1>recipes|<p>Flour and <em>eggs</em>.</p>");
+    try testing.expect(site.find("recipes/photo.jpg") != null);
+    // Unpublished documents are not written.
+    try testing.expect(site.find("staff/ada/index.html") == null);
+    try testing.expect(site.find("_staff/ada.md") == null);
+
+    // Editing an unpublished document updates the pages that list it.
+    try src.writeFile("_staff/bo.md", "---\nname: Bo\n---\nBakes rye.");
+    site = try rebuild(a, src, &site, &.{"_staff/bo.md"}, &diag);
+    try expectContains(site.find("index.html").?.data.bytes, "Bo: Bakes rye.");
+    // So does editing a published one.
+    try src.writeFile("_recipes/bread.md", "---\ntitle: Sourdough\norder: 1\n---\nStarter.");
+    site = try rebuild(a, src, &site, &.{"_recipes/bread.md"}, &diag);
+    try expectContains(site.find("index.html").?.data.bytes, ">Sourdough</a>");
+    // A new document.
+    try src.writeFile("_staff/cy.md", "---\nname: Cy\n---\nSweeps.");
+    site = try rebuild(a, src, &site, &.{"_staff/cy.md"}, &diag);
+    try expectContains(site.find("index.html").?.data.bytes, "Cy: Sweeps.");
+    try expectSameOutputs(try t.build(&diag), site);
+}
+
+test "collections need liquid: true and valid names" {
+    try expectBuildError(&.{
+        .{ "_config.yml", "title: T\ncollections: [recipes]\n" },
+    }, "_config.yml", 2, "'collections' needs 'liquid: true'");
+    try expectBuildError(&.{
+        .{ "_config.yml", "liquid: true\ncollections:\n  pages:\n" },
+    }, "_config.yml", 2, "taken by site's own variables");
+    try expectBuildError(&.{
+        .{ "_config.yml", "liquid: true\nrecipes: 3\ncollections: [recipes]\n" },
+    }, "_config.yml", 2, "'recipes' names a collection");
 }
 
 test "raw HTML in Markdown passes through only with liquid: true" {

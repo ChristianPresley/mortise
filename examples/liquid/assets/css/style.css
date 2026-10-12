@@ -80,6 +80,8 @@ figure.highlight code { background: none; border: 0; padding: 0; color: inherit;
 
 figure.note { margin: 1.2rem 0; padding: 0.7rem 1rem; background: var(--card); border-left: 4px solid #b5733f; border-radius: 0 6px 6px 0; }
 figure.note figcaption { font-weight: 600; margin-bottom: 0.2rem; }
+dt { font-weight: 600; margin-top: 0.6rem; }
+dd { margin-left: 1.2rem; color: var(--muted); }
 kbd { font: 0.85em ui-monospace, Consolas, monospace; background: var(--card); border: 1px solid var(--rule); border-bottom-width: 2px; border-radius: 4px; padding: 0.05em 0.35em; }
 
 footer.site { border-top: 1px solid var(--rule); color: var(--muted); font-size: 0.9rem; }

@@ -11,9 +11,10 @@
 //!       layout: post
 //! ```
 //!
-//! The list nests deeper than the frontmatter subset allows, so `split`
-//! takes it out of the config text and `parse` reads it with the YAML
-//! reader. A file's own front matter wins over every default.
+//! The list nests deeper than the frontmatter subset allows, so
+//! `yaml.takeBlock` takes it out of the config text and `parse` reads it
+//! with the YAML reader. A file's own front matter wins over every
+//! default.
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
@@ -29,61 +30,11 @@ pub const Default = struct {
     values: frontmatter.Map = .{},
 };
 
-pub const Split = struct {
-    /// The config without the `defaults:` block, whose lines are blank so
-    /// the other lines keep their numbers.
-    rest: []const u8,
-    /// The block, from its `defaults:` line, or null without one.
-    block: ?[]const u8 = null,
-    /// 1-based number of the `defaults:` line.
-    line: usize = 0,
-};
-
-/// Takes a top-level `defaults:` key and the lines under it (indented, or
-/// starting with `-`) out of config text.
-pub fn split(arena: Allocator, src: []const u8) Allocator.Error!Split {
-    var start: ?usize = null;
-    var end: usize = src.len;
-    var line_start: usize = 0;
-    var number: usize = 0;
-    var line_no: usize = 0;
-    while (line_start < src.len) {
-        const nl = std.mem.indexOfScalarPos(u8, src, line_start, '\n');
-        const line_end = nl orelse src.len;
-        const line = std.mem.trimEnd(u8, src[line_start..line_end], "\r");
-        number += 1;
-        if (start == null) {
-            if (isDefaultsKey(line)) {
-                start = line_start;
-                line_no = number;
-            }
-        } else if (line.len > 0 and line[0] != ' ' and line[0] != '-' and line[0] != '#') {
-            end = line_start;
-            break;
-        }
-        line_start = if (nl) |n| n + 1 else src.len;
-    }
-    const s = start orelse return .{ .rest = src };
-    const block = src[s..end];
-    // Keep the line endings so the remaining lines keep their numbers.
-    var rest: std.ArrayList(u8) = .empty;
-    try rest.appendSlice(arena, src[0..s]);
-    for (block) |c| if (c == '\n') try rest.append(arena, '\n');
-    try rest.appendSlice(arena, src[end..]);
-    return .{ .rest = rest.items, .block = block, .line = line_no };
-}
-
-fn isDefaultsKey(line: []const u8) bool {
-    if (!std.mem.startsWith(u8, line, "defaults:")) return false;
-    const after = std.mem.trim(u8, line["defaults:".len..], " \t");
-    return after.len == 0 or after[0] == '#';
-}
-
 pub const Diagnostic = struct { line: usize = 0, message: []const u8 = "" };
 pub const Error = Allocator.Error || error{InvalidDefaults};
 
-/// Reads a block from `split`. `first_line` is the number of its first
-/// line in the config, for messages.
+/// Reads a `defaults:` block from `yaml.takeBlock`. `first_line` is the
+/// number of its first line in the config, for messages.
 pub fn parse(arena: Allocator, block: []const u8, first_line: usize, diag: *Diagnostic) Error![]const Default {
     var yd: yaml.Diagnostic = .{};
     const doc = yaml.parse(arena, block, &yd) catch |err| switch (err) {
@@ -235,23 +186,6 @@ fn deepMerge(arena: Allocator, base: frontmatter.Map, over: frontmatter.Map) All
 }
 
 const testing = std.testing;
-
-test "split takes the defaults block out and keeps line numbers" {
-    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
-    defer arena.deinit();
-    const a = arena.allocator();
-    const src = "title: T\ndefaults:\n  - scope:\n      type: posts\n    values:\n      layout: post\n# note\nliquid: true\n";
-    const s = try split(a, src);
-    // A comment at the margin is part of the block.
-    try testing.expectEqualStrings("title: T\n\n\n\n\n\n\nliquid: true\n", s.rest);
-    try testing.expectEqual(@as(usize, 2), s.line);
-    try testing.expect(std.mem.startsWith(u8, s.block.?, "defaults:\n"));
-    // A sequence at the key's own indentation belongs to it too.
-    const s2 = try split(a, "defaults:\n- values:\n    a: 1\nz: 2");
-    try testing.expectEqualStrings("\n\n\nz: 2", s2.rest);
-    const none = try split(a, "title: T\ndefaults_x: 1\n");
-    try testing.expect(none.block == null);
-}
 
 test "parse reads scopes and values" {
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);

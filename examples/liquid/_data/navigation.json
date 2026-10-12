@@ -1,5 +1,6 @@
 [
   { "title": "Notes", "url": "/" },
+  { "title": "Tools", "url": "/tools.html" },
   { "title": "Tags", "url": "/tags.html" },
   { "title": "About", "url": "/about/" }
 ]

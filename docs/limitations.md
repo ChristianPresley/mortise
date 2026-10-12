@@ -333,12 +333,18 @@ job:
   Character references such as `&nbsp;` pass through in Liquid mode
   without being checked against HTML's list of names, and heading ids
   leave them out.
-- Front matter `defaults:` has no `drafts` or collection types yet, and a
-  change to `defaults:` rebuilds the whole site, as any config change does.
-- Not supported from Jekyll: collections other
-  than posts, `permalink:` styles (`pretty`, `:categories`), categories,
-  `site.categories`, `site.static_files`, `site.html_pages`,
-  `site.collections`, `page.id`, the `layout` variable, `jekyll.environment`,
+- Front matter `defaults:` has no `drafts` type, and a change to
+  `defaults:` rebuilds the whole site, as any config change does.
+- Collections: a collection's `permalink` is not supported yet, nor
+  Jekyll's `order:` list, `collections_dir`, `site.documents`, a
+  collection's `files` and `directory`, or settings beyond `output`,
+  `sort_by` and `permalink`. Posts cannot be configured under
+  `collections:`. Adding, removing or editing a document of an unpublished
+  collection rebuilds the pages that read `site.LABEL`, and adding or
+  removing any document rebuilds the whole site.
+- Not supported from Jekyll: `permalink:` styles (`pretty`,
+  `:categories`), categories, `site.categories`, `site.static_files`,
+  `site.html_pages`, `page.id`, the `layout` variable, `jekyll.environment`,
   plugins and their tags (`{% seo %}`, `{% feed_meta %}`; Mortise writes
   feeds and SEO tags itself), and `sassify`/`scssify`.
 - A date without a zone is UTC; Jekyll's `timezone:` is not read. `%Z`

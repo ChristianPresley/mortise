@@ -298,6 +298,9 @@ pub const ParseOptions = struct {
     /// Read the template as Liquid: `{#` is plain text, and strings have no
     /// backslash escapes.
     liquid: bool = false,
+    /// Collection labels (Liquid mode): reading `site.LABEL` depends on
+    /// other pages, as `site.posts` does.
+    collections: []const []const u8 = &.{},
 };
 
 // ---------------------------------------------------------------------------
@@ -1213,7 +1216,10 @@ fn noteCollections(p: *Parser, path: []const Seg) void {
             return;
         },
     };
-    const site_keys = [_][]const u8{ "posts", "pages", "tags", "nav", "apis", "taxonomies", "menus" };
+    const site_keys = [_][]const u8{ "posts", "pages", "tags", "nav", "apis", "taxonomies", "menus", "collections" };
+    if (is_site) for (p.options.collections) |c| {
+        if (std.mem.eql(u8, second, c)) p.reads_collections = true;
+    };
     // Navigation fields depend on other pages' titles and URLs.
     const page_keys = [_][]const u8{ "breadcrumbs", "previous", "next", "related", "menus", "backlinks", "translations", "versions", "version_nav", "latest_url" };
     const keys: []const []const u8 = if (is_site) &site_keys else &page_keys;
@@ -2597,6 +2603,11 @@ test "templates record whether they read site collections" {
     try testing.expect(d.reads_collections);
     const e = try parse(arena.allocator(), "e", "{% link about.md %}", &diag);
     try testing.expect(e.reads_collections);
+    // A collection's documents, named by label.
+    const opts: ParseOptions = .{ .liquid = true, .collections = &.{"recipes"} };
+    try testing.expect((try parseWith(arena.allocator(), "f", "{{ site.recipes.size }}", opts, &diag)).reads_collections);
+    try testing.expect((try parseWith(arena.allocator(), "g", "{{ site.collections.size }}", opts, &diag)).reads_collections);
+    try testing.expect(!(try parseWith(arena.allocator(), "h", "{{ site.recipe }}", opts, &diag)).reads_collections);
 }
 
 test "includes are recorded for dependency tracking" {

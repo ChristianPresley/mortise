@@ -1,0 +1,17 @@
+---
+layout: page
+title: Tools
+---
+<p>The {{ site.tools.size }} tools these notes keep coming back to.</p>
+<table>
+  <tr><th>Tool</th><th>Used for</th></tr>
+  {%- for tool in site.tools %}
+  <tr><td><a href="{{ tool.url | relative_url }}">{{ tool.title }}</a></td><td>{{ tool.kind }}</td></tr>
+  {%- endfor %}
+</table>
+<h2>Glossary</h2>
+<dl>
+  {%- for entry in site.glossary %}
+  <dt>{{ entry.term }}</dt><dd>{{ entry.content | strip_html | strip }}</dd>
+  {%- endfor %}
+</dl>

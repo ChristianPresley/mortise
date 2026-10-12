@@ -29,6 +29,57 @@ pub fn parse(arena: Allocator, src: []const u8, diag: *Diagnostic) Error!Value {
     return v;
 }
 
+pub const Block = struct {
+    /// The text without the block, whose lines are blank so the other
+    /// lines keep their numbers.
+    rest: []const u8,
+    /// The block, from its key's line, or null without one.
+    block: ?[]const u8 = null,
+    /// 1-based number of the key's line.
+    line: usize = 0,
+};
+
+/// Takes a top-level `key:` with nothing after it and the lines under it
+/// (indented, starting with `-`, or comments) out of `src`, so that a file
+/// otherwise in a simpler format can hold one key in full YAML.
+pub fn takeBlock(arena: Allocator, src: []const u8, key: []const u8) Allocator.Error!Block {
+    var start: ?usize = null;
+    var end: usize = src.len;
+    var line_start: usize = 0;
+    var number: usize = 0;
+    var line_no: usize = 0;
+    while (line_start < src.len) {
+        const nl = std.mem.indexOfScalarPos(u8, src, line_start, '\n');
+        const line_end = nl orelse src.len;
+        const line = std.mem.trimEnd(u8, src[line_start..line_end], "\r");
+        number += 1;
+        if (start == null) {
+            if (isBlockKey(line, key)) {
+                start = line_start;
+                line_no = number;
+            }
+        } else if (line.len > 0 and line[0] != ' ' and line[0] != '-' and line[0] != '#') {
+            end = line_start;
+            break;
+        }
+        line_start = if (nl) |n| n + 1 else src.len;
+    }
+    const s = start orelse return .{ .rest = src };
+    const block = src[s..end];
+    // Keep the line endings so the remaining lines keep their numbers.
+    var rest: std.ArrayList(u8) = .empty;
+    try rest.appendSlice(arena, src[0..s]);
+    for (block) |c| if (c == '\n') try rest.append(arena, '\n');
+    try rest.appendSlice(arena, src[end..]);
+    return .{ .rest = rest.items, .block = block, .line = line_no };
+}
+
+fn isBlockKey(line: []const u8, key: []const u8) bool {
+    if (!std.mem.startsWith(u8, line, key) or line.len <= key.len or line[key.len] != ':') return false;
+    const after = std.mem.trim(u8, line[key.len + 1 ..], " \t");
+    return after.len == 0 or after[0] == '#';
+}
+
 const Line = struct {
     number: usize,
     indent: usize,
@@ -664,4 +715,22 @@ test "errors name the line" {
             return error.TestUnexpectedResult;
         }
     }
+}
+
+test "takeBlock takes one key's block out and keeps line numbers" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const src = "title: T\ndefaults:\n  - scope:\n      type: posts\n    values:\n      layout: post\n# note\nliquid: true\n";
+    const s = try takeBlock(a, src, "defaults");
+    // A comment at the margin is part of the block.
+    try testing.expectEqualStrings("title: T\n\n\n\n\n\n\nliquid: true\n", s.rest);
+    try testing.expectEqual(@as(usize, 2), s.line);
+    try testing.expect(std.mem.startsWith(u8, s.block.?, "defaults:\n"));
+    // A sequence at the key's own indentation belongs to it too.
+    const s2 = try takeBlock(a, "defaults:\n- values:\n    a: 1\nz: 2", "defaults");
+    try testing.expectEqualStrings("\n\n\nz: 2", s2.rest);
+    // Another key, or the key with a value on its line, is left alone.
+    try testing.expect((try takeBlock(a, "title: T\ndefaults_x: 1\n", "defaults")).block == null);
+    try testing.expect((try takeBlock(a, "collections: [a, b]\n", "collections")).block == null);
 }

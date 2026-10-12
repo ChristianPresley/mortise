@@ -126,7 +126,43 @@ Most of a Jekyll site carries over:
 - HTML in Markdown pages and posts, and in `markdownify`: blocks such as
   `<figure>` or `<div>`, inline tags such as `<kbd>` and `<abbr>`, and
   references such as `&nbsp;`. See [markdown.md](markdown.md#raw-html).
-- Front matter defaults, below.
+- Front matter defaults and collections, below.
+
+### Collections
+
+`collections:` in `_config.yml` names folders such as `_recipes/` whose
+documents are listed as `site.recipes`:
+
+```yaml
+collections:
+  recipes:
+    output: true      # also publish each document, at /recipes/NAME/
+    sort_by: order    # order site.recipes by this field
+  staff:              # listed only
+```
+
+`collections: [recipes, staff]` names collections with the default
+settings.
+
+- A document is a `.md` file, or an `.html` file with front matter, in the
+  collection's folder or below it. Liquid and Markdown run in its body as
+  in a post, and `page.collection` holds the collection's name.
+- With `output: true`, each document is written like a page, at
+  `/LABEL/PATH/` (`_recipes/cakes/lemon.md` at `/recipes/cakes/lemon/`),
+  through its `layout`, and other files in the folder are copied
+  (`_recipes/photo.jpg` to `/recipes/photo.jpg`). Without it, as in
+  Jekyll, documents are only listed, with their `content`.
+- `site.LABEL` is ordered by `sort_by`'s field (documents without it come
+  last), or else by `date` when documents have one, then by path.
+- Documents are not in `site.pages`. `site.collections` lists `posts` and
+  then each collection, with `label`, `docs`, `output` and
+  `relative_directory`.
+- A front matter default's `type` may name a collection.
+
+A collection's name may hold letters, digits, `-` and `_`, and may not be
+one `site` already uses, such as `pages` or `tags`, or another setting in
+`_config.yml`. `collections:` needs `liquid: true`; Mortise sites publish
+every folder whose name does not start with `_`.
 
 ### Front matter defaults
 
@@ -137,7 +173,7 @@ each entry's `scope` matches, as in Jekyll:
 defaults:
   - scope:
       path: ""          # every file; or a folder such as "notes"
-      type: posts       # posts or pages; leave out for both
+      type: posts       # posts, pages or a collection; leave out for all
     values:
       layout: post
       author: Ada
