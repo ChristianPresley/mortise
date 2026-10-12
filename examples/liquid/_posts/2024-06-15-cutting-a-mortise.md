@@ -1,5 +1,4 @@
 ---
-layout: post
 title: Cutting a mortise by hand
 tags: [joinery, tools]
 ---

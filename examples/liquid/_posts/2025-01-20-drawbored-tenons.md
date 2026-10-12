@@ -1,5 +1,4 @@
 ---
-layout: post
 title: "Drawbored tenons"
 tags: [joinery]
 ---

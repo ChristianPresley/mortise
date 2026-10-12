@@ -22,6 +22,7 @@ const SiteDir = @import("SiteDir.zig");
 const sitepath = @import("path.zig");
 const markdown = @import("markdown.zig");
 const frontmatter = @import("frontmatter.zig");
+const fm_defaults = @import("defaults.zig");
 const template = @import("template.zig");
 const feeds = @import("feeds.zig");
 const gzip = @import("gzip.zig");
@@ -183,6 +184,7 @@ pub const Skipped = struct {
 const State = struct {
     skipped: Skipped,
     config_fields: frontmatter.Map,
+    defaults: []const fm_defaults.Default,
     baseurl: []const u8,
     site_url: ?[]const u8,
     options: Options,
@@ -303,6 +305,8 @@ const Builder = struct {
     options: Options = .{},
     /// Heading anchors and copy buttons, from `_config.yml`.
     markdown_options: markdown.Options = .{},
+    /// `defaults:` from the config (Liquid mode).
+    defaults: []const fm_defaults.Default = &.{},
     history: History = .{},
     /// The config as a template value, for shortcodes, which render while
     /// pages load, before `site` is complete.
@@ -524,6 +528,7 @@ pub fn buildWith(arena: Allocator, src: SiteDir, options: Options, diag: *Diagno
 pub fn rebuild(arena: Allocator, src: SiteDir, prev: *const Site, changed: []const []const u8, diag: *Diagnostic) Error!Site {
     const st = prev.state;
     var b: Builder = .{ .arena = arena, .src = src, .diag = diag, .baseurl = st.baseurl, .site_url = st.site_url, .data = st.data, .options = st.options, .skipped = st.skipped, .history = st.history, .schemas = st.schemas };
+    b.defaults = st.defaults;
     b.markdown_options = try markdownOptions(&b, st.config_fields);
     b.future = try showFuture(&b, st.config_fields);
     b.site_config = try convert(arena, .{ .map = st.config_fields });
@@ -626,12 +631,27 @@ fn usesAny(sources: []const []const u8, paths: []const []const u8) bool {
     return false;
 }
 
+/// Reads `_config.yml`, and its `defaults:` into `b.defaults`.
 fn loadConfig(b: *Builder) Error!frontmatter.Map {
+    // `defaults:` nests deeper than the frontmatter subset, so it is read
+    // on its own.
+    const split = try fm_defaults.split(b.arena, try b.read(config_path));
     var fd: frontmatter.Diagnostic = .{};
-    return frontmatter.parseFile(b.arena, try b.read(config_path), &fd) catch |err| switch (err) {
-        error.OutOfMemory => error.OutOfMemory,
-        error.InvalidFrontmatter => b.fail(config_path, fd.line, "{s}", .{fd.message}),
+    const fields = frontmatter.parseFile(b.arena, split.rest, &fd) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.InvalidFrontmatter => return b.fail(config_path, fd.line, "{s}", .{fd.message}),
     };
+    if (split.block) |block| {
+        if (!try configFlag(b, fields, "liquid", false)) {
+            return b.fail(config_path, split.line, "'defaults' needs 'liquid: true'; Mortise sites give fields defaults with 'default:' rules in _schemas/", .{});
+        }
+        var dd: fm_defaults.Diagnostic = .{};
+        b.defaults = fm_defaults.parse(b.arena, block, split.line, &dd) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.InvalidDefaults => return b.fail(config_path, dd.line, "{s}", .{dd.message}),
+        };
+    }
+    return fields;
 }
 
 /// Reads and normalizes `baseurl` from the config: "" for the root,
@@ -1569,7 +1589,7 @@ fn finish(b: *Builder, config_fields: frontmatter.Map, pages: []Page, statics: [
         .full = render == null,
         .baseurl = b.baseurl,
         .skipped = b.skipped,
-        .state = .{ .skipped = b.skipped, .config_fields = config_fields, .baseurl = b.baseurl, .site_url = b.site_url, .options = b.options, .data = b.data, .history = b.history, .schemas = b.schemas, .pages = pages, .statics = statics },
+        .state = .{ .skipped = b.skipped, .config_fields = config_fields, .defaults = b.defaults, .baseurl = b.baseurl, .site_url = b.site_url, .options = b.options, .data = b.data, .history = b.history, .schemas = b.schemas, .pages = pages, .statics = statics },
         .warnings = b.warnings.items,
         .gzip = if (config_fields.get("gzip")) |v| (if (v == .boolean) v.boolean else return b.fail(config_path, fieldLine(try b.read(config_path), "gzip"), "'gzip' must be true or false", .{})) else false,
         .minify = try configFlag(b, config_fields, "minify", false),
@@ -1934,6 +1954,7 @@ fn loadPage(b: *Builder, path: []const u8, is_post: bool) Error!?Page {
         error.OutOfMemory => return error.OutOfMemory,
         error.InvalidFrontmatter => return b.fail(path, fd.line, "{s}", .{fd.message}),
     };
+    if (b.defaults.len > 0) doc.fields = try fm_defaults.apply(arena, b.defaults, path, if (is_post) "posts" else "pages", doc.fields);
     try applySchema(b, path, data, is_post, &doc.fields);
     if (doc.fields.get("draft")) |d| {
         if (d != .boolean) return b.fail(path, fieldLine(data, "draft"), "'draft' must be true or false", .{});
@@ -4892,6 +4913,36 @@ test "without liquid: true, Markdown bodies are not templates" {
     });
     defer t.deinit();
     try expectContains(try t.output("a/index.html"), "<code>{{ page.title }}</code>");
+}
+
+test "front matter defaults fill in fields by path and type" {
+    var t: TestSite = try .init(&.{
+        .{ "_config.yml", "liquid: true\ndefaults:\n  - scope:\n      path: \"\"\n    values:\n      layout: default\n      author: Ada\n  - scope:\n      type: posts\n    values:\n      layout: post\n  - scope:\n      path: notes\n    values:\n      layout: note\n      tags: [notes]\ntitle: Site\n" },
+        .{ "_layouts/default.html", "D:{{ page.author }}:{{ content }}" },
+        .{ "_layouts/post.html", "P:{{ page.author }}:{{ content }}" },
+        .{ "_layouts/note.html", "N:{{ page.tags | join: ',' }}:{{ site.title }}:{{ content }}" },
+        .{ "about.md", "---\ntitle: About\n---\nA" },
+        .{ "notes/one.md", "---\ntitle: One\n---\nB" },
+        .{ "_posts/2024-01-05-hi.md", "---\ntitle: Hi\nauthor: Bo\n---\nC" },
+    });
+    defer t.deinit();
+    try expectContains(try t.output("about/index.html"), "D:Ada:<p>A</p>");
+    try expectContains(try t.output("notes/one/index.html"), "N:notes:Site:<p>B</p>");
+    // A file's own front matter wins.
+    try expectContains(try t.output("2024/01/05/hi/index.html"), "P:Bo:<p>C</p>");
+}
+
+test "front matter defaults need liquid: true and the right shape" {
+    try expectBuildError(&.{
+        .{ "_config.yml", "title: T\ndefaults:\n  - values:\n      layout: x\n" },
+    }, "_config.yml", 2, "'defaults' needs 'liquid: true'");
+    try expectBuildError(&.{
+        .{ "_config.yml", "liquid: true\ndefaults:\n  - scope:\n      type: posts\n" },
+    }, "_config.yml", 2, "each default needs 'values'");
+    try expectBuildError(&.{
+        // Lines after the block keep their numbers.
+        .{ "_config.yml", "liquid: true\ndefaults:\n  - values: {}\ntitle: [a\n" },
+    }, "_config.yml", 4, "");
 }
 
 test "raw HTML in Markdown passes through only with liquid: true" {

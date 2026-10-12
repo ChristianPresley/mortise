@@ -333,7 +333,9 @@ job:
   Character references such as `&nbsp;` pass through in Liquid mode
   without being checked against HTML's list of names, and heading ids
   leave them out.
-- Not supported from Jekyll: front matter `defaults:`, collections other
+- Front matter `defaults:` has no `drafts` or collection types yet, and a
+  change to `defaults:` rebuilds the whole site, as any config change does.
+- Not supported from Jekyll: collections other
   than posts, `permalink:` styles (`pretty`, `:categories`), categories,
   `site.categories`, `site.static_files`, `site.html_pages`,
   `site.collections`, `page.id`, the `layout` variable, `jekyll.environment`,

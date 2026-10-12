@@ -1,5 +1,4 @@
 ---
-layout: post
 title: Sharpening chisels
 tags: [tools, edges]
 featured: true

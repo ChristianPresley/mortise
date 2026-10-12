@@ -126,6 +126,43 @@ Most of a Jekyll site carries over:
 - HTML in Markdown pages and posts, and in `markdownify`: blocks such as
   `<figure>` or `<div>`, inline tags such as `<kbd>` and `<abbr>`, and
   references such as `&nbsp;`. See [markdown.md](markdown.md#raw-html).
+- Front matter defaults, below.
+
+### Front matter defaults
+
+A `defaults:` list in `_config.yml` gives front matter values to the files
+each entry's `scope` matches, as in Jekyll:
+
+```yaml
+defaults:
+  - scope:
+      path: ""          # every file; or a folder such as "notes"
+      type: posts       # posts or pages; leave out for both
+    values:
+      layout: post
+      author: Ada
+  - scope:
+      path: "docs/*/index.md"
+    values:
+      layout: docs
+```
+
+- `path` matches a folder and everything in it, or a single file. With
+  `*`, it is a pattern for the whole path, and `*` matches within one
+  folder name.
+- When several entries match a file, the one with the longer `path` wins,
+  then one with a `type` over one without, then the later one. Mappings
+  are merged key by key.
+- A file's own front matter wins over every default; a mapping in it is
+  merged with the defaults' mapping.
+- Defaults apply to pages and posts, which have front matter; files copied
+  unchanged get none.
+- Values may nest as deeply as YAML allows, and `null` sets nothing.
+  `defaults:` is read with Mortise's full YAML reader; the rest of
+  `_config.yml` keeps to the [frontmatter subset](frontmatter.md).
+
+`defaults:` needs `liquid: true`. Mortise sites give fields defaults with
+`default:` rules in [`_schemas/`](frontmatter.md) files instead.
 
 Mortise's page URLs already include `baseurl`, so `relative_url` leaves a
 URL that starts with it alone, and `{{ site.baseurl }}{{ page.url }}`

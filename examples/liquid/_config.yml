@@ -6,3 +6,11 @@ title: Field Notes
 description: Short notes from a workshop, written the way a Jekyll site is
 author: Ada Fernhill
 url: https://example.com
+
+# Front matter defaults: every post gets the post layout without saying so.
+defaults:
+  - scope:
+      path: ""
+      type: posts
+    values:
+      layout: post
