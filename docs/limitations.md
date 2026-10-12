@@ -324,10 +324,15 @@ job:
 
 ## Liquid
 
-- Mortise's Markdown does not pass raw HTML through as kramdown does. HTML
-  that `include`, `render` and `highlight` write into a Markdown body is
-  kept as it is, and an include that writes Markdown is converted, but
-  HTML typed into Markdown is escaped.
+- Raw HTML in Markdown passes through only with `liquid: true`; Mortise
+  sites escape it. HTML blocks follow CommonMark, not kramdown: Markdown
+  inside a block is converted only after a blank line, and kramdown's
+  `markdown="1"` and `markdown="0"` attributes are written out unchanged
+  rather than obeyed. An HTML block line indented four or more spaces is
+  inline HTML in a paragraph, since Mortise has no indented code blocks.
+  Character references such as `&nbsp;` pass through in Liquid mode
+  without being checked against HTML's list of names, and heading ids
+  leave them out.
 - Not supported from Jekyll: front matter `defaults:`, collections other
   than posts, `permalink:` styles (`pretty`, `:categories`), categories,
   `site.categories`, `site.static_files`, `site.html_pages`,

@@ -20,6 +20,7 @@ liquid: true
 | False values | `nil`, `false`, `0`, `""`, `[]` | Only `nil` and `false` |
 | `a and b or c` | `(a and b) or c` | `a and (b or c)`: Liquid groups from the right |
 | Markdown bodies | Plain Markdown | Liquid runs first, then Markdown, as in Jekyll |
+| HTML in Markdown | Escaped | Passed through, as kramdown does |
 | `{# ... #}` | A comment | Plain text |
 | `"a\"b"` | Backslash escapes | No escapes, as in Liquid |
 | `serve` | Strict by default | Lax by default; `strict: true` still works |
@@ -122,6 +123,9 @@ Most of a Jekyll site carries over:
 - Liquid in Markdown pages and posts, before Markdown, so `{% link %}`,
   `{% include %}` and `{{ site.baseurl }}` work in posts. Other pages see a
   post's `content` and `excerpt` after its Liquid ran.
+- HTML in Markdown pages and posts, and in `markdownify`: blocks such as
+  `<figure>` or `<div>`, inline tags such as `<kbd>` and `<abbr>`, and
+  references such as `&nbsp;`. See [markdown.md](markdown.md#raw-html).
 
 Mortise's page URLs already include `baseurl`, so `relative_url` leaves a
 URL that starts with it alone, and `{{ site.baseurl }}{{ page.url }}`

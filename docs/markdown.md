@@ -300,17 +300,57 @@ else is a literal backslash.
 
 ### HTML escaping
 
-`&`, `<`, `>` and `"` are always escaped in text. Raw HTML is never passed
-through.
+`&`, `<`, `>` and `"` are always escaped in text. Raw HTML is escaped too,
+except in [Liquid mode](#raw-html).
+
+### Raw HTML
+
+With `liquid: true` in `_config.yml`, HTML passes through as it does in
+kramdown and CommonMark. Elsewhere it is escaped and shows as text.
+
+An **HTML block** starts on a line (indented at most three spaces) that
+begins with one of these, and its lines are written as they are:
+
+| Start | Ends |
+| --- | --- |
+| `<pre`, `<script`, `<style`, `<textarea` | At the line holding the matching closing tag, blank lines included |
+| `<!--` | At the line holding `-->` |
+| `<?` | At the line holding `?>` |
+| `<!` and a letter, such as `<!DOCTYPE html>` | At the line holding `>` |
+| `<![CDATA[` | At the line holding `]]>` |
+| A block-level tag such as `<div>`, `<figure>`, `<table>`, `<details>` or `</section>` | Before the next blank line |
+| Any other complete open or closing tag alone on its line | Before the next blank line |
+
+Block-level tags interrupt a paragraph; a lone tag of another name does
+not. Markdown inside a block is not converted, but Markdown after a blank
+line inside `<div>` is:
+
+```markdown
+<div class="note">
+
+This *is* converted.
+
+</div>
+```
+
+**Inline HTML** is an open tag with valid attributes, a closing tag, a
+comment, a processing instruction, a declaration or a CDATA section, and is
+written as it is. Emphasis and links around and between tags still work.
+A `<` that starts none of these is escaped, and code spans keep their tags
+as text. Character references such as `&nbsp;`, `&#8212;` and `&#x2014;`
+pass through too; a `&` that starts none is escaped. `markdownify` follows
+the same rules in Liquid mode.
 
 ## Not supported
 
 These render as plain paragraph text:
 
 - Indented code blocks (four-space indented lines become paragraph text).
-- Raw HTML blocks and inline HTML, which are escaped instead.
+- Raw HTML blocks and inline HTML outside Liquid mode, which are escaped
+  instead.
+- kramdown's `markdown="1"` attribute; use blank lines inside the block.
 - Reference-style links and link reference definitions.
-- HTML entities and numeric character references (`&amp;` renders as
-  `&amp;amp;`).
+- HTML entities and numeric character references outside Liquid mode
+  (`&amp;` renders as `&amp;amp;`).
 - Extensions other than tables, strikethrough, highlight, wikilinks, math, diagrams, task lists, footnotes,
   definition lists, and the [components](components.md).

@@ -99,6 +99,10 @@ pub const Options = struct {
     shortcoder: ?Shortcoder = null,
     /// Typeset `$...$` and `$$...$$` as math. `math` code blocks always are.
     math: bool = false,
+    /// Pass raw HTML through: HTML blocks and inline tags, comments and
+    /// declarations are written as they are instead of escaped. Liquid
+    /// mode turns this on, as kramdown does.
+    raw_html: bool = false,
 };
 
 /// Shows the copy buttons of `Options.copy_buttons` and copies a block's
@@ -125,7 +129,7 @@ pub fn toDocument(arena: Allocator, src: []const u8) Allocator.Error!Document {
 pub fn toDocumentWith(arena: Allocator, src: []const u8, options: Options) Allocator.Error!Document {
     var aw: Writer.Allocating = .init(arena);
     var r: Renderer = .{ .arena = arena, .options = options };
-    r.inline_opts = .{ .math = options.math, .math_error = &r.math_error };
+    r.inline_opts = .{ .math = options.math, .math_error = &r.math_error, .raw_html = options.raw_html };
     // An allocating writer only fails when it runs out of memory.
     renderWith(&r, src, &aw.writer) catch return error.OutOfMemory;
     const html = try aw.toOwnedSlice();
@@ -143,7 +147,7 @@ pub fn render(arena: Allocator, src: []const u8, w: *Writer) Error!void {
 
 fn renderWith(r: *Renderer, src: []const u8, w: *Writer) Error!void {
     const lines = try splitLines(r.arena, src);
-    const doc = try parseBlocks(r.arena, lines);
+    const doc = try parseBlocks(.{ .arena = r.arena, .raw_html = r.options.raw_html }, lines);
     var aw: Writer.Allocating = .init(r.arena);
     renderBlocks(r, doc.blocks, false, &aw.writer) catch return error.OutOfMemory;
     try finishFootnotes(r, aw.written(), w);
@@ -252,6 +256,14 @@ const Block = union(enum) {
     /// `{{< name args >}}`, with the blocks up to `{{< /name >}}` when the
     /// call has a body.
     shortcode: struct { line: []const u8, name: []const u8, args: []const Shortcode.Arg, body: ?[]const Block, bad: ?[]const u8 = null },
+    /// Raw HTML lines, written as they are (`Options.raw_html`).
+    html: []const u8,
+};
+
+/// What block parsing needs from the document's options.
+const Ctx = struct {
+    arena: Allocator,
+    raw_html: bool = false,
 };
 
 const Code = struct { info: []const u8, meta: []const u8 = "", text: []const u8 };
@@ -420,7 +432,8 @@ fn trimRight(s: []const u8) []const u8 {
     return std.mem.trimEnd(u8, s, " \t");
 }
 
-fn parseBlocks(arena: Allocator, lines: []const []const u8) Allocator.Error!Parsed {
+fn parseBlocks(ctx: Ctx, lines: []const []const u8) Allocator.Error!Parsed {
+    const arena = ctx.arena;
     var blocks: std.ArrayList(Block) = .empty;
     var blank_between = false;
     var pending_blank = false;
@@ -437,17 +450,19 @@ fn parseBlocks(arena: Allocator, lines: []const []const u8) Allocator.Error!Pars
 
         if (fenceStart(line)) |f| {
             i = try parseFence(arena, lines, i, f, &blocks);
+        } else if (ctx.raw_html and htmlBlockStart(line, true) != null) {
+            i = try parseHtmlBlock(ctx, lines, i, &blocks);
         } else if (isThematicBreak(line)) {
             try blocks.append(arena, .thematic_break);
             i += 1;
         } else if (quoteContent(line) != null) {
-            i = try parseQuote(arena, lines, i, &blocks);
+            i = try parseQuote(ctx, lines, i, &blocks);
         } else if (footnoteDefStart(line)) |fd| {
-            i = try parseFootnoteDef(arena, lines, i, fd, &blocks);
+            i = try parseFootnoteDef(ctx, lines, i, fd, &blocks);
         } else if (isDefinitionStart(lines, i)) {
             i = try parseDefinitions(arena, lines, i, &blocks);
         } else if (containerStart(line)) |c| {
-            i = try parseContainer(arena, lines, i, c, &blocks);
+            i = try parseContainer(ctx, lines, i, c, &blocks);
         } else if (try tableStart(arena, lines, i)) |t| {
             i = try parseTable(arena, lines, i, t, &blocks);
         } else if (atxHeading(line)) |h| {
@@ -457,11 +472,11 @@ fn parseBlocks(arena: Allocator, lines: []const []const u8) Allocator.Error!Pars
             try blocks.append(arena, .{ .include = text });
             i += 1;
         } else if (shortcodeOpen(line)) |inner| {
-            i = try parseShortcode(arena, lines, i, inner, &blocks);
+            i = try parseShortcode(ctx, lines, i, inner, &blocks);
         } else if (listMarker(line)) |m| {
-            i = try parseList(arena, lines, i, m, &blocks);
+            i = try parseList(ctx, lines, i, m, &blocks);
         } else {
-            i = try parseParagraph(arena, lines, i, &blocks);
+            i = try parseParagraph(ctx, lines, i, &blocks);
         }
     }
     return .{ .blocks = blocks.items, .blank_between = blank_between };
@@ -517,7 +532,8 @@ fn shortcodeOpen(line: []const u8) ?[]const u8 {
 /// Parses `{{< name key="value" >}}` and, unless the tag ends with `/`, a
 /// body up to the matching `{{< /name >}}`. A call with no closing tag
 /// has no body.
-fn parseShortcode(arena: Allocator, lines: []const []const u8, start: usize, inner_raw: []const u8, out: *std.ArrayList(Block)) Allocator.Error!usize {
+fn parseShortcode(ctx: Ctx, lines: []const []const u8, start: usize, inner_raw: []const u8, out: *std.ArrayList(Block)) Allocator.Error!usize {
+    const arena = ctx.arena;
     var inner = inner_raw;
     const self_closing = std.mem.endsWith(u8, inner, "/");
     if (self_closing) inner = std.mem.trimEnd(u8, inner[0 .. inner.len - 1], " \t");
@@ -580,7 +596,7 @@ fn parseShortcode(arena: Allocator, lines: []const []const u8, start: usize, inn
         try out.append(arena, .{ .shortcode = call });
         return start + 1;
     }
-    const body = try parseBlocks(arena, lines[start + 1 .. j]);
+    const body = try parseBlocks(ctx, lines[start + 1 .. j]);
     call.body = body.blocks;
     try out.append(arena, .{ .shortcode = call });
     return j + 1;
@@ -690,7 +706,8 @@ fn interruptsParagraph(line: []const u8) bool {
     return false;
 }
 
-fn parseList(arena: Allocator, lines: []const []const u8, start: usize, first: Marker, out: *std.ArrayList(Block)) Allocator.Error!usize {
+fn parseList(ctx: Ctx, lines: []const []const u8, start: usize, first: Marker, out: *std.ArrayList(Block)) Allocator.Error!usize {
+    const arena = ctx.arena;
     var items: std.ArrayList([]const Block) = .empty;
     var tight = true;
     var i = start;
@@ -733,7 +750,7 @@ fn parseList(arena: Allocator, lines: []const []const u8, start: usize, first: M
         while (used > 1 and item_lines.items[used - 1].len == 0) used -= 1;
         const trailing_blanks = item_lines.items.len - used;
 
-        const parsed = try parseBlocks(arena, item_lines.items[0..used]);
+        const parsed = try parseBlocks(ctx, item_lines.items[0..used]);
         if (parsed.blank_between) tight = false;
         try items.append(arena, parsed.blocks);
 
@@ -756,7 +773,8 @@ fn parseList(arena: Allocator, lines: []const []const u8, start: usize, first: M
     return end_of_list;
 }
 
-fn parseParagraph(arena: Allocator, lines: []const []const u8, start: usize, out: *std.ArrayList(Block)) Allocator.Error!usize {
+fn parseParagraph(ctx: Ctx, lines: []const []const u8, start: usize, out: *std.ArrayList(Block)) Allocator.Error!usize {
+    const arena = ctx.arena;
     var text: std.ArrayList(u8) = .empty;
     try text.appendSlice(arena, trimLeft(lines[start]));
     var j = start + 1;
@@ -769,6 +787,7 @@ fn parseParagraph(arena: Allocator, lines: []const []const u8, start: usize, out
             return j + 1;
         }
         if (isBlank(l) or interruptsParagraph(l)) break;
+        if (ctx.raw_html and htmlBlockStart(l, false) != null) break;
         try text.append(arena, '\n');
         try text.appendSlice(arena, trimLeft(l));
     }
@@ -877,7 +896,8 @@ fn quoteContent(line: []const u8) ?[]const u8 {
     return if (rest.len > 0 and rest[0] == ' ') rest[1..] else rest;
 }
 
-fn parseQuote(arena: Allocator, lines: []const []const u8, start: usize, out: *std.ArrayList(Block)) Allocator.Error!usize {
+fn parseQuote(ctx: Ctx, lines: []const []const u8, start: usize, out: *std.ArrayList(Block)) Allocator.Error!usize {
+    const arena = ctx.arena;
     var inner: std.ArrayList([]const u8) = .empty;
     var j = start;
     var in_paragraph = false;
@@ -898,12 +918,12 @@ fn parseQuote(arena: Allocator, lines: []const []const u8, start: usize, out: *s
     // `> [!NOTE]` on the first line makes the quote a callout.
     if (inner.items.len > 0) {
         if (calloutMarker(inner.items[0])) |kind| {
-            const parsed = try parseBlocks(arena, inner.items[1..]);
+            const parsed = try parseBlocks(ctx, inner.items[1..]);
             try out.append(arena, .{ .callout = .{ .kind = kind, .children = parsed.blocks } });
             return j;
         }
     }
-    const parsed = try parseBlocks(arena, inner.items);
+    const parsed = try parseBlocks(ctx, inner.items);
     try out.append(arena, .{ .quote = parsed.blocks });
     return j;
 }
@@ -923,7 +943,8 @@ fn footnoteDefStart(line: []const u8) ?FootnoteDefStart {
 
 /// A footnote's content is its first line plus following lines indented
 /// four spaces (blank lines allowed between them), parsed as blocks.
-fn parseFootnoteDef(arena: Allocator, lines: []const []const u8, start: usize, fd: FootnoteDefStart, out: *std.ArrayList(Block)) Allocator.Error!usize {
+fn parseFootnoteDef(ctx: Ctx, lines: []const []const u8, start: usize, fd: FootnoteDefStart, out: *std.ArrayList(Block)) Allocator.Error!usize {
+    const arena = ctx.arena;
     var inner: std.ArrayList([]const u8) = .empty;
     try inner.append(arena, fd.first);
     var j = start + 1;
@@ -948,7 +969,7 @@ fn parseFootnoteDef(arena: Allocator, lines: []const []const u8, start: usize, f
         break;
     }
     const used = inner.items.len - (j - end);
-    const parsed = try parseBlocks(arena, inner.items[0..used]);
+    const parsed = try parseBlocks(ctx, inner.items[0..used]);
     try out.append(arena, .{ .footnote_def = .{ .label = fd.label, .children = parsed.blocks } });
     return end;
 }
@@ -1017,13 +1038,187 @@ fn isContainerClose(line: []const u8, colons: usize) bool {
     return t.len >= colons and runLength(t, 0, ':') == t.len;
 }
 
-fn parseContainer(arena: Allocator, lines: []const []const u8, start: usize, c: ContainerStart, out: *std.ArrayList(Block)) Allocator.Error!usize {
+fn parseContainer(ctx: Ctx, lines: []const []const u8, start: usize, c: ContainerStart, out: *std.ArrayList(Block)) Allocator.Error!usize {
+    const arena = ctx.arena;
     var j = start + 1;
     while (j < lines.len and !isContainerClose(lines[j], c.colons)) j += 1;
-    const parsed = try parseBlocks(arena, lines[start + 1 .. j]);
+    const parsed = try parseBlocks(ctx, lines[start + 1 .. j]);
     try out.append(arena, .{ .container = .{ .kind = c.kind, .title = c.title, .children = parsed.blocks } });
     // Skip the closing fence; an unclosed container runs to the end.
     return @min(j + 1, lines.len);
+}
+
+/// How an HTML block ends: at a line containing `close`, or (when null)
+/// before the next blank line.
+const HtmlBlock = struct { close: ?[]const u8 };
+
+/// Tags whose blocks end only at their closing tag, so blank lines inside
+/// them are kept.
+const verbatim_tags = [_][]const u8{ "pre", "script", "style", "textarea" };
+
+/// Block-level tags, which start an HTML block even mid-paragraph.
+const block_tags = [_][]const u8{
+    "address",  "article",    "aside",  "base",    "basefont", "blockquote", "body",     "caption",  "center",
+    "col",      "colgroup",   "dd",     "details", "dialog",   "dir",        "div",      "dl",       "dt",
+    "fieldset", "figcaption", "figure", "footer",  "form",     "frame",      "frameset", "h1",       "h2",
+    "h3",       "h4",         "h5",     "h6",      "head",     "header",     "hr",       "html",     "iframe",
+    "legend",   "li",         "link",   "main",    "menu",     "menuitem",   "nav",      "noframes", "ol",
+    "optgroup", "option",     "p",      "param",   "search",   "section",    "summary",  "table",    "tbody",
+    "td",       "tfoot",      "th",     "thead",   "title",    "tr",         "track",    "ul",
+};
+
+fn tagNameIn(name: []const u8, names: []const []const u8) bool {
+    for (names) |n| if (std.ascii.eqlIgnoreCase(name, n)) return true;
+    return false;
+}
+
+/// Whether `line` starts an HTML block, following CommonMark's seven
+/// kinds. A lone complete tag of any name (kind 7) starts one only when
+/// it would not interrupt a paragraph.
+fn htmlBlockStart(line: []const u8, may_be_lone_tag: bool) ?HtmlBlock {
+    const ind = indentOf(line);
+    if (ind > 3) return null;
+    const s = line[ind..];
+    if (s.len < 2 or s[0] != '<') return null;
+    if (std.mem.startsWith(u8, s, "<!--")) return .{ .close = "-->" };
+    if (std.mem.startsWith(u8, s, "<?")) return .{ .close = "?>" };
+    if (std.mem.startsWith(u8, s, "<![CDATA[")) return .{ .close = "]]>" };
+    if (s[1] == '!' and s.len > 2 and std.ascii.isAlphabetic(s[2])) return .{ .close = ">" };
+    const closing = s[1] == '/';
+    const name_start: usize = if (closing) 2 else 1;
+    var name_end = name_start;
+    while (name_end < s.len and (std.ascii.isAlphanumeric(s[name_end]) or (name_end > name_start and s[name_end] == '-'))) name_end += 1;
+    if (name_end == name_start or !std.ascii.isAlphabetic(s[name_start])) return null;
+    const name = s[name_start..name_end];
+    const after = s[name_end..];
+    const ends_name = after.len == 0 or after[0] == ' ' or after[0] == '\t' or after[0] == '>';
+    if (!closing and ends_name and tagNameIn(name, &verbatim_tags)) {
+        return .{ .close = switch (std.ascii.toLower(name[0])) {
+            'p' => "</pre>",
+            's' => if (std.ascii.toLower(name[1]) == 'c') "</script>" else "</style>",
+            else => "</textarea>",
+        } };
+    }
+    if (tagNameIn(name, &block_tags) and (ends_name or std.mem.startsWith(u8, after, "/>"))) return .{ .close = null };
+    if (!may_be_lone_tag or tagNameIn(name, &verbatim_tags)) return null;
+    const len = htmlTag(s) orelse return null;
+    if (!isBlank(s[len..])) return null;
+    return .{ .close = null };
+}
+
+fn containsIgnoreCase(haystack: []const u8, needle: []const u8) bool {
+    if (needle.len > haystack.len) return false;
+    var i: usize = 0;
+    while (i + needle.len <= haystack.len) : (i += 1) {
+        if (std.ascii.eqlIgnoreCase(haystack[i .. i + needle.len], needle)) return true;
+    }
+    return false;
+}
+
+fn parseHtmlBlock(ctx: Ctx, lines: []const []const u8, start: usize, out: *std.ArrayList(Block)) Allocator.Error!usize {
+    const kind = htmlBlockStart(lines[start], true).?;
+    var text: std.ArrayList(u8) = .empty;
+    var j = start;
+    while (j < lines.len) : (j += 1) {
+        const l = lines[j];
+        if (kind.close == null and isBlank(l)) break;
+        if (j > start) try text.append(ctx.arena, '\n');
+        try text.appendSlice(ctx.arena, l);
+        if (kind.close) |close| {
+            // The opening line may close the block too: look past `<`.
+            const from: usize = if (j == start) @min(indentOf(l) + 2, l.len) else 0;
+            if (containsIgnoreCase(l[from..], close)) {
+                j += 1;
+                break;
+            }
+        }
+    }
+    try out.append(ctx.arena, .{ .html = text.items });
+    return j;
+}
+
+/// Length of the inline HTML at the start of `s` (which starts with
+/// `<`): an open or closing tag, a comment, a processing instruction, a
+/// declaration or a CDATA section, as CommonMark defines them. Null when
+/// it is none of these.
+fn htmlTag(s: []const u8) ?usize {
+    if (s.len < 3 or s[0] != '<') return null;
+    if (std.mem.startsWith(u8, s, "<!--")) {
+        if (std.mem.startsWith(u8, s[4..], ">") or std.mem.startsWith(u8, s[4..], "->")) return null;
+        const end = std.mem.indexOfPos(u8, s, 4, "-->") orelse return null;
+        return end + 3;
+    }
+    if (std.mem.startsWith(u8, s, "<?")) return (std.mem.indexOfPos(u8, s, 2, "?>") orelse return null) + 2;
+    if (std.mem.startsWith(u8, s, "<![CDATA[")) return (std.mem.indexOfPos(u8, s, 9, "]]>") orelse return null) + 3;
+    if (s[1] == '!') {
+        if (!std.ascii.isAlphabetic(s[2])) return null;
+        return (std.mem.indexOfScalarPos(u8, s, 2, '>') orelse return null) + 1;
+    }
+    var i: usize = 1;
+    const closing = s[1] == '/';
+    if (closing) i += 1;
+    if (i >= s.len or !std.ascii.isAlphabetic(s[i])) return null;
+    while (i < s.len and (std.ascii.isAlphanumeric(s[i]) or s[i] == '-')) i += 1;
+    if (closing) {
+        i = skipHtmlSpace(s, i);
+        return if (i < s.len and s[i] == '>') i + 1 else null;
+    }
+    // Attributes, each preceded by whitespace.
+    while (true) {
+        const ws = skipHtmlSpace(s, i);
+        if (ws < s.len and s[ws] == '>') return ws + 1;
+        if (ws + 1 < s.len and s[ws] == '/' and s[ws + 1] == '>') return ws + 2;
+        if (ws == i or ws >= s.len) return null;
+        i = ws;
+        if (!(std.ascii.isAlphabetic(s[i]) or s[i] == '_' or s[i] == ':')) return null;
+        while (i < s.len and (std.ascii.isAlphanumeric(s[i]) or std.mem.indexOfScalar(u8, "_.:-", s[i]) != null)) i += 1;
+        const before_eq = skipHtmlSpace(s, i);
+        if (before_eq < s.len and s[before_eq] == '=') {
+            i = skipHtmlSpace(s, before_eq + 1);
+            if (i >= s.len) return null;
+            if (s[i] == '"' or s[i] == '\'') {
+                i = (std.mem.indexOfScalarPos(u8, s, i + 1, s[i]) orelse return null) + 1;
+            } else {
+                const value_start = i;
+                while (i < s.len and std.mem.indexOfScalar(u8, " \t\n\"'=<>`", s[i]) == null) i += 1;
+                if (i == value_start) return null;
+            }
+        }
+    }
+}
+
+/// Length of the character reference at the start of `s` (`&name;`,
+/// `&#123;` or `&#x7B;`), or null. Names are not checked against HTML's
+/// list; the browser shows an unknown one as text.
+fn entity(s: []const u8) ?usize {
+    if (s.len < 3 or s[0] != '&') return null;
+    var i: usize = 1;
+    if (s[1] == '#') {
+        i = 2;
+        const hex = i < s.len and (s[i] == 'x' or s[i] == 'X');
+        if (hex) i += 1;
+        const digits_start = i;
+        while (i < s.len and i - digits_start < 8 and (if (hex) std.ascii.isHex(s[i]) else std.ascii.isDigit(s[i]))) i += 1;
+        const n = i - digits_start;
+        if (n == 0 or n > (if (hex) @as(usize, 6) else 7)) return null;
+    } else {
+        if (!std.ascii.isAlphabetic(s[1])) return null;
+        while (i < s.len and i < 33 and std.ascii.isAlphanumeric(s[i])) i += 1;
+    }
+    return if (i < s.len and s[i] == ';') i + 1 else null;
+}
+
+/// Spaces, tabs and at most one line ending.
+fn skipHtmlSpace(s: []const u8, start: usize) usize {
+    var i = start;
+    var newline = false;
+    while (i < s.len) : (i += 1) {
+        if (s[i] == '\n') {
+            if (newline) break;
+            newline = true;
+        } else if (s[i] != ' ' and s[i] != '\t') break;
+    }
+    return i;
 }
 
 /// State for rendering one document.
@@ -1207,6 +1402,10 @@ fn renderBlock(r: *Renderer, b: Block, tight: bool, w: *Writer) Error!void {
     const arena = r.arena;
     switch (b) {
         .thematic_break => try w.writeAll("<hr />\n"),
+        .html => |h| {
+            try w.writeAll(h);
+            try w.writeByte('\n');
+        },
         .footnote_def => |f| {
             // Collected now, written at the end by `finishFootnotes`. The
             // first definition of a label wins.
@@ -1465,6 +1664,8 @@ const InlineOptions = struct {
     math: bool = false,
     /// Where to record the first math error.
     math_error: ?*?MathError = null,
+    /// Pass inline HTML through (`Options.raw_html`).
+    raw_html: bool = false,
 };
 
 /// Typesets TeX as MathML, or records the first failure and writes the
@@ -1619,6 +1820,21 @@ fn parseInlines(opts: InlineOptions, arena: Allocator, s: []const u8) Allocator.
                 if (autolink(s[i..])) |len| {
                     try p.addText(s[text_start..i]);
                     try p.add(.{ .raw = try autolinkHtml(arena, s[i + 1 .. i + len - 1]) });
+                    i += len;
+                    text_start = i;
+                } else if (opts.raw_html and htmlTag(s[i..]) != null) {
+                    const len = htmlTag(s[i..]).?;
+                    try p.addText(s[text_start..i]);
+                    try p.add(.{ .raw = .{ .html = s[i .. i + len] } });
+                    i += len;
+                    text_start = i;
+                } else i += 1;
+            },
+            '&' => {
+                if (opts.raw_html and entity(s[i..]) != null) {
+                    const len = entity(s[i..]).?;
+                    try p.addText(s[text_start..i]);
+                    try p.add(.{ .raw = .{ .html = s[i .. i + len] } });
                     i += len;
                     text_start = i;
                 } else i += 1;
@@ -2224,6 +2440,52 @@ test "math" {
 test "escaping" {
     try expectHtml("<p>*not em* &lt;b&gt; &amp;amp;</p>\n", "\\*not em\\* <b> &amp;");
     try expectHtml("<p>\\a</p>\n", "\\a");
+}
+
+fn expectRawHtml(expected: []const u8, src: []const u8) !void {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const doc = try toDocumentWith(arena.allocator(), src, .{ .raw_html = true });
+    try std.testing.expectEqualStrings(expected, doc.html);
+}
+
+test "raw_html passes HTML blocks through" {
+    // Kind 6: a block-level tag, up to the next blank line; Markdown after
+    // the blank line is converted.
+    try expectRawHtml("<div class=\"note\">\n*not em*\n</div>\n<p><em>em</em></p>\n", "<div class=\"note\">\n*not em*\n</div>\n\n*em*");
+    try expectRawHtml("<div>\n<p><em>em</em></p>\n</div>\n", "<div>\n\n*em*\n\n</div>");
+    // Kind 1 keeps blank lines up to its closing tag.
+    try expectRawHtml("<pre>\na\n\n*b*\n</pre>\n<p>c</p>\n", "<pre>\na\n\n*b*\n</pre>\nc");
+    try expectRawHtml("<script>var a = 1 < 2;</script>\n", "<script>var a = 1 < 2;</script>");
+    // Comments, declarations.
+    try expectRawHtml("<!-- a\n\nb -->\n<p>c</p>\n", "<!-- a\n\nb -->\nc");
+    try expectRawHtml("<!DOCTYPE html>\n", "<!DOCTYPE html>");
+    // A block-level tag interrupts a paragraph; a lone inline tag does not.
+    try expectRawHtml("<p>a</p>\n<div>b</div>\n", "a\n<div>b</div>");
+    try expectRawHtml("<p>a\n<span>b</span></p>\n", "a\n<span>b</span>");
+    try expectRawHtml("<custom-el x=\"1\">\n<p>b</p>\n", "<custom-el x=\"1\">\n\nb");
+    // Inside lists and quotes.
+    try expectRawHtml("<ul>\n<li>\n<div>x</div>\n</li>\n</ul>\n", "- <div>x</div>");
+    try expectRawHtml("<blockquote>\n<div>x</div>\n</blockquote>\n", "> <div>x</div>");
+    // Indented four spaces, it is not an HTML block, only inline HTML in a
+    // paragraph.
+    try expectRawHtml("<p><div></p>\n", "    <div>");
+}
+
+test "raw_html passes inline HTML through" {
+    try expectRawHtml("<p>a <b>bold</b> <span class='x' data-n=1>s</span> <br/> c</p>\n", "a <b>bold</b> <span class='x' data-n=1>s</span> <br/> c");
+    try expectRawHtml("<p>a <!-- note --> b</p>\n", "a <!-- note --> b");
+    // Markdown inside inline tags is still converted.
+    try expectRawHtml("<p><a href=\"x\"><em>em</em></a> <em>y</em></p>\n", "<a href=\"x\">*em*</a> *y*");
+    // Not tags: escaped as before.
+    try expectRawHtml("<p>1 &lt; 2 and a &lt;b c=&gt; d</p>\n", "1 < 2 and a <b c=> d");
+    try expectRawHtml("<p><code>&lt;b&gt;</code></p>\n", "`<b>`");
+    // Character references pass through; a lone & is escaped.
+    try expectRawHtml("<p>a&nbsp;b &#8212; &#x2014; &amp; R&amp;D &amp;x</p>\n", "a&nbsp;b &#8212; &#x2014; &amp; R&D &x");
+    // Autolinks still win.
+    try expectRawHtml("<p><a href=\"https://x.org\">https://x.org</a></p>\n", "<https://x.org>");
+    // Without the option, HTML is escaped.
+    try expectHtml("<p>&lt;b&gt;x&lt;/b&gt;</p>\n<p>&lt;div&gt;</p>\n", "<b>x</b>\n\n<div>");
 }
 
 test "CRLF and tabs" {

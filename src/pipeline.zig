@@ -3295,6 +3295,8 @@ fn markdownOptions(b: *Builder, config_fields: frontmatter.Map) Error!markdown.O
         .heading_anchors = try enabled(b, config_fields, "heading_anchors"),
         .copy_buttons = try enabled(b, config_fields, "copy_code"),
         .math = try optIn(b, config_fields, "math"),
+        // Liquid sites are written for kramdown, which passes HTML through.
+        .raw_html = try configFlag(b, config_fields, "liquid", false),
     };
 }
 
@@ -4890,6 +4892,21 @@ test "without liquid: true, Markdown bodies are not templates" {
     });
     defer t.deinit();
     try expectContains(try t.output("a/index.html"), "<code>{{ page.title }}</code>");
+}
+
+test "raw HTML in Markdown passes through only with liquid: true" {
+    const body = "---\ntitle: A\n---\n<div class=\"box\">\n*kept*\n</div>\n\nSome <kbd>Ctrl</kbd> text.\n";
+    var liquid: TestSite = try .init(&.{
+        .{ "_config.yml", "liquid: true\n" },
+        .{ "a.md", body },
+    });
+    defer liquid.deinit();
+    try expectContains(try liquid.output("a/index.html"), "<div class=\"box\">\n*kept*\n</div>\n<p>Some <kbd>Ctrl</kbd> text.</p>");
+    var plain: TestSite = try .init(&.{
+        .{ "a.md", body },
+    });
+    defer plain.deinit();
+    try expectContains(try plain.output("a/index.html"), "<p>&lt;div class=&quot;box&quot;&gt;\n<em>kept</em>\n&lt;/div&gt;</p>\n<p>Some &lt;kbd&gt;Ctrl&lt;/kbd&gt; text.</p>");
 }
 
 test "the asset filter fingerprints static files and gives SRI hashes" {

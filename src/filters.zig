@@ -215,7 +215,8 @@ pub fn apply(r: *Renderer, f: Filter, v: Value, line: usize) RenderError!Value {
         },
         .markdownify => {
             const s = (if (liquid) (if (v == .nil) null else try toText(r, v)) else try mortiseText(r, f, v, line)) orelse return v;
-            return .{ .html = try markdown.toHtml(a, s) };
+            // Liquid sites expect kramdown, which passes HTML through.
+            return .{ .html = (try markdown.toDocumentWith(a, s, .{ .raw_html = liquid })).html };
         },
         .json => {
             var aw: Writer.Allocating = .init(a);
@@ -1886,6 +1887,7 @@ test "jekyll text filters" {
     try expectLiquid("“Jekyll” — the static generator…", "{{ '\"Jekyll\" --- the static generator...' | smartify }}");
     try expectLiquid("[\"zig\",\"web\"]|{\"n\":2.0}|&quot;a&quot;", "{{ page.tags | jsonify }}|{% assign n = 2.0 %}{\"n\":{{ n }}}|{{ \"a\" | inspect }}");
     try expectLiquid("<p><em>hi</em></p>\n", "{{ \"*hi*\" | markdownify }}");
+    try expectLiquid("<p><b>hi</b></p>\n", "{{ \"<b>hi</b>\" | markdownify }}");
 }
 
 test "liquid filter errors" {
