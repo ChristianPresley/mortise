@@ -196,7 +196,7 @@ it would hide `site.categories`.
 `tags:` mapped to its posts, newest first, so `{% for tag in site.tags %}`
 gives `tag[0]` and `tag[1]` and `site.tags.zig` the posts tagged `zig`.
 (Mortise sites keep their own `site.tags`, a list of objects with `name`
-and `posts`; see [templates.md](templates.md).) Tag pages from
+and `posts`; see the [README](../README.md).) Tag pages from
 `_layouts/tag.html` work the same in both modes.
 
 ### Static files
