@@ -99,22 +99,35 @@ fn readWoff(arena: Allocator, bytes: []const u8, diag: *Diagnostic) Error!Font {
     return .{ .flavor = u32At(bytes, 4), .tables = tables };
 }
 
-pub const Format = enum { sfnt, woff };
+fn readWoff2(arena: Allocator, bytes: []const u8, diag: *Diagnostic) Error!Font {
+    var message: []const u8 = "";
+    const f = woff2.toTables(arena, bytes, &message) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.InvalidFont => return fail(arena, diag, "{s}", .{message}),
+    };
+    const tables = try arena.alloc(Table, f.tables.len);
+    for (tables, f.tables) |*t, w| t.* = .{ .tag = w.tag, .data = w.data };
+    return .{ .flavor = f.flavor, .tables = tables };
+}
+
+pub const Format = enum { sfnt, woff, woff2 };
 
 /// The kind of font file, from its first bytes, or null.
 pub fn format(bytes: []const u8) ?Format {
     if (bytes.len < 4) return null;
     const sig = bytes[0..4];
     if (std.mem.eql(u8, sig, "wOFF")) return .woff;
+    if (std.mem.eql(u8, sig, "wOF2")) return .woff2;
     if (std.mem.eql(u8, sig, "\x00\x01\x00\x00") or std.mem.eql(u8, sig, "true") or std.mem.eql(u8, sig, "OTTO")) return .sfnt;
     return null;
 }
 
 /// The TrueType, OpenType or WOFF font `bytes` as a WOFF2 file.
 pub fn toWoff2(arena: Allocator, bytes: []const u8, diag: *Diagnostic) Error![]u8 {
-    const font = switch (format(bytes) orelse return fail(arena, diag, "not a TrueType, OpenType or WOFF font", .{})) {
+    const font = switch (format(bytes) orelse return fail(arena, diag, "not a TrueType, OpenType, WOFF or WOFF2 font", .{})) {
         .sfnt => try readSfnt(arena, bytes, diag),
         .woff => try readWoff(arena, bytes, diag),
+        .woff2 => try readWoff2(arena, bytes, diag),
     };
     const sfnt = try writeSfnt(arena, font.flavor, try arena.dupe(Table, font.tables));
     return woff2.fromSfnt(arena, sfnt) catch |err| switch (err) {
@@ -126,12 +139,12 @@ pub fn toWoff2(arena: Allocator, bytes: []const u8, diag: *Diagnostic) Error![]u
 /// `bytes` reduced to the glyphs for `chars`, in the same file format.
 pub fn subset(arena: Allocator, bytes: []const u8, chars: []const u21, diag: *Diagnostic) Error![]u8 {
     const fmt = format(bytes) orelse {
-        if (bytes.len >= 4 and std.mem.eql(u8, bytes[0..4], "wOF2")) return unsupported(arena, diag, "WOFF2 fonts cannot be subset; use the .ttf or .woff file", .{});
-        return fail(arena, diag, "not a TrueType, OpenType or WOFF font", .{});
+        return fail(arena, diag, "not a TrueType, OpenType, WOFF or WOFF2 font", .{});
     };
     const font = switch (fmt) {
         .sfnt => try readSfnt(arena, bytes, diag),
         .woff => try readWoff(arena, bytes, diag),
+        .woff2 => try readWoff2(arena, bytes, diag),
     };
     if (font.get("CFF2") != null) return unsupported(arena, diag, "fonts with CFF2 outlines (variable OpenType fonts) cannot be subset", .{});
     // CFF outlines (most .otf files) instead of glyf and loca.
@@ -252,6 +265,10 @@ pub fn subset(arena: Allocator, bytes: []const u8, chars: []const u21, diag: *Di
     return switch (fmt) {
         .sfnt => sfnt,
         .woff => try writeWoff(arena, sfnt, font.flavor),
+        .woff2 => woff2.fromSfnt(arena, sfnt) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.InvalidFont => fail(arena, diag, "the subset font cannot be written as WOFF2", .{}),
+        },
     };
 }
 
@@ -818,7 +835,7 @@ test "unsupported fonts are reported" {
     defer arena_state.deinit();
     const a = arena_state.allocator();
     var diag: Diagnostic = .{};
-    try testing.expectError(error.UnsupportedFont, subset(a, "wOF2xxxx", &.{}, &diag));
+    try testing.expectError(error.InvalidFont, subset(a, "wOF2xxxx", &.{}, &diag));
     try testing.expectError(error.InvalidFont, subset(a, "nope", &.{}, &diag));
     var tables = [_]Table{.{ .tag = "CFF2".*, .data = "" }};
     try testing.expectError(error.UnsupportedFont, subset(a, try writeSfnt(a, 0x4F54544F, &tables), &.{}, &diag));

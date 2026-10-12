@@ -517,9 +517,7 @@ job:
   placed on a base letter) keeps the whole font, since its parts are found
   through Adobe's standard encoding. Subroutine numbers taken from
   arithmetic in a charstring, rather than written as numbers, are not
-  followed. No CFF font was on the development machine, so CFF subsetting
-  was checked with fonts built for the tests rather than measured on
-  published fonts.
+  followed.
 - Characters come from the text of HTML pages. Text added by scripts, CSS
   `content:`, or attributes such as `title` and `placeholder` is not seen;
   list such characters under `fonts: keep:`. Printable ASCII is always kept.
@@ -527,9 +525,8 @@ job:
   size; a subset is typically a third to a half of the original rather
   than a few kilobytes.
 - Variable fonts keep all their variation data.
-- WOFF2 is written, not read: a `.woff2` file cannot be listed under
-  `fonts.subset` yet. The Brotli decoder it needs reads the whole format,
-  static dictionary included, but the WOFF2 reader is still to come.
+- WOFF2 font collections (`.woff2` files holding several fonts) cannot be
+  read.
 - WOFF2 output applies the `glyf`/`loca` transform but not the optional
   `hmtx` transform, and other tables are stored as they are. The Brotli
   encoder uses one block type and one prefix code per meta-block and no

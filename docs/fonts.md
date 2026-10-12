@@ -42,8 +42,11 @@ outlines need no change.
 On the development machine, keeping printable ASCII and a sentence of
 accented text, arrows, quotes and ligatures shrank Arial from 1.0 MB to
 395 KB, Segoe UI from 960 KB to 375 KB, Consolas from 453 KB to 118 KB,
-and Georgia from 220 KB to 100 KB. Text drawn with each subset was pixel
-for pixel the same as with the whole font.
+and Georgia from 220 KB to 100 KB. Adobe's Source Serif 4, a CFF font,
+went from 241 KB to 164 KB (its TrueType build from 262 KB to 147 KB);
+most of what is left is its positioning and substitution tables, which
+keep their full size. Text drawn with each subset was pixel for pixel the
+same as with the whole font.
 
 ## Formats
 
@@ -51,7 +54,7 @@ for pixel the same as with the whole font.
 | ------------------ | ------------------------- |
 | `.ttf`, `.otf` with TrueType or CFF outlines | the same format |
 | `.woff`            | `.woff`, tables compressed again |
-| `.woff2`           | not supported as input; list the `.ttf`, `.otf` or `.woff`, and set `woff2: true` for WOFF2 output |
+| `.woff2`           | `.woff2`: read with Mortise's Brotli decoder, its glyph and metrics transforms undone, and written again as with `woff2: true` |
 | CFF2 outlines (variable `.otf`) | not supported |
 
 A listed file that is not part of the site, or a font that cannot be
@@ -95,6 +98,14 @@ Arial's from 561 KB to 503 KB and Consolas's from 245 KB to 213 KB, and
 every printable Latin character drawn in Edge was pixel for pixel the
 same as with the TrueType file. A font with a glyph the transform cannot
 read keeps its tables as they are.
+
+A `.woff2` file can be listed under `subset` too: Mortise reads it with
+its own Brotli decoder (the RFC 7932 static dictionary included), undoes
+the `glyf`, `loca` and `hmtx` transforms, subsets the font and writes it
+back as WOFF2 under the same name. Adobe's WOFF2 builds of Source Serif 4,
+76 KB (TrueType) and 107 KB (CFF), came out at 51 KB and 72 KB for the
+page text above, the same files Mortise writes from the `.ttf` and `.otf`,
+and Edge drew Latin text with each pixel for pixel as with the original.
 
 The Brotli encoder finds repeats with hash chains, looks one byte ahead
 before taking a match, reuses recent distances at no cost, and writes

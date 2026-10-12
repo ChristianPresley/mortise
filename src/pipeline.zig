@@ -1100,6 +1100,8 @@ fn subsetFonts(b: *Builder, all_outputs: *std.ArrayList(Output), config_fields: 
     for (paths) |p| {
         const path = std.mem.trimStart(u8, p.string, "/");
         const ext = sitepath.extension(path);
+        // A WOFF2 font is written as WOFF2 already.
+        if (std.mem.eql(u8, ext, ".woff2")) continue;
         const woff2_path = try std.mem.concat(arena, u8, &.{ path[0 .. path.len - ext.len], ".woff2" });
         if (hasOutput(all_outputs.items, woff2_path)) return b.fail(config_path, line, "'fonts.woff2' would write {s}, which the site already has", .{woff2_path});
         const o = for (all_outputs.items) |o| {
@@ -6014,4 +6016,26 @@ test "fonts.woff2 writes a WOFF2 copy of each subset font in production builds" 
     try src.writeFile("fonts/t.woff2", "mine");
     try testing.expectError(error.BuildFailed, buildWith(a, src, .{ .subset_fonts = true }, &diag));
     try testing.expect(std.mem.indexOf(u8, diag.message, "would write fonts/t.woff2") != null);
+}
+
+test "a WOFF2 font listed under fonts.subset is subset and stays WOFF2" {
+    var t: TestSite = try .init(&.{
+        .{ "_config.yml", "fonts:\n  subset: [fonts/c.woff2]\n  woff2: true\n" },
+        .{ "index.md", "A\n" },
+    });
+    defer t.deinit();
+    const a = t.arena.allocator();
+    const src = SiteDir.borrow(testing.io, t.tmp.dir);
+    var fd: fonts.Diagnostic = .{};
+    try src.writeFile("fonts/c.woff2", try fonts.toWoff2(a, try fonts.testCffFont(a), &fd));
+    var diag: Diagnostic = .{};
+    const prod = buildWith(a, src, .{ .subset_fonts = true }, &diag) catch |err| {
+        std.debug.print("build failed: {f}\n", .{diag});
+        return err;
+    };
+    const out = prod.find("fonts/c.woff2").?.data.bytes;
+    try testing.expectEqual(fonts.Format.woff2, fonts.format(out).?);
+    try src.writeFile("fonts/c.woff2", "wOF2 but broken");
+    try testing.expectError(error.BuildFailed, buildWith(a, src, .{ .subset_fonts = true }, &diag));
+    try testing.expectEqualStrings("fonts/c.woff2", diag.path);
 }
