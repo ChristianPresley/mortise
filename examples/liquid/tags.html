@@ -12,11 +12,12 @@ title: Tags
 {%- for category in site.categories %}
   <strong>{{ category[0] }}</strong> ({{ category[1].size }}){% unless forloop.last %},{% endunless %}
 {%- endfor %}.</p>
-{% for tag in tags %}
-<h2 id="{{ tag | slugify }}">#{{ tag }}</h2>
+{%- comment %} site.tags maps each tag to its posts, newest first, as in Jekyll. {% endcomment %}
+{% for tag in site.tags %}
+<h2 id="{{ tag[0] | slugify }}">#{{ tag[0] }}</h2>
 <ul>
-  {%- for post in site.posts %}{% if post.tags contains tag %}
+  {%- for post in tag[1] %}
   <li><a href="{{ post.url | relative_url }}">{{ post.title }}</a></li>
-  {%- endif %}{% endfor %}
+  {%- endfor %}
 </ul>
 {% endfor %}

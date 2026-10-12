@@ -1982,7 +1982,7 @@ fn buildSites(b: *Builder, config_fields: frontmatter.Map, pages: []Page, hidden
                 try coll_values.append(arena, try collectionValue(arena, c, values));
             }
             try site_entries.append(arena, .{ .key = "collections", .value = .{ .list = coll_values.items } });
-            try site_entries.append(arena, .{ .key = "categories", .value = try categoryIndex(arena, subset) });
+            try site_entries.append(arena, .{ .key = "categories", .value = try postIndex(arena, subset, .categories) });
             if (li == 0) static_files = try staticFileList(b);
             try site_entries.append(arena, .{ .key = "static_files", .value = static_files });
         }
@@ -1992,7 +1992,8 @@ fn buildSites(b: *Builder, config_fields: frontmatter.Map, pages: []Page, hidden
         if (versions.len > 0) try site_entries.append(arena, .{ .key = "versions", .value = try versionList(arena, versions, b.baseurl) });
         try site_entries.append(arena, .{ .key = "menus", .value = b.menus });
         tags_out.* = try tagIndex(arena, subset, if (tag_pages) root else null);
-        try site_entries.append(arena, .{ .key = "tags", .value = tags_out.* });
+        // Liquid sites get Jekyll's shape: each tag mapped to its posts.
+        try site_entries.append(arena, .{ .key = "tags", .value = if (b.liquid) try postIndex(arena, subset, .tags) else tags_out.* });
         try site_entries.append(arena, .{ .key = "icon_tags", .value = .{ .html = icon_tags } });
         try site_entries.append(arena, .{ .key = "search_box", .value = search_box });
         try site_entries.append(arena, .{ .key = "taxonomies", .value = taxonomy_index });
@@ -2071,10 +2072,10 @@ fn dedupeLast(arena: Allocator, entries: []const Entry) Allocator.Error![]const 
     return out.items;
 }
 
-/// Jekyll's `site.categories`: each category, in the order the oldest
-/// posts first use them, mapped to its posts, newest first. `pages` is in
-/// `pageOrder`, newest post first.
-fn categoryIndex(arena: Allocator, pages: []const Page) Allocator.Error!Value {
+/// Jekyll's `site.categories` or `site.tags` (Liquid mode): each name, in
+/// the order the oldest posts first use it, mapped to its posts, newest
+/// first. `pages` is in `pageOrder`, newest post first.
+fn postIndex(arena: Allocator, pages: []const Page, comptime by: enum { categories, tags }) Allocator.Error!Value {
     var names: std.ArrayList([]const u8) = .empty;
     var lists: std.ArrayList(std.ArrayList(Value)) = .empty;
     var i = pages.len;
@@ -2082,7 +2083,15 @@ fn categoryIndex(arena: Allocator, pages: []const Page) Allocator.Error!Value {
         i -= 1;
         const p = &pages[i];
         if (!p.is_post) continue;
-        for (p.categories orelse &.{}) |c| {
+        const own = switch (by) {
+            .categories => p.categories orelse &.{},
+            .tags => try pageTags(arena, p),
+        };
+        for (own, 0..) |c, ci| {
+            // A name the post repeats lists it once.
+            if (for (own[0..ci]) |prev| {
+                if (std.mem.eql(u8, prev, c)) break true;
+            } else false) continue;
             const at = for (names.items, 0..) |n, k| {
                 if (std.mem.eql(u8, n, c)) break k;
             } else blk: {
@@ -5498,6 +5507,28 @@ test "site.static_files lists copied files with front matter defaults" {
     try expectContains(out, "a.png:a:.png:::25 ");
     try expectContains(out, "site.css:site:.css:::25 ");
     try testing.expect(std.mem.indexOf(u8, out, "about") == null);
+}
+
+test "site.tags maps each tag to its posts in Liquid mode, as in Jekyll" {
+    const files = .{
+        .{ "_posts/2024-01-01-a.md", "---\ntitle: A\ntags: [zig, web]\n---\na" },
+        .{ "_posts/2024-02-01-b.md", "---\ntitle: B\ntags: [web, web]\n---\nb" },
+        .{ "_posts/2024-03-01-c.md", "---\ntitle: C\ntags: zig\n---\nc" },
+    };
+    var liquid: TestSite = try .init(&(.{
+        .{ "_config.yml", "liquid: true\n" },
+        .{ "index.html", "---\n---\n{% for t in site.tags %}{{ t[0] }}:{% for p in t[1] %}{{ p.title }}{% endfor %} {% endfor %}|{{ site.tags.web.size }}" },
+    } ++ files));
+    defer liquid.deinit();
+    // First used by the oldest posts first; each list newest first; a tag a
+    // post repeats lists it once.
+    try expectContains(try liquid.output("index.html"), "zig:CA web:BA |2");
+    // Mortise sites keep the list of tags with names and posts.
+    var plain: TestSite = try .init(&(.{
+        .{ "index.html", "---\n---\n{% for t in site.tags %}{{ t.name }}={{ t.posts.size }} {% endfor %}" },
+    } ++ files));
+    defer plain.deinit();
+    try expectContains(try plain.output("index.html"), "web=");
 }
 
 test "site.categories maps each category to its posts, as in Jekyll" {

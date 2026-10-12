@@ -350,9 +350,6 @@ job:
   collection document keeps its case and spaces. Jekyll's `:slugified_categories`,
   `:basename` for collections and the `jekyll-permalinks` plugin's
   extras are not supported.
-- `site.tags` keeps Mortise's shape in Liquid mode, a list of `name` and
-  `posts`, where Jekyll's maps each tag to its posts as `site.categories`
-  does; `{% for tag in site.tags %}{{ tag[0] }}` writes nothing.
 - A page showing a static file's `modified_time` from `site.static_files`
   is not re-rendered when only that file changes; the next full build
   updates it.
