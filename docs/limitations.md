@@ -527,6 +527,20 @@ job:
   size; a subset is typically a third to a half of the original rather
   than a few kilobytes.
 - Variable fonts keep all their variation data.
+- WOFF2 is written, not read: a `.woff2` file cannot be listed under
+  `fonts.subset`. Reading it needs a Brotli decoder for the reference
+  encoder's output, which uses the 122 KB static dictionary and the
+  literal context tables printed in RFC 7932; Mortise's decoder reads the
+  rest of the format but not those parts, so reading WOFF2 waits on
+  bringing that data into the repository.
+- WOFF2 output stores every table as it is ("null transform"); the
+  `glyf`/`loca` and `hmtx` transforms that shrink TrueType fonts further
+  are not applied. The Brotli encoder uses one block type and one prefix
+  code per meta-block and no literal context modelling or static
+  dictionary, so it compresses less than the reference encoder at its
+  best settings.
+- `mortise serve` writes no WOFF2 files; list the original font after the
+  `.woff2` in `@font-face` so the dev server still shows the font.
 
 ## Dev server
 

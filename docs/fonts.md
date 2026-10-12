@@ -51,8 +51,44 @@ for pixel the same as with the whole font.
 | ------------------ | ------------------------- |
 | `.ttf`, `.otf` with TrueType or CFF outlines | the same format |
 | `.woff`            | `.woff`, tables compressed again |
-| `.woff2`           | not supported; list the `.ttf`, `.otf` or `.woff` |
+| `.woff2`           | not supported as input; list the `.ttf`, `.otf` or `.woff`, and set `woff2: true` for WOFF2 output |
 | CFF2 outlines (variable `.otf`) | not supported |
 
 A listed file that is not part of the site, or a font that cannot be
 subset, fails the build with the reason.
+
+## WOFF2
+
+With `woff2: true`, `mortise build` also writes each subset font as WOFF2
+beside it, `fonts/inter.ttf` as `fonts/inter.woff2`, compressed with
+Mortise's own Brotli encoder:
+
+```yaml
+fonts:
+  subset: [fonts/inter.ttf]
+  woff2: true
+```
+
+List the WOFF2 file first in `@font-face`, and keep the original as the
+fallback; `mortise serve` writes no WOFF2, so the browser uses the
+original there:
+
+```css
+@font-face {
+  font-family: Inter;
+  src: url("/fonts/inter.woff2") format("woff2"), url("/fonts/inter.ttf");
+}
+```
+
+On the development machine, with the same page text as above, the WOFF2
+files came to 169 KB for Arial (397 KB subset, 1.0 MB whole), 61 KB for
+Georgia (101 KB, 220 KB) and 55 KB for Consolas (120 KB, 453 KB), and
+Edge drew them the same as the installed fonts. The three took 24 ms
+with the subsetting in a release build.
+
+The encoder finds repeats with hash chains, looks one byte ahead before
+taking a match, reuses recent distances at no cost, and writes blocks it
+cannot shrink as they are. Its output is about the size of the reference
+encoder's default quality, but larger than its best (Georgia whole: 131
+KB against 118 KB), and the tables are stored as they are, without the
+glyph transform WOFF2 allows (see [limitations](limitations.md#fonts)).

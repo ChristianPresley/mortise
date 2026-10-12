@@ -14,6 +14,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const flate = std.compress.flate;
 const cff = @import("cff.zig");
+const woff2 = @import("woff2.zig");
 
 pub const Error = Allocator.Error || error{ InvalidFont, UnsupportedFont };
 
@@ -107,6 +108,19 @@ pub fn format(bytes: []const u8) ?Format {
     if (std.mem.eql(u8, sig, "wOFF")) return .woff;
     if (std.mem.eql(u8, sig, "\x00\x01\x00\x00") or std.mem.eql(u8, sig, "true") or std.mem.eql(u8, sig, "OTTO")) return .sfnt;
     return null;
+}
+
+/// The TrueType, OpenType or WOFF font `bytes` as a WOFF2 file.
+pub fn toWoff2(arena: Allocator, bytes: []const u8, diag: *Diagnostic) Error![]u8 {
+    const font = switch (format(bytes) orelse return fail(arena, diag, "not a TrueType, OpenType or WOFF font", .{})) {
+        .sfnt => try readSfnt(arena, bytes, diag),
+        .woff => try readWoff(arena, bytes, diag),
+    };
+    const sfnt = try writeSfnt(arena, font.flavor, try arena.dupe(Table, font.tables));
+    return woff2.fromSfnt(arena, sfnt) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.InvalidFont => fail(arena, diag, "the font's table directory is invalid", .{}),
+    };
 }
 
 /// `bytes` reduced to the glyphs for `chars`, in the same file format.

@@ -1043,19 +1043,23 @@ fn addTranslations(arena: Allocator, pages: []Page, langs: []const Language) All
 
 /// Replaces each font under `fonts: subset:` with a copy holding only the
 /// characters of the site's pages, printable ASCII, and `fonts: keep:`.
-fn subsetFonts(b: *Builder, outputs: []Output, config_fields: frontmatter.Map) Error!void {
+fn subsetFonts(b: *Builder, all_outputs: *std.ArrayList(Output), config_fields: frontmatter.Map) Error!void {
     const v = config_fields.get("fonts") orelse return;
     const arena = b.arena;
+    const outputs = all_outputs.items;
     const line = fieldLine(try b.read(config_path), "fonts");
     if (v != .map) return b.fail(config_path, line, "'fonts' must hold settings such as 'subset: [fonts/inter.ttf]'", .{});
     var paths: []const frontmatter.Value = &.{};
     var keep: []const u8 = "";
+    var woff2 = false;
     for (v.map.entries) |e| {
         if (std.mem.eql(u8, e.key, "subset")) {
             paths = if (e.value == .list) e.value.list else if (e.value == .string) &.{e.value} else return b.fail(config_path, line, "'fonts.subset' must list font files", .{});
         } else if (std.mem.eql(u8, e.key, "keep")) {
             keep = if (e.value == .string) e.value.string else return b.fail(config_path, line, "'fonts.keep' must be text", .{});
-        } else return b.fail(config_path, line, "unknown font setting '{s}'; use subset or keep", .{e.key});
+        } else if (std.mem.eql(u8, e.key, "woff2")) {
+            woff2 = if (e.value == .boolean) e.value.boolean else return b.fail(config_path, line, "'fonts.woff2' must be true or false", .{});
+        } else return b.fail(config_path, line, "unknown font setting '{s}'; use subset, keep or woff2", .{e.key});
     }
     // Check the list on every build, so a typo shows up in `serve` too.
     for (paths) |p| {
@@ -1090,6 +1094,23 @@ fn subsetFonts(b: *Builder, outputs: []Output, config_fields: frontmatter.Map) E
             };
             o.data = .{ .bytes = small };
         }
+    }
+    if (!woff2) return;
+    // A WOFF2 copy of each subset font, beside it.
+    for (paths) |p| {
+        const path = std.mem.trimStart(u8, p.string, "/");
+        const ext = sitepath.extension(path);
+        const woff2_path = try std.mem.concat(arena, u8, &.{ path[0 .. path.len - ext.len], ".woff2" });
+        if (hasOutput(all_outputs.items, woff2_path)) return b.fail(config_path, line, "'fonts.woff2' would write {s}, which the site already has", .{woff2_path});
+        const o = for (all_outputs.items) |o| {
+            if (std.mem.eql(u8, o.path, path)) break o;
+        } else unreachable;
+        var fd: fonts.Diagnostic = .{};
+        const converted = fonts.toWoff2(arena, o.data.bytes, &fd) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => return b.fail(o.source, 0, "cannot write this font as WOFF2: {s}", .{fd.message}),
+        };
+        try all_outputs.append(arena, .{ .path = woff2_path, .source = o.source, .data = .{ .bytes = converted } });
     }
 }
 
@@ -1691,7 +1712,7 @@ fn finish(b: *Builder, config_fields: frontmatter.Map, all_pages: []Page, static
     if (b.site_url) |url| try addGenerated(b, &outputs, config_fields, pages, url, langs);
     try addImageVariants(b, &outputs, pages);
     if (try optIn(b, config_fields, "llms")) try addLlms(b, &outputs, config_fields, pages);
-    try subsetFonts(b, outputs.items, config_fields);
+    try subsetFonts(b, &outputs, config_fields);
 
     std.mem.sortUnstable(Output, outputs.items, {}, outputOrder);
     for (outputs.items[0..outputs.items.len -| 1], outputs.items[@min(1, outputs.items.len)..]) |a, c| {
@@ -5967,4 +5988,30 @@ test "fonts listed under fonts.subset shrink to the site's characters in product
 
     try expectBuildError(&.{.{ "_config.yml", "fonts:\n  subset: [fonts/missing.ttf]\n" }}, "_config.yml", 1, "font 'fonts/missing.ttf' in 'fonts.subset' is not a file of the site");
     try expectBuildError(&.{.{ "_config.yml", "fonts:\n  sub: [x]\n" }}, "_config.yml", 1, "unknown font setting 'sub'");
+}
+
+test "fonts.woff2 writes a WOFF2 copy of each subset font in production builds" {
+    var t: TestSite = try .init(&.{
+        .{ "_config.yml", "fonts:\n  subset: [fonts/t.ttf, fonts/c.otf]\n  woff2: true\n" },
+        .{ "index.md", "A\n" },
+    });
+    defer t.deinit();
+    const a = t.arena.allocator();
+    const src = SiteDir.borrow(testing.io, t.tmp.dir);
+    try src.writeFile("fonts/t.ttf", try fonts.testFont(a));
+    try src.writeFile("fonts/c.otf", try fonts.testCffFont(a));
+    var diag: Diagnostic = .{};
+    // `serve` serves the fonts as they are, and no WOFF2.
+    const dev = try buildWith(a, src, .{}, &diag);
+    try testing.expect(dev.find("fonts/t.woff2") == null);
+    const prod = try buildWith(a, src, .{ .subset_fonts = true }, &diag);
+    for ([_][]const u8{ "fonts/t.woff2", "fonts/c.woff2" }) |path| {
+        const w = prod.find(path).?.data.bytes;
+        try testing.expectEqualStrings("wOF2", w[0..4]);
+    }
+    try testing.expectEqualStrings("OTTO", prod.find("fonts/c.woff2").?.data.bytes[4..8]);
+
+    try src.writeFile("fonts/t.woff2", "mine");
+    try testing.expectError(error.BuildFailed, buildWith(a, src, .{ .subset_fonts = true }, &diag));
+    try testing.expect(std.mem.indexOf(u8, diag.message, "would write fonts/t.woff2") != null);
 }
