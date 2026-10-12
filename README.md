@@ -276,7 +276,7 @@ See the [Markdown subset](docs/markdown.md),
 | `src/SiteDir.zig`     | Filesystem access by site path through `std.Io`   |
 | `src/BuildArena.zig`  | Arena-per-build allocation policy                 |
 | `src/markdown.zig`    | Markdown subset to HTML                           |
-| `src/chart.zig`       | SVG charts from ```chart blocks                   |
+| `src/chart.zig`       | SVG charts from `chart` code blocks               |
 | `src/frontmatter.zig` | Restricted YAML frontmatter                       |
 | `src/template.zig`    | Template engine                                   |
 | `src/pipeline.zig`    | Source tree to output files                       |
