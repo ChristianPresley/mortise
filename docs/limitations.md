@@ -335,15 +335,22 @@ job:
   leave them out.
 - Front matter `defaults:` has no `drafts` type, and a change to
   `defaults:` rebuilds the whole site, as any config change does.
-- Collections: a collection's `permalink` is not supported yet, nor
-  Jekyll's `order:` list, `collections_dir`, `site.documents`, a
+- Collections: Jekyll's `order:` list, `collections_dir`, `site.documents`, a
   collection's `files` and `directory`, or settings beyond `output`,
   `sort_by` and `permalink`. Posts cannot be configured under
   `collections:`. Adding, removing or editing a document of an unpublished
   collection rebuilds the pages that read `site.LABEL`, and adding or
   removing any document rebuilds the whole site.
-- Not supported from Jekyll: `permalink:` styles (`pretty`,
-  `:categories`), categories, `site.categories`, `site.static_files`,
+- Permalinks: without `permalink:` in the config, posts publish at
+  `/:categories/:year/:month/:day/:title/` rather than Jekyll's `date`
+  style, and Markdown pages get a folder; set `permalink: date` for
+  Jekyll's URLs. Categories come only from front matter, not from folders
+  above `_posts/`, which Mortise does not read. Placeholder values are
+  used as they are, not URL-escaped, and the `:path` of a nested
+  collection document keeps its case and spaces. Jekyll's `:slugified_categories`,
+  `:basename` for collections and the `jekyll-permalinks` plugin's
+  extras are not supported.
+- Not supported from Jekyll: `site.categories`, `site.static_files`,
   `site.html_pages`, `page.id`, the `layout` variable, `jekyll.environment`,
   plugins and their tags (`{% seo %}`, `{% feed_meta %}`; Mortise writes
   feeds and SEO tags itself), and `sassify`/`scssify`.

@@ -24,6 +24,7 @@ const markdown = @import("markdown.zig");
 const frontmatter = @import("frontmatter.zig");
 const fm_defaults = @import("defaults.zig");
 const collections = @import("collections.zig");
+const permalink = @import("permalink.zig");
 const yaml = @import("yaml.zig");
 const template = @import("template.zig");
 const feeds = @import("feeds.zig");
@@ -210,6 +211,8 @@ pub const Page = struct {
     /// `site.LABEL` but not written. Such pages come last in a build's
     /// list.
     hidden: bool = false,
+    /// A post's categories (Liquid mode), from `categories` and `category`.
+    categories: ?[]const []const u8 = null,
     is_markdown: bool,
     fields: frontmatter.Map,
     body: []const u8,
@@ -319,6 +322,8 @@ const Builder = struct {
     defaults: []const fm_defaults.Default = &.{},
     /// `collections:` from the config (Liquid mode).
     collections: []const collections.Collection = &.{},
+    /// The `permalink:` template for posts (Liquid mode), from the config.
+    permalink: ?[]const u8 = null,
     history: History = .{},
     /// The config as a template value, for shortcodes, which render while
     /// pages load, before `site` is complete.
@@ -481,6 +486,8 @@ pub fn buildWith(arena: Allocator, src: SiteDir, options: Options, diag: *Diagno
     b.baseurl = try baseUrl(&b, config_fields);
     b.site_url = try siteUrl(&b, config_fields);
     b.markdown_options = try markdownOptions(&b, config_fields);
+    b.liquid = try configFlag(&b, config_fields, "liquid", false);
+    b.permalink = try sitePermalink(&b, config_fields);
     b.future = try showFuture(&b, config_fields);
     b.history = try loadHistory(&b, config_fields, listing.files);
     b.site_config = try convert(arena, .{ .map = config_fields });
@@ -586,6 +593,8 @@ pub fn rebuild(arena: Allocator, src: SiteDir, prev: *const Site, changed: []con
     b.defaults = st.defaults;
     b.collections = st.collections;
     b.markdown_options = try markdownOptions(&b, st.config_fields);
+    b.liquid = try configFlag(&b, st.config_fields, "liquid", false);
+    b.permalink = try sitePermalink(&b, st.config_fields);
     b.future = try showFuture(&b, st.config_fields);
     b.site_config = try convert(arena, .{ .map = st.config_fields });
     b.languages = try loadLanguages(&b, st.config_fields);
@@ -737,10 +746,24 @@ fn loadConfig(b: *Builder) Error!frontmatter.Map {
             error.InvalidCollections => return b.fail(config_path, cd.line, "{s}", .{cd.message}),
         };
     }
-    for (b.collections) |c| if (c.permalink != null) {
-        return b.fail(config_path, coll_line, "collection '{s}': 'permalink' is not supported yet; its documents publish at /{s}/NAME/", .{ c.label, c.label });
+    for (b.collections) |c| if (c.permalink) |pl| {
+        if (permalink.style(pl) == null and !std.mem.startsWith(u8, pl, "/")) {
+            return b.fail(config_path, coll_line, "collection '{s}': 'permalink' must start with '/', such as /:collection/:name/", .{c.label});
+        }
     };
     return fields;
+}
+
+/// The config's `permalink:` (Liquid mode): a style such as `pretty`, or
+/// a template such as `/:categories/:title/`.
+fn sitePermalink(b: *Builder, config_fields: frontmatter.Map) Error!?[]const u8 {
+    if (!b.liquid) return null;
+    const v = config_fields.get("permalink") orelse return null;
+    const msg = "'permalink' must be date, pretty, ordinal, weekdate, none, or a template starting with '/', such as /:categories/:title/";
+    if (v != .string) return b.fail(config_path, fieldLine(try b.read(config_path), "permalink"), msg, .{});
+    if (permalink.style(v.string)) |t| return t;
+    if (!std.mem.startsWith(u8, v.string, "/")) return b.fail(config_path, fieldLine(try b.read(config_path), "permalink"), msg, .{});
+    return v.string;
 }
 
 /// Reads and normalizes `baseurl` from the config: "" for the root,
@@ -2227,12 +2250,31 @@ fn loadPage(b: *Builder, path: []const u8, is_post: bool) Error!?Page {
         }
     }
 
+    // Jekyll's categories: `categories` (a list, or words) and `category`.
+    if (b.liquid and is_post) page.categories = try postCategories(arena, doc.fields);
+
     if (doc.fields.get("permalink")) |pl| {
         const line = fieldLine(data, "permalink");
-        if (pl != .string or pl.string.len == 0 or pl.string[0] != '/') {
+        if (pl != .string or pl.string.len == 0 or (pl.string[0] != '/' and !(b.liquid and permalink.style(pl.string) != null))) {
             return b.fail(path, line, "'permalink' must be a string starting with '/'", .{});
         }
-        page.url = pl.string;
+        // Liquid permalinks may hold placeholders such as `:title`.
+        page.url = if (b.liquid) try permalinkUrl(b, &page, upath, coll, permalink.style(pl.string) orelse pl.string) else pl.string;
+    } else if (b.liquid and (is_post or b.permalink != null or (coll != null and coll.?.permalink != null))) {
+        const tpl = if (is_post)
+            b.permalink orelse "/:categories/:year/:month/:day/:title/"
+        else if (coll != null and coll.?.permalink != null)
+            permalink.style(coll.?.permalink.?) orelse coll.?.permalink.?
+        else if (coll != null)
+            // Jekyll's default, ending as the site's style does.
+            (if (std.mem.endsWith(u8, b.permalink.?, "/")) "/:collection/:path/" else "/:collection/:path:output_ext")
+        else if (std.mem.eql(u8, sitepath.stem(sitepath.basename(upath)), "index"))
+            "/:path/"
+        else if (std.mem.endsWith(u8, b.permalink.?, "/"))
+            "/:path/:basename/"
+        else
+            "/:path/:basename:output_ext";
+        page.url = try permalinkUrl(b, &page, upath, coll, tpl);
     } else if (is_post) {
         const d = page.date;
         page.url = try std.fmt.allocPrint(arena, "/{s}/{s}/{s}/{s}/", .{ d[0..4], d[5..7], d[8..10], sitepath.stem(upath)[11..] });
@@ -2257,6 +2299,9 @@ fn loadPage(b: *Builder, path: []const u8, is_post: bool) Error!?Page {
 
     const out_raw = if (std.mem.endsWith(u8, page.url, "/"))
         try std.fmt.allocPrint(arena, "{s}index.html", .{page.url})
+    else if (b.liquid and std.mem.indexOfScalar(u8, sitepath.basename(page.url), '.') == null)
+        // As in Jekyll, `/about` is written to `about.html`.
+        try std.fmt.allocPrint(arena, "{s}.html", .{page.url})
     else
         page.url;
     page.out_path = sitepath.normalize(arena, out_raw[1..]) catch |err| switch (err) {
@@ -2513,6 +2558,76 @@ fn fieldLine(data: []const u8, key: []const u8) usize {
     return 0;
 }
 
+/// A post's categories, from `categories` (a list, or words separated by
+/// spaces) and `category`, without repeats.
+fn postCategories(arena: Allocator, fields: frontmatter.Map) Allocator.Error![]const []const u8 {
+    var out: std.ArrayList([]const u8) = .empty;
+    const add = struct {
+        fn f(a: Allocator, list: *std.ArrayList([]const u8), v: frontmatter.Value) Allocator.Error!void {
+            const s = switch (v) {
+                .string => |s| s,
+                .int => |i| try std.fmt.allocPrint(a, "{d}", .{i}),
+                else => return,
+            };
+            for (list.items) |x| if (std.mem.eql(u8, x, s)) return;
+            if (s.len > 0) try list.append(a, s);
+        }
+    }.f;
+    if (fields.get("categories")) |v| switch (v) {
+        .list => |l| for (l) |item| try add(arena, &out, item),
+        .string => |s| {
+            var words = std.mem.tokenizeAny(u8, s, " \t");
+            while (words.next()) |w| try add(arena, &out, .{ .string = w });
+        },
+        else => try add(arena, &out, v),
+    };
+    if (fields.get("category")) |v| try add(arena, &out, v);
+    return out.items;
+}
+
+/// Expands a Jekyll permalink template for `p`, whose path without its
+/// language (and, in a collection, its leading `_`) is `upath`.
+fn permalinkUrl(b: *Builder, p: *const Page, upath: []const u8, coll: ?*const collections.Collection, tpl: []const u8) Error![]const u8 {
+    const arena = b.arena;
+    var vars: std.ArrayList(permalink.Var) = .empty;
+    try vars.append(arena, .{ .name = "output_ext", .value = ".html" });
+    const base = sitepath.basename(upath);
+    const stem = sitepath.stem(base);
+    // A date from front matter, with its time, or else a post's file name.
+    var date: ?datetime.DateTime = null;
+    if (p.fields.get("date")) |d| if (d == .string) {
+        date = datetime.parse(d.string);
+    };
+    if (date == null and p.is_post) date = datetime.parse(p.date);
+    const dates = if (date) |d| try permalink.dateVars(arena, d) else &.{};
+    const slug_field = if (p.fields.get("slug")) |s| (if (s == .string) s.string else null) else null;
+    if (p.is_post) {
+        const title = slug_field orelse stem[11..];
+        try vars.append(arena, .{ .name = "title", .value = title });
+        try vars.append(arena, .{ .name = "slug", .value = try markdown.slugify(arena, title) });
+        // Lowercase, joined with `/`, as Jekyll writes them.
+        var cats: std.ArrayList(u8) = .empty;
+        for (p.categories orelse &.{}, 0..) |c, i| {
+            if (i > 0) try cats.append(arena, '/');
+            for (c) |ch| try cats.append(arena, std.ascii.toLower(ch));
+        }
+        try vars.append(arena, .{ .name = "categories", .value = cats.items });
+    } else if (coll) |c| {
+        const rel = upath[c.label.len + 1 ..];
+        const title = slug_field orelse stem;
+        try vars.append(arena, .{ .name = "collection", .value = c.label });
+        try vars.append(arena, .{ .name = "path", .value = rel[0 .. rel.len - sitepath.extension(rel).len] });
+        try vars.append(arena, .{ .name = "name", .value = try markdown.slugify(arena, stem) });
+        try vars.append(arena, .{ .name = "title", .value = title });
+        try vars.append(arena, .{ .name = "slug", .value = try markdown.slugify(arena, title) });
+        try vars.append(arena, .{ .name = "categories", .value = "" });
+    } else {
+        try vars.append(arena, .{ .name = "path", .value = sitepath.dirname(upath) orelse "" });
+        try vars.append(arena, .{ .name = "basename", .value = stem });
+    }
+    return permalink.expand(arena, tpl, &.{ vars.items, dates });
+}
+
 /// Posts newest first, then pages by path.
 fn pageOrder(_: void, a: Page, c: Page) bool {
     if (a.is_post != c.is_post) return a.is_post;
@@ -2537,7 +2652,7 @@ fn outputOrder(_: void, a: Output, c: Output) bool {
 fn pageObject(arena: Allocator, p: *const Page) Allocator.Error!template.Object {
     var entries: std.ArrayList(Entry) = .empty;
     for (p.fields.entries) |e| {
-        if (isComputedKey(e.key)) continue;
+        if (isComputedKey(e.key) or (p.categories != null and std.mem.eql(u8, e.key, "categories"))) continue;
         try entries.append(arena, .{ .key = e.key, .value = try convert(arena, e.value) });
     }
     try entries.append(arena, .{ .key = "url", .value = .{ .string = p.url } });
@@ -2546,6 +2661,12 @@ fn pageObject(arena: Allocator, p: *const Page) Allocator.Error!template.Object 
     if (p.collection) |c| if (p.fields.get("collection") == null) {
         try entries.append(arena, .{ .key = "collection", .value = .{ .string = c } });
     };
+    // A post's categories as a list, as in Jekyll (Liquid mode).
+    if (p.categories) |cats| {
+        const list = try arena.alloc(Value, cats.len);
+        for (cats, list) |c, *v| v.* = .{ .string = c };
+        try entries.append(arena, .{ .key = "categories", .value = .{ .list = list } });
+    }
     // `updated` from Git history; frontmatter `updated` is already a field.
     if (p.updated.len > 0 and p.fields.get("updated") == null) {
         try entries.append(arena, .{ .key = "updated", .value = .{ .string = p.updated } });
@@ -5176,6 +5297,106 @@ test "collections need liquid: true and valid names" {
     try expectBuildError(&.{
         .{ "_config.yml", "liquid: true\nrecipes: 3\ncollections: [recipes]\n" },
     }, "_config.yml", 2, "'recipes' names a collection");
+}
+
+/// Builds `files` and checks that each `[2]` pair's source is written at
+/// its output path.
+fn expectOutputs(files: []const struct { []const u8, []const u8 }, outs: []const [2][]const u8) !void {
+    var t: TestSite = try .init(files);
+    defer t.deinit();
+    var diag: Diagnostic = .{};
+    const site = t.build(&diag) catch |err| {
+        std.debug.print("build failed: {f}\n", .{diag});
+        return err;
+    };
+    for (outs) |o| {
+        const found = for (site.outputs) |out| {
+            if (std.mem.eql(u8, out.path, o[1])) break std.mem.eql(u8, out.source, o[0]);
+        } else false;
+        if (!found) {
+            std.debug.print("expected {s} at {s}; outputs:\n", .{ o[0], o[1] });
+            for (site.outputs) |out| std.debug.print("  {s} <- {s}\n", .{ out.path, out.source });
+            return error.TestUnexpectedResult;
+        }
+    }
+}
+
+test "permalink styles and templates (Liquid mode)" {
+    const posts = .{
+        .{ "_posts/2024-01-05-hello.md", "---\ncategories: [Tech, zig]\n---\nx" },
+        .{ "_posts/2024-03-09-plain.md", "---\ndate: 2024-03-09 14:30:00\n---\ny" },
+        .{ "about.md", "---\n---\nz" },
+        .{ "docs/index.md", "---\n---\nw" },
+        .{ "tags.html", "---\n---\nt" },
+    };
+    // Without `permalink:`, posts keep Mortise's URLs, with categories.
+    try expectOutputs(&(.{.{ "_config.yml", "liquid: true\n" }} ++ posts), &.{
+        .{ "_posts/2024-01-05-hello.md", "tech/zig/2024/01/05/hello/index.html" },
+        .{ "_posts/2024-03-09-plain.md", "2024/03/09/plain/index.html" },
+        .{ "about.md", "about/index.html" },
+        .{ "tags.html", "tags.html" },
+    });
+    try expectOutputs(&(.{.{ "_config.yml", "liquid: true\npermalink: date\n" }} ++ posts), &.{
+        .{ "_posts/2024-01-05-hello.md", "tech/zig/2024/01/05/hello.html" },
+        .{ "about.md", "about.html" },
+        .{ "docs/index.md", "docs/index.html" },
+        .{ "tags.html", "tags.html" },
+    });
+    // `pretty` gives every page a folder.
+    try expectOutputs(&(.{.{ "_config.yml", "liquid: true\npermalink: pretty\n" }} ++ posts), &.{
+        .{ "_posts/2024-01-05-hello.md", "tech/zig/2024/01/05/hello/index.html" },
+        .{ "about.md", "about/index.html" },
+        .{ "tags.html", "tags/index.html" },
+    });
+    try expectOutputs(&(.{.{ "_config.yml", "liquid: true\npermalink: none\n" }} ++ posts), &.{
+        .{ "_posts/2024-01-05-hello.md", "tech/zig/hello.html" },
+        .{ "_posts/2024-03-09-plain.md", "plain.html" },
+    });
+    try expectOutputs(&(.{.{ "_config.yml", "liquid: true\npermalink: /blog/:year/:hour:minute-:title\n" }} ++ posts), &.{
+        .{ "_posts/2024-03-09-plain.md", "blog/2024/1430-plain.html" },
+        .{ "about.md", "about.html" },
+    });
+}
+
+test "front matter and collection permalinks (Liquid mode)" {
+    var t: TestSite = try .init(&.{
+        .{ "_config.yml", "liquid: true\ncollections:\n  recipes:\n    output: true\n    permalink: /cook/:path/\n  staff:\n    output: true\n    permalink: /people/:name:output_ext\n" },
+        .{ "_recipes/cakes/Lemon Drizzle.md", "---\n---\na" },
+        .{ "_staff/Ada.md", "---\n---\nb" },
+        .{ "_posts/2024-01-05-hello.md", "---\ncategory: news\npermalink: /:categories/:title/\n---\n{{ page.categories | join: ',' }}" },
+        .{ "a.md", "---\npermalink: /x/:basename/\n---\nc" },
+        .{ "b.md", "---\npermalink: /plain/\n---\nd" },
+    });
+    defer t.deinit();
+    try expectContains(try t.output("news/hello/index.html"), "news");
+    _ = try t.output("cook/cakes/Lemon Drizzle/index.html");
+    _ = try t.output("people/ada.html");
+    _ = try t.output("x/a/index.html");
+    _ = try t.output("plain/index.html");
+}
+
+test "collection documents follow the site's permalink style" {
+    const files = .{
+        .{ "_staff/ada.md", "---\n---\nb" },
+        .{ "_staff/team/bo.html", "---\n---\nc" },
+    };
+    try expectOutputs(&(.{.{ "_config.yml", "liquid: true\npermalink: pretty\ncollections:\n  staff:\n    output: true\n" }} ++ files), &.{
+        .{ "_staff/ada.md", "staff/ada/index.html" },
+        .{ "_staff/team/bo.html", "staff/team/bo/index.html" },
+    });
+    try expectOutputs(&(.{.{ "_config.yml", "liquid: true\npermalink: date\ncollections:\n  staff:\n    output: true\n" }} ++ files), &.{
+        .{ "_staff/ada.md", "staff/ada.html" },
+        .{ "_staff/team/bo.html", "staff/team/bo.html" },
+    });
+}
+
+test "permalink settings are checked" {
+    try expectBuildError(&.{
+        .{ "_config.yml", "liquid: true\npermalink: fancy\n" },
+    }, "_config.yml", 2, "'permalink' must be date, pretty");
+    try expectBuildError(&.{
+        .{ "_config.yml", "liquid: true\ncollections:\n  a:\n    permalink: x/:name\n" },
+    }, "_config.yml", 2, "must start with '/'");
 }
 
 test "raw HTML in Markdown passes through only with liquid: true" {

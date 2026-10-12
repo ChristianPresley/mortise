@@ -1,6 +1,7 @@
 ---
 title: "Drawbored tenons"
 tags: [joinery]
+category: joinery
 ---
 Offset the peg hole in the tenon by a millimetre toward the shoulder. The peg
 pulls the joint tight as it goes in, and the joint stays tight "without glue".

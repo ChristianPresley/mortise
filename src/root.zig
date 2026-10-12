@@ -19,6 +19,7 @@ pub const diagram = @import("diagram.zig");
 pub const frontmatter = @import("frontmatter.zig");
 pub const defaults = @import("defaults.zig");
 pub const collections = @import("collections.zig");
+pub const permalink = @import("permalink.zig");
 pub const template = @import("template.zig");
 pub const pipeline = @import("pipeline.zig");
 pub const feeds = @import("feeds.zig");

@@ -1,6 +1,7 @@
 ---
 title: Sharpening chisels
 tags: [tools, edges]
+category: sharpening
 featured: true
 ---
 A chisel is only as good as its edge. I hone at 30 degrees on a 1000 grit

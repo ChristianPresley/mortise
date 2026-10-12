@@ -126,7 +126,52 @@ Most of a Jekyll site carries over:
 - HTML in Markdown pages and posts, and in `markdownify`: blocks such as
   `<figure>` or `<div>`, inline tags such as `<kbd>` and `<abbr>`, and
   references such as `&nbsp;`. See [markdown.md](markdown.md#raw-html).
-- Front matter defaults and collections, below.
+- Front matter defaults, collections and permalinks, below.
+
+### Permalinks
+
+`permalink:` in `_config.yml` sets the URLs of posts, as a Jekyll style
+or a template:
+
+| `permalink:` | A post `2024-01-05-hello.md` in category `news` |
+| --- | --- |
+| (not set) | `/news/2024/01/05/hello/` |
+| `date` | `/news/2024/01/05/hello.html` |
+| `pretty` | `/news/2024/01/05/hello/` |
+| `ordinal` | `/news/2024/005/hello.html` |
+| `weekdate` | `/news/2024/W01/Fri/hello.html` |
+| `none` | `/news/hello.html` |
+| `/blog/:year/:title/` | `/blog/2024/hello/` |
+
+A post's placeholders are `:year`, `:month`, `:i_month`, `:short_month`,
+`:long_month`, `:day`, `:i_day`, `:y_day`, `:short_year`, `:hour`,
+`:minute`, `:second`, `:week`, `:w_year`, `:w_day`, `:short_day`,
+`:long_day`, `:title` (front matter `slug`, or the file name after the
+date), `:slug` (`:title` made a slug), `:categories` and `:output_ext`
+(`.html`). The date is front matter `date`, with its time, or the file
+name's. `:categories` is the post's categories in lower case, joined with
+`/`; with none, its slashes collapse.
+
+Categories come from front matter `categories:` (a list, or words separated
+by spaces) and `category:`, and `page.categories` lists them.
+
+Once `permalink:` is set, pages follow it as Jekyll's do: `about.md` and
+`tags.html` publish at `/about/` and `/tags/` when the template ends in
+`/` (as `pretty` does), and at `/about.html` and `/tags.html` otherwise.
+Without it, Markdown pages get a folder and HTML pages keep their name.
+
+A page's or post's own `permalink:` may use the same placeholders, or a
+style's name; a page's are `:path` (its folder), `:basename` and
+`:output_ext`. A collection's `permalink:` is a template with
+`:collection`, `:path` (the document's path in the collection, without
+its extension), `:name` (its file name made a slug), `:title`, `:slug`,
+`:output_ext` and, when the document has a `date`, the date placeholders.
+A collection without one publishes at `/:collection/:path/`, or at
+`/:collection/:path.html` when the site's `permalink:` does not end in
+`/`.
+
+A URL without a trailing `/` or an extension, such as `/:title`, is
+written to `NAME.html`, as in Jekyll.
 
 ### Collections
 
@@ -137,6 +182,7 @@ documents are listed as `site.recipes`:
 collections:
   recipes:
     output: true      # also publish each document, at /recipes/NAME/
+    permalink: /cook/:path/   # or here instead
     sort_by: order    # order site.recipes by this field
   staff:              # listed only
 ```
@@ -148,8 +194,9 @@ settings.
   collection's folder or below it. Liquid and Markdown run in its body as
   in a post, and `page.collection` holds the collection's name.
 - With `output: true`, each document is written like a page, at
-  `/LABEL/PATH/` (`_recipes/cakes/lemon.md` at `/recipes/cakes/lemon/`),
-  through its `layout`, and other files in the folder are copied
+  `/LABEL/PATH/` (`_recipes/cakes/lemon.md` at `/recipes/cakes/lemon/`)
+  unless the collection has a [`permalink:`](#permalinks), through its
+  `layout`, and other files in the folder are copied
   (`_recipes/photo.jpg` to `/recipes/photo.jpg`). Without it, as in
   Jekyll, documents are only listed, with their `content`.
 - `site.LABEL` is ordered by `sort_by`'s field (documents without it come

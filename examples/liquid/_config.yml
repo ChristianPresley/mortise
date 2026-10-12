@@ -7,6 +7,9 @@ description: Short notes from a workshop, written the way a Jekyll site is
 author: Ada Fernhill
 url: https://example.com
 
+# Posts publish under their category, then year; pages get a folder each.
+permalink: /:categories/:year/:title/
+
 # Front matter defaults: every post gets the post layout without saying so.
 defaults:
   - scope:
