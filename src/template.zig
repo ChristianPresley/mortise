@@ -1216,7 +1216,7 @@ fn noteCollections(p: *Parser, path: []const Seg) void {
             return;
         },
     };
-    const site_keys = [_][]const u8{ "posts", "pages", "tags", "nav", "apis", "taxonomies", "menus", "collections", "categories" };
+    const site_keys = [_][]const u8{ "posts", "pages", "tags", "nav", "apis", "taxonomies", "menus", "collections", "categories", "static_files" };
     if (is_site) for (p.options.collections) |c| {
         if (std.mem.eql(u8, second, c)) p.reads_collections = true;
     };

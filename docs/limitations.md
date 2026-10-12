@@ -353,7 +353,10 @@ job:
 - `site.tags` keeps Mortise's shape in Liquid mode, a list of `name` and
   `posts`, where Jekyll's maps each tag to its posts as `site.categories`
   does; `{% for tag in site.tags %}{{ tag[0] }}` writes nothing.
-- Not supported from Jekyll: `site.static_files`,
+- A page showing a static file's `modified_time` from `site.static_files`
+  is not re-rendered when only that file changes; the next full build
+  updates it.
+- Not supported from Jekyll:
   `site.html_pages`, `page.id`, the `layout` variable, `jekyll.environment`,
   plugins and their tags (`{% seo %}`, `{% feed_meta %}`; Mortise writes
   feeds and SEO tags itself), and `sassify`/`scssify`.

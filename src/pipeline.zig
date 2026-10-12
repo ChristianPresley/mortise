@@ -1879,7 +1879,7 @@ fn buildSites(b: *Builder, config_fields: frontmatter.Map, pages: []Page, hidden
     for (config_fields.entries) |e| {
         if (std.mem.eql(u8, e.key, "posts") or std.mem.eql(u8, e.key, "pages") or
             std.mem.eql(u8, e.key, "data") or std.mem.eql(u8, e.key, "tags") or std.mem.eql(u8, e.key, "nav") or std.mem.eql(u8, e.key, "menus") or
-            std.mem.eql(u8, e.key, "apis") or (b.liquid and std.mem.eql(u8, e.key, "categories")) or (multi and (std.mem.eql(u8, e.key, "lang") or std.mem.eql(u8, e.key, "i18n"))))
+            std.mem.eql(u8, e.key, "apis") or (b.liquid and (std.mem.eql(u8, e.key, "categories") or std.mem.eql(u8, e.key, "static_files"))) or (multi and (std.mem.eql(u8, e.key, "lang") or std.mem.eql(u8, e.key, "i18n"))))
         {
             return b.fail(config_path, 0, "'{s}' is set by Mortise; use another key", .{e.key});
         }
@@ -1915,6 +1915,8 @@ fn buildSites(b: *Builder, config_fields: frontmatter.Map, pages: []Page, hidden
     const term_pages = taxonomies.len > 0 and b.exists(term_layout);
     const taxonomy_pages = taxonomies.len > 0 and b.exists(taxonomy_layout);
     const taxonomy_index = try taxonomyIndex(arena, pages, taxonomies, if (term_pages) b.baseurl else null);
+    // Jekyll's `site.static_files`, the same in every language.
+    var static_files: Value = .nil;
     const sites = try arena.alloc(template.Object, langs.len);
     const lang_posts = try arena.alloc([]const Value, langs.len);
     const lang_tags = try arena.alloc(Value, langs.len);
@@ -1958,6 +1960,8 @@ fn buildSites(b: *Builder, config_fields: frontmatter.Map, pages: []Page, hidden
             }
             try site_entries.append(arena, .{ .key = "collections", .value = .{ .list = coll_values.items } });
             try site_entries.append(arena, .{ .key = "categories", .value = try categoryIndex(arena, subset) });
+            if (li == 0) static_files = try staticFileList(b);
+            try site_entries.append(arena, .{ .key = "static_files", .value = static_files });
         }
         try site_entries.append(arena, .{ .key = "data", .value = b.data });
         try site_entries.append(arena, .{ .key = "nav", .value = try navTree(arena, subset, root) });
@@ -1995,6 +1999,53 @@ fn buildSites(b: *Builder, config_fields: frontmatter.Map, pages: []Page, hidden
         .taxonomy_pages = taxonomy_pages,
         .taxonomy_index = taxonomy_index,
     };
+}
+
+/// Jekyll's `site.static_files`: each file copied unchanged, with
+/// `path` (from the site's root, with a leading `/`), `url`, `name`,
+/// `basename`, `extname`, `modified_time` and `collection`, over the
+/// values of the front matter defaults whose path matches it.
+fn staticFileList(b: *Builder) Error!Value {
+    const arena = b.arena;
+    var list: std.ArrayList(Value) = .empty;
+    for (b.statics) |s| {
+        if (s.data != .copy) continue;
+        var entries: std.ArrayList(Entry) = .empty;
+        // Defaults with a type never match a static file, as in Jekyll.
+        const values = try fm_defaults.apply(arena, b.defaults, s.source, "", .{});
+        for (values.entries) |e| try entries.append(arena, .{ .key = e.key, .value = try convert(arena, e.value) });
+        const name = sitepath.basename(s.source);
+        const ext = sitepath.extension(name);
+        const computed = [_]Entry{
+            .{ .key = "path", .value = .{ .string = try std.fmt.allocPrint(arena, "/{s}", .{s.source}) } },
+            .{ .key = "url", .value = .{ .string = try std.fmt.allocPrint(arena, "{s}/{s}", .{ b.baseurl, s.path }) } },
+            .{ .key = "name", .value = .{ .string = name } },
+            .{ .key = "basename", .value = .{ .string = name[0 .. name.len - ext.len] } },
+            .{ .key = "extname", .value = .{ .string = ext } },
+            .{ .key = "collection", .value = if (collections.find(b.collections, s.source)) |c| .{ .string = c.label } else .nil },
+        };
+        try entries.appendSlice(arena, &computed);
+        if (b.src.stat(s.source)) |st| {
+            const t = datetime.DateTime.fromUnix(st.mtime.toSeconds(), 0);
+            const time = try std.fmt.allocPrint(arena, "{d:0>4}-{d:0>2}-{d:0>2} {d:0>2}:{d:0>2}:{d:0>2} +0000", .{ @as(u32, @intCast(t.year)), t.month, t.day, t.hour, t.minute, t.second });
+            try entries.append(arena, .{ .key = "modified_time", .value = .{ .string = time } });
+        } else |_| {}
+        try list.append(arena, .{ .object = .{ .entries = try dedupeLast(arena, entries.items) } });
+    }
+    return .{ .list = list.items };
+}
+
+/// Keeps the last entry of each key, so later entries override earlier
+/// ones, in the order the kept entries came.
+fn dedupeLast(arena: Allocator, entries: []const Entry) Allocator.Error![]const Entry {
+    var out: std.ArrayList(Entry) = .empty;
+    for (entries, 0..) |e, i| {
+        const later = for (entries[i + 1 ..]) |x| {
+            if (std.mem.eql(u8, x.key, e.key)) break true;
+        } else false;
+        if (!later) try out.append(arena, e);
+    }
+    return out.items;
 }
 
 /// Jekyll's `site.categories`: each category, in the order the oldest
@@ -5404,6 +5455,26 @@ test "front matter and collection permalinks (Liquid mode)" {
     _ = try t.output("people/ada.html");
     _ = try t.output("x/a/index.html");
     _ = try t.output("plain/index.html");
+}
+
+test "site.static_files lists copied files with front matter defaults" {
+    var t: TestSite = try .init(&.{
+        .{ "_config.yml", "liquid: true\nbaseurl: /b\ncollections:\n  shots:\n    output: true\ndefaults:\n  - scope:\n      path: assets/img\n    values:\n      image: true\n  - scope:\n      path: assets\n      type: pages\n    values:\n      typed: true\n" },
+        .{ "assets/img/a.png", "png" },
+        .{ "assets/img/b.jpg", "jpg" },
+        .{ "assets/site.css", "css" },
+        .{ "_shots/c.gif", "gif" },
+        .{ "about.md", "---\n---\nnot static" },
+        .{ "index.html", "---\n---\n{% assign images = site.static_files | where: 'image', true %}{% for f in images %}{{ f.path }}={{ f.url }} {% endfor %}|{% for f in site.static_files %}{{ f.name }}:{{ f.basename }}:{{ f.extname }}:{{ f.collection }}:{{ f.typed }}:{{ f.modified_time | size }} {% endfor %}" },
+    });
+    defer t.deinit();
+    const out = try t.output("index.html");
+    try expectContains(out, "/assets/img/a.png=/b/assets/img/a.png /assets/img/b.jpg=/b/assets/img/b.jpg |");
+    // Typed defaults never match; the collection's copied files say which.
+    try expectContains(out, "c.gif:c:.gif:shots::25 ");
+    try expectContains(out, "a.png:a:.png:::25 ");
+    try expectContains(out, "site.css:site:.css:::25 ");
+    try testing.expect(std.mem.indexOf(u8, out, "about") == null);
 }
 
 test "site.categories maps each category to its posts, as in Jekyll" {

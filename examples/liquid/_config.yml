@@ -10,7 +10,8 @@ url: https://example.com
 # Posts publish under their category, then year; pages get a folder each.
 permalink: /:categories/:year/:title/
 
-# Front matter defaults: every post gets the post layout without saying so.
+# Front matter defaults: posts and tools get their layouts without saying
+# so, and the sketches in assets/img are marked as images.
 defaults:
   - scope:
       path: ""
@@ -21,6 +22,10 @@ defaults:
       type: tools
     values:
       layout: page
+  - scope:
+      path: assets/img
+    values:
+      image: true
 
 # Collections: _tools/ is published at /tools/NAME/; _glossary/ is only
 # listed, as site.glossary.

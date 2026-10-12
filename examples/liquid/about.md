@@ -29,3 +29,15 @@ for n, length in enumerate(cuts, 1):
 
 {% capture boards %}{% for i in (1..4) %}{{ i | times: 600 }}{% unless forloop.last %}, {% endunless %}{% endfor %}{% endcapture -%}
 Boards cut at {{ boards }} mm make {{ boards | split: ", " | size }} lengths.
+
+## Sketches
+
+The sketches are static files that a front matter default marks as images;
+`site.static_files` finds them:
+
+<div class="sketches">
+{%- assign sketches = site.static_files | where: "image", true %}
+{%- for file in sketches %}
+  <figure><img src="{{ file.url }}" alt="{{ file.basename }}"><figcaption>{{ file.name }}</figcaption></figure>
+{%- endfor %}
+</div>

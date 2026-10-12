@@ -126,7 +126,8 @@ Most of a Jekyll site carries over:
 - HTML in Markdown pages and posts, and in `markdownify`: blocks such as
   `<figure>` or `<div>`, inline tags such as `<kbd>` and `<abbr>`, and
   references such as `&nbsp;`. See [markdown.md](markdown.md#raw-html).
-- Front matter defaults, collections and permalinks, below.
+- Front matter defaults, permalinks, categories, static files and
+  collections, below.
 
 ### Permalinks
 
@@ -153,24 +154,8 @@ name's. `:categories` is the post's categories in lower case, joined with
 `/`; with none, its slashes collapse.
 
 Categories come from front matter `categories:` (a list, or words separated
-by spaces) and `category:`, and `page.categories` lists them.
-
-### Categories
-
-`site.categories` maps each category to its posts, newest first, as in
-Jekyll. Categories come in the order the oldest posts first use them, and
-keep the case they are written in:
-
-```liquid
-{% for category in site.categories %}
-  <h2>{{ category[0] }}</h2>
-  {% for post in category[1] %}<a href="{{ post.url }}">{{ post.title }}</a>{% endfor %}
-{% endfor %}
-{{ site.categories.news.size }} posts in news
-```
-
-`categories` may not be a setting in `_config.yml` in Liquid mode, since
-it would hide `site.categories`.
+by spaces) and `category:`, and `page.categories` lists them; see
+[Categories](#categories).
 
 Once `permalink:` is set, pages follow it as Jekyll's do: `about.md` and
 `tags.html` publish at `/about/` and `/tags/` when the template ends in
@@ -189,6 +174,56 @@ A collection without one publishes at `/:collection/:path/`, or at
 
 A URL without a trailing `/` or an extension, such as `/:title`, is
 written to `NAME.html`, as in Jekyll.
+
+### Categories
+
+`site.categories` maps each category to its posts, newest first, as in
+Jekyll. Categories come in the order the oldest posts first use them, and
+keep the case they are written in:
+
+```liquid
+{% for category in site.categories %}
+  <h2>{{ category[0] }}</h2>
+  {% for post in category[1] %}<a href="{{ post.url }}">{{ post.title }}</a>{% endfor %}
+{% endfor %}
+{{ site.categories.news.size }} posts in news
+```
+
+`categories` may not be a setting in `_config.yml` in Liquid mode, since
+it would hide `site.categories`.
+
+### Static files
+
+`site.static_files` lists the files copied unchanged, as in Jekyll, each
+with:
+
+| Key | |
+| --- | --- |
+| `path` | From the site's root, with a leading `/`: `/assets/img/a.png` |
+| `url` | Where it is published, with the `baseurl` |
+| `name`, `basename`, `extname` | `a.png`, `a`, `.png` |
+| `modified_time` | The file's time, `2024-01-05 10:30:00 +0000` |
+| `collection` | The collection a copied file belongs to, or nothing |
+
+A front matter default whose scope has a `path` and no `type` adds its
+values, so a site can mark files and pick them out:
+
+```yaml
+defaults:
+  - scope:
+      path: assets/img
+    values:
+      image: true
+```
+
+```liquid
+{% assign images = site.static_files | where: "image", true %}
+{% for image in images %}<img src="{{ image.url }}" alt="{{ image.basename }}">{% endfor %}
+```
+
+Files Mortise writes itself, such as theme assets, feeds or rendered
+images, are not static files. `static_files` may not be a setting in
+`_config.yml` in Liquid mode.
 
 ### Collections
 
