@@ -6,16 +6,20 @@
 //! symbol counts. Distances used just before are written with the short
 //! codes that need no extra bits, and a block that does not shrink is
 //! stored as it is. It uses one block type and one prefix code per
-//! alphabet, and never refers to the static dictionary, so it needs no
-//! tables beyond those of the format itself.
+//! alphabet, and never refers to the static dictionary.
 //!
-//! `decompress` reads the whole format except two parts that need data
-//! the RFC prints as appendices: references to the static dictionary, and
-//! the UTF-8 and signed literal context modes. A stream that uses either
-//! is reported as unsupported.
+//! `decompress` reads the whole format, including static dictionary words
+//! with their transforms and the UTF-8 and signed literal context modes.
+//! The dictionary (`brotli_dictionary.bin`) and those tables
+//! (`brotli_tables.zig`) were extracted from the text of RFC 7932, and the
+//! tests check them against the CRC-32 values the RFC gives. Only the
+//! large-window extension, which is not part of RFC 7932, is unsupported.
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const tables = @import("brotli_tables.zig");
+/// The static dictionary of RFC 7932 Appendix A.
+const dictionary = @embedFile("brotli_dictionary.bin");
 
 pub const Error = Allocator.Error || error{ InvalidBrotli, UnsupportedBrotli };
 
@@ -827,6 +831,65 @@ fn readContextMap(arena: Allocator, r: *BitReader, trees: u32, size: usize) Erro
     return map;
 }
 
+/// Where each word length's words start in the dictionary.
+const dictionary_offsets = blk: {
+    var offsets: [26]u32 = undefined;
+    offsets[0] = 0;
+    for (0..25) |l| {
+        const words: u32 = if (l < 4) 0 else @as(u32, 1) << tables.ndbits[l];
+        offsets[l + 1] = offsets[l] + @as(u32, @intCast(l)) * words;
+    }
+    break :blk offsets;
+};
+
+/// Writes word `word_id` of length `len`, transformed, to `out` (RFC 7932
+/// section 8) and returns its length.
+fn dictionaryWord(word_id: u64, len: u32, out: *[38]u8) error{InvalidBrotli}!usize {
+    if (len < 4 or len > 24) return error.InvalidBrotli;
+    const nbits = tables.ndbits[len];
+    const index = word_id & ((@as(u64, 1) << nbits) - 1);
+    const transform_id = word_id >> nbits;
+    if (transform_id >= tables.transforms.len) return error.InvalidBrotli;
+    const t = tables.transforms[@intCast(transform_id)];
+    const start = dictionary_offsets[len] + index * len;
+    var word: [24]u8 = undefined;
+    @memcpy(word[0..len], dictionary[@intCast(start)..][0..len]);
+    var w: []u8 = word[0..len];
+    switch (t.kind) {
+        0 => {},
+        1 => if (w.len > 0) {
+            _ = ferment(w, 0);
+        },
+        2 => {
+            var i: usize = 0;
+            while (i < w.len) i += ferment(w, i);
+        },
+        3...11 => w = w[@min(t.kind - 2, w.len)..],
+        else => w = w[0 .. w.len - @min(t.kind - 11, w.len)],
+    }
+    var n: usize = 0;
+    for ([_][]const u8{ t.prefix, w, t.suffix }) |part| {
+        @memcpy(out[n..][0..part.len], part);
+        n += part.len;
+    }
+    return n;
+}
+
+/// Uppercases the character at `pos` the way the RFC's `Ferment` does,
+/// and returns its length.
+fn ferment(word: []u8, pos: usize) usize {
+    if (word[pos] < 192) {
+        if (word[pos] >= 'a' and word[pos] <= 'z') word[pos] ^= 32;
+        return 1;
+    }
+    if (word[pos] < 224) {
+        if (pos + 1 < word.len) word[pos + 1] ^= 32;
+        return 2;
+    }
+    if (pos + 2 < word.len) word[pos + 2] ^= 5;
+    return 3;
+}
+
 /// Decompresses a Brotli stream.
 pub fn decompress(arena: Allocator, data: []const u8) Error![]u8 {
     var r: BitReader = .{ .data = data };
@@ -904,10 +967,12 @@ pub fn decompress(arena: Allocator, data: []const u8) Error![]u8 {
                 try lit_blocks.next(&r);
                 const n = out.items.len;
                 const p1: u8 = if (n > 0) out.items[n - 1] else 0;
+                const p2: u8 = if (n > 1) out.items[n - 2] else 0;
                 const ctx: u8 = switch (modes[lit_blocks.current]) {
                     0 => p1 & 0x3F,
                     1 => p1 >> 2,
-                    else => return error.UnsupportedBrotli,
+                    2 => tables.lut0[p1] | tables.lut1[p2],
+                    3 => (tables.lut2[p1] << 3) | tables.lut2[p2],
                 };
                 const tree = lit_map[64 * lit_blocks.current + ctx];
                 if (tree >= lit_codes.len) return error.InvalidBrotli;
@@ -945,8 +1010,13 @@ pub fn decompress(arena: Allocator, data: []const u8) Error![]u8 {
             if (distance <= 0) return error.InvalidBrotli;
             const max_distance = @min(max_backward, out.items.len);
             if (distance > max_distance) {
-                // A static dictionary word.
-                return error.UnsupportedBrotli;
+                // A static dictionary word, which leaves the last distances
+                // alone.
+                var word: [38]u8 = undefined;
+                const len = try dictionaryWord(@intCast(distance - @as(i64, @intCast(max_distance)) - 1), copy, &word);
+                if (out.items.len + len > end) return error.InvalidBrotli;
+                try out.appendSlice(arena, word[0..len]);
+                continue;
             }
             if (dcode != 0) {
                 ring_at = (ring_at + 1) % 4;
@@ -1045,6 +1115,71 @@ test "decodes a stream from Google's encoder" {
     for (0..20) |_| try want.appendSlice(a, "Mortise reads Brotli. ");
     try want.appendSlice(a, "The quick brown fox jumps over the lazy dog 0123456789.");
     try testing.expectEqualStrings(want.items, try decompress(a, &stream));
+}
+
+test "decodes Google's best compression: dictionary words and context modes" {
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    var want: std.ArrayList(u8) = .empty;
+    for (0..20) |_| try want.appendSlice(a, "Mortise reads Brotli. ");
+    try want.appendSlice(a, "The quick brown fox jumps over the lazy dog 0123456789.");
+    // The same text at the reference encoder's default and best qualities,
+    // which use the static dictionary.
+    const default_quality = [_]u8{
+        27,  238, 1,   0,   196, 200, 109, 169, 126, 72,  59,  68,  43,  157, 70,  40,  51,  71,  188, 77,
+        145, 8,   42,  10,  101, 133, 174, 147, 107, 206, 251, 105, 15,  137, 93,  82,  113, 96,  218, 243,
+        25,  44,  129, 176, 24,  137, 140, 127, 11,  182, 231, 39,  65,  229, 23,  238, 138, 235, 129, 124,
+        203, 253, 93,  82,  5,   250, 127, 16,  89,  163, 40,  171, 186, 105, 187, 126, 24,  9,
+    };
+    const best_quality = [_]u8{
+        27,  238, 1,   232, 141, 148, 171, 237, 104, 213, 68,  101, 110, 163, 84,  47,  36,  121, 254, 106,
+        106, 194, 15,  194, 96,  51,  8,   14,  57,  112, 248, 150, 6,   89,  128, 24,  57,  7,   19,  57,
+        163, 12,  179, 236, 219, 79,  46,  196, 239, 200, 0,   143, 214, 5,   149, 233, 221, 163, 64,  238,
+        29,  20,  106, 117, 210, 79,  38,  75,  1,   233, 39,  118, 162, 211, 130, 54,  214, 249, 16,  83,
+        46,  10,
+    };
+    try testing.expectEqualStrings(want.items, try decompress(a, &default_quality));
+    try testing.expectEqualStrings(want.items, try decompress(a, &best_quality));
+}
+
+test "the dictionary and tables match the CRC-32 values RFC 7932 gives" {
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    const crc = std.hash.Crc32.hash;
+    try testing.expectEqual(@as(usize, 122784), dictionary.len);
+    try testing.expectEqual(@as(u32, 0x5136cb04), crc(dictionary));
+    try testing.expectEqual(@as(u32, 0x8e91efb7), crc(&tables.lut0));
+    try testing.expectEqual(@as(u32, 0xd01a32f4), crc(&tables.lut1));
+    try testing.expectEqual(@as(u32, 0x0dd7a0d6), crc(&tables.lut2));
+    // Appendix B: each transform as prefix, 0, kind, suffix, 0.
+    var bytes: std.ArrayList(u8) = .empty;
+    for (tables.transforms) |t| {
+        try bytes.appendSlice(a, t.prefix);
+        try bytes.appendSlice(a, &.{ 0, t.kind });
+        try bytes.appendSlice(a, t.suffix);
+        try bytes.append(a, 0);
+    }
+    try testing.expectEqual(@as(usize, 648), bytes.items.len);
+    try testing.expectEqual(@as(u32, 0x3d965f81), crc(bytes.items));
+    try testing.expectEqual(@as(u32, 122784), dictionary_offsets[25]);
+}
+
+test "dictionary words and their transforms" {
+    var word: [38]u8 = undefined;
+    // Word 0 of length 4 is "time"; transform 1 adds a space after it.
+    var n = try dictionaryWord(0, 4, &word);
+    try testing.expectEqualStrings("time", word[0..n]);
+    n = try dictionaryWord(1 << 10, 4, &word);
+    try testing.expectEqualStrings("time ", word[0..n]);
+    // Transform 9 uppercases the first letter, 44 every letter.
+    n = try dictionaryWord(9 << 10, 4, &word);
+    try testing.expectEqualStrings("Time", word[0..n]);
+    n = try dictionaryWord(44 << 10, 4, &word);
+    try testing.expectEqualStrings("TIME", word[0..n]);
+    try testing.expectError(error.InvalidBrotli, dictionaryWord(121 << 10, 4, &word));
+    try testing.expectError(error.InvalidBrotli, dictionaryWord(0, 3, &word));
 }
 
 test "a match that runs to the end of the data, with more candidates left" {

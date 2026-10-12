@@ -528,11 +528,8 @@ job:
   than a few kilobytes.
 - Variable fonts keep all their variation data.
 - WOFF2 is written, not read: a `.woff2` file cannot be listed under
-  `fonts.subset`. Reading it needs a Brotli decoder for the reference
-  encoder's output, which uses the 122 KB static dictionary and the
-  literal context tables printed in RFC 7932; Mortise's decoder reads the
-  rest of the format but not those parts, so reading WOFF2 waits on
-  bringing that data into the repository.
+  `fonts.subset` yet. The Brotli decoder it needs reads the whole format,
+  static dictionary included, but the WOFF2 reader is still to come.
 - WOFF2 output applies the `glyf`/`loca` transform but not the optional
   `hmtx` transform, and other tables are stored as they are. The Brotli
   encoder uses one block type and one prefix code per meta-block and no
