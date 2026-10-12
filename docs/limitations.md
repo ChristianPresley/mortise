@@ -350,7 +350,10 @@ job:
   collection document keeps its case and spaces. Jekyll's `:slugified_categories`,
   `:basename` for collections and the `jekyll-permalinks` plugin's
   extras are not supported.
-- Not supported from Jekyll: `site.categories`, `site.static_files`,
+- `site.tags` keeps Mortise's shape in Liquid mode, a list of `name` and
+  `posts`, where Jekyll's maps each tag to its posts as `site.categories`
+  does; `{% for tag in site.tags %}{{ tag[0] }}` writes nothing.
+- Not supported from Jekyll: `site.static_files`,
   `site.html_pages`, `page.id`, the `layout` variable, `jekyll.environment`,
   plugins and their tags (`{% seo %}`, `{% feed_meta %}`; Mortise writes
   feeds and SEO tags itself), and `sassify`/`scssify`.

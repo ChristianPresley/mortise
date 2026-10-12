@@ -8,6 +8,10 @@ title: Tags
   {%- assign tagged = site.posts | where: "tags", tag %}
   <a href="#{{ tag | slugify }}">#{{ tag }}</a> <small>{{ tagged.size }}</small>
 {% endtablerow %}</table>
+<p class="categories">Filed under
+{%- for category in site.categories %}
+  <strong>{{ category[0] }}</strong> ({{ category[1].size }}){% unless forloop.last %},{% endunless %}
+{%- endfor %}.</p>
 {% for tag in tags %}
 <h2 id="{{ tag | slugify }}">#{{ tag }}</h2>
 <ul>

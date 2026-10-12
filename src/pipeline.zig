@@ -1879,7 +1879,7 @@ fn buildSites(b: *Builder, config_fields: frontmatter.Map, pages: []Page, hidden
     for (config_fields.entries) |e| {
         if (std.mem.eql(u8, e.key, "posts") or std.mem.eql(u8, e.key, "pages") or
             std.mem.eql(u8, e.key, "data") or std.mem.eql(u8, e.key, "tags") or std.mem.eql(u8, e.key, "nav") or std.mem.eql(u8, e.key, "menus") or
-            std.mem.eql(u8, e.key, "apis") or (multi and (std.mem.eql(u8, e.key, "lang") or std.mem.eql(u8, e.key, "i18n"))))
+            std.mem.eql(u8, e.key, "apis") or (b.liquid and std.mem.eql(u8, e.key, "categories")) or (multi and (std.mem.eql(u8, e.key, "lang") or std.mem.eql(u8, e.key, "i18n"))))
         {
             return b.fail(config_path, 0, "'{s}' is set by Mortise; use another key", .{e.key});
         }
@@ -1957,6 +1957,7 @@ fn buildSites(b: *Builder, config_fields: frontmatter.Map, pages: []Page, hidden
                 try coll_values.append(arena, try collectionValue(arena, c, values));
             }
             try site_entries.append(arena, .{ .key = "collections", .value = .{ .list = coll_values.items } });
+            try site_entries.append(arena, .{ .key = "categories", .value = try categoryIndex(arena, subset) });
         }
         try site_entries.append(arena, .{ .key = "data", .value = b.data });
         try site_entries.append(arena, .{ .key = "nav", .value = try navTree(arena, subset, root) });
@@ -1994,6 +1995,36 @@ fn buildSites(b: *Builder, config_fields: frontmatter.Map, pages: []Page, hidden
         .taxonomy_pages = taxonomy_pages,
         .taxonomy_index = taxonomy_index,
     };
+}
+
+/// Jekyll's `site.categories`: each category, in the order the oldest
+/// posts first use them, mapped to its posts, newest first. `pages` is in
+/// `pageOrder`, newest post first.
+fn categoryIndex(arena: Allocator, pages: []const Page) Allocator.Error!Value {
+    var names: std.ArrayList([]const u8) = .empty;
+    var lists: std.ArrayList(std.ArrayList(Value)) = .empty;
+    var i = pages.len;
+    while (i > 0) {
+        i -= 1;
+        const p = &pages[i];
+        if (!p.is_post) continue;
+        for (p.categories orelse &.{}) |c| {
+            const at = for (names.items, 0..) |n, k| {
+                if (std.mem.eql(u8, n, c)) break k;
+            } else blk: {
+                try names.append(arena, c);
+                try lists.append(arena, .empty);
+                break :blk names.items.len - 1;
+            };
+            try lists.items[at].append(arena, .{ .object = p.object });
+        }
+    }
+    const entries = try arena.alloc(Entry, names.items.len);
+    for (entries, names.items, lists.items) |*e, n, l| {
+        std.mem.reverse(Value, l.items);
+        e.* = .{ .key = n, .value = .{ .list = l.items } };
+    }
+    return .{ .object = .{ .entries = entries } };
 }
 
 fn collectionIndex(all: []const collections.Collection, label: []const u8) usize {
@@ -5373,6 +5404,36 @@ test "front matter and collection permalinks (Liquid mode)" {
     _ = try t.output("people/ada.html");
     _ = try t.output("x/a/index.html");
     _ = try t.output("plain/index.html");
+}
+
+test "site.categories maps each category to its posts, as in Jekyll" {
+    var t: TestSite = try .init(&.{
+        .{ "_config.yml", "liquid: true\n" },
+        .{ "_posts/2024-01-01-a.md", "---\ntitle: A\ncategories: news\n---\na" },
+        .{ "_posts/2024-02-01-b.md", "---\ntitle: B\ncategories: [Zig, news]\n---\nb" },
+        .{ "_posts/2024-03-01-c.md", "---\ntitle: C\ncategory: Zig\n---\nc" },
+        .{ "_posts/2024-04-01-d.md", "---\ntitle: D\n---\nd" },
+        .{ "index.html", "---\n---\n{% for c in site.categories %}{{ c[0] }}:{% for p in c[1] %}{{ p.title }}{% endfor %} {% endfor %}|{{ site.categories.Zig.size }}|{{ site.categories['news'].first.title }}|{{ site.posts[1].categories | join: '+' }}" },
+    });
+    defer t.deinit();
+    const a = t.arena.allocator();
+    const src = SiteDir.borrow(testing.io, t.tmp.dir);
+    var diag: Diagnostic = .{};
+    var site = t.build(&diag) catch |err| {
+        std.debug.print("build failed: {f}\n", .{diag});
+        return err;
+    };
+    // First used by the oldest posts first; each list newest first.
+    try expectContains(site.find("index.html").?.data.bytes, "news:BA Zig:CB |2|B|Zig");
+    // A post's new category reaches the index on a rebuild.
+    try src.writeFile("_posts/2024-04-01-d.md", "---\ntitle: D\ncategory: misc\n---\nd");
+    site = try rebuild(a, src, &site, &.{"_posts/2024-04-01-d.md"}, &diag);
+    try expectContains(site.find("index.html").?.data.bytes, "Zig:CB misc:D |");
+    try expectSameOutputs(try t.build(&diag), site);
+
+    try expectBuildError(&.{
+        .{ "_config.yml", "liquid: true\ncategories: [a]\n" },
+    }, "_config.yml", 0, "'categories' is set by Mortise");
 }
 
 test "collection documents follow the site's permalink style" {

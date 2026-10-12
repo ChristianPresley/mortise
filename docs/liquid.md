@@ -155,6 +155,23 @@ name's. `:categories` is the post's categories in lower case, joined with
 Categories come from front matter `categories:` (a list, or words separated
 by spaces) and `category:`, and `page.categories` lists them.
 
+### Categories
+
+`site.categories` maps each category to its posts, newest first, as in
+Jekyll. Categories come in the order the oldest posts first use them, and
+keep the case they are written in:
+
+```liquid
+{% for category in site.categories %}
+  <h2>{{ category[0] }}</h2>
+  {% for post in category[1] %}<a href="{{ post.url }}">{{ post.title }}</a>{% endfor %}
+{% endfor %}
+{{ site.categories.news.size }} posts in news
+```
+
+`categories` may not be a setting in `_config.yml` in Liquid mode, since
+it would hide `site.categories`.
+
 Once `permalink:` is set, pages follow it as Jekyll's do: `about.md` and
 `tags.html` publish at `/about/` and `/tags/` when the template ends in
 `/` (as `pretty` does), and at `/about.html` and `/tags.html` otherwise.
