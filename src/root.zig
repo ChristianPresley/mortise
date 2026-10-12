@@ -44,6 +44,7 @@ pub const a11y = @import("a11y.zig");
 pub const images = @import("images.zig");
 pub const links = @import("links.zig");
 pub const fonts = @import("fonts.zig");
+pub const cff = @import("cff.zig");
 pub const scaffold = @import("scaffold.zig");
 pub const watch = @import("watch.zig");
 pub const server = @import("server.zig");

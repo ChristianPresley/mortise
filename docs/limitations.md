@@ -509,8 +509,17 @@ job:
 
 ## Fonts
 
-- Only fonts with TrueType outlines (`glyf`) are subset; CFF-outline fonts
-  (most `.otf` files) and WOFF2 files fail the build when listed.
+- Fonts with TrueType (`glyf`) or CFF outlines are subset. CFF2 outlines
+  (variable `.otf` fonts) and WOFF2 files fail the build when listed.
+- In a CFF font, dropped glyphs and unused subroutines shrink to one byte
+  each but keep their places, and the Name, String and charset data are
+  kept whole. A kept glyph built with the old `seac` operator (an accent
+  placed on a base letter) keeps the whole font, since its parts are found
+  through Adobe's standard encoding. Subroutine numbers taken from
+  arithmetic in a charstring, rather than written as numbers, are not
+  followed. No CFF font was on the development machine, so CFF subsetting
+  was checked with fonts built for the tests rather than measured on
+  published fonts.
 - Characters come from the text of HTML pages. Text added by scripts, CSS
   `content:`, or attributes such as `title` and `placeholder` is not seen;
   list such characters under `fonts: keep:`. Printable ASCII is always kept.

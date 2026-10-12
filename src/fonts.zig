@@ -1,17 +1,19 @@
 //! Font subsetting: makes a font file hold only the glyphs a site uses.
 //!
-//! Works on fonts with TrueType outlines (`glyf`), in `.ttf`, `.otf` or
-//! `.woff` files. Glyph ids are kept, so every table that refers to glyphs
-//! by id (`hmtx`, `GSUB`, `GPOS`, `kern`, ...) stays valid; glyphs that are
-//! not needed simply have no outline. Needed glyphs are those the kept
-//! characters map to, the parts of composite glyphs, and whatever the
-//! `GSUB` substitutions (single, multiple, alternate and ligature) can turn
-//! them into, so ligatures and alternates keep working. The character map
-//! only lists the kept characters, and glyph names (`post`) are dropped.
+//! Works on fonts with TrueType (`glyf`) or CFF outlines (see `cff.zig`),
+//! in `.ttf`, `.otf` or `.woff` files. Glyph ids are kept, so every table
+//! that refers to glyphs by id (`hmtx`, `GSUB`, `GPOS`, `kern`, ...) stays
+//! valid; glyphs that are not needed simply have no outline. Needed glyphs
+//! are those the kept characters map to, the parts of composite glyphs,
+//! and whatever the `GSUB` substitutions (single, multiple, alternate and
+//! ligature) can turn them into, so ligatures and alternates keep working.
+//! The character map only lists the kept characters, and glyph names
+//! (`post`) are dropped.
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const flate = std.compress.flate;
+const cff = @import("cff.zig");
 
 pub const Error = Allocator.Error || error{ InvalidFont, UnsupportedFont };
 
@@ -117,16 +119,18 @@ pub fn subset(arena: Allocator, bytes: []const u8, chars: []const u21, diag: *Di
         .sfnt => try readSfnt(arena, bytes, diag),
         .woff => try readWoff(arena, bytes, diag),
     };
-    if (font.get("CFF ") != null or font.get("CFF2") != null) return unsupported(arena, diag, "fonts with CFF outlines cannot be subset; use a TrueType-outline font", .{});
+    if (font.get("CFF2") != null) return unsupported(arena, diag, "fonts with CFF2 outlines (variable OpenType fonts) cannot be subset", .{});
+    // CFF outlines (most .otf files) instead of glyf and loca.
+    const cff_data = font.get("CFF ");
     const head = font.get("head") orelse return fail(arena, diag, "the font has no 'head' table", .{});
     const maxp = font.get("maxp") orelse return fail(arena, diag, "the font has no 'maxp' table", .{});
-    const loca = font.get("loca") orelse return fail(arena, diag, "the font has no 'loca' table", .{});
-    const glyf = font.get("glyf") orelse return fail(arena, diag, "the font has no 'glyf' table", .{});
+    const loca = font.get("loca") orelse if (cff_data != null) "" else return fail(arena, diag, "the font has no 'loca' table", .{});
+    const glyf = font.get("glyf") orelse if (cff_data != null) "" else return fail(arena, diag, "the font has no 'glyf' table", .{});
     const cmap = font.get("cmap") orelse return fail(arena, diag, "the font has no 'cmap' table", .{});
     if (head.len < 54 or maxp.len < 6) return fail(arena, diag, "the font's 'head' or 'maxp' table is too short", .{});
     const num_glyphs: usize = u16At(maxp, 4);
     const long_loca = std.mem.readInt(i16, head[50..52], .big) == 1;
-    if (loca.len < (num_glyphs + 1) * @as(usize, if (long_loca) 4 else 2)) return fail(arena, diag, "the font's 'loca' table is too short", .{});
+    if (cff_data == null and loca.len < (num_glyphs + 1) * @as(usize, if (long_loca) 4 else 2)) return fail(arena, diag, "the font's 'loca' table is too short", .{});
 
     const glyphOffset = struct {
         fn at(l: []const u8, long: bool, i: usize) usize {
@@ -150,7 +154,7 @@ pub fn subset(arena: Allocator, bytes: []const u8, chars: []const u21, diag: *Di
     while (changed) {
         changed = false;
         // Composite glyphs need their components.
-        for (0..num_glyphs) |g| {
+        if (cff_data == null) for (0..num_glyphs) |g| {
             if (!keep[g]) continue;
             const start = glyphOffset(loca, long_loca, g);
             const end = glyphOffset(loca, long_loca, g + 1);
@@ -169,16 +173,26 @@ pub fn subset(arena: Allocator, bytes: []const u8, chars: []const u21, diag: *Di
                 if (flags & 0x8 != 0) p += 2 else if (flags & 0x40 != 0) p += 4 else if (flags & 0x80 != 0) p += 8;
                 if (flags & 0x20 == 0) break;
             }
-        }
+        };
         if (font.get("GSUB")) |gsub| {
             if (try gsubClosure(gsub, keep)) changed = true;
         }
     }
 
+    // CFF outlines: dropped glyphs and unused subroutines are emptied.
+    var new_cff: ?[]u8 = null;
+    if (cff_data) |data| {
+        var cd: cff.Diagnostic = .{};
+        new_cff = cff.subset(arena, data, keep, &cd) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.InvalidCff => return fail(arena, diag, "the font's 'CFF ' table is invalid: {s}", .{cd.message}),
+        };
+    }
+
     // Rebuild glyf and loca with empty slots for dropped glyphs.
     var new_glyf: std.ArrayList(u8) = .empty;
     const offsets = try arena.alloc(u32, num_glyphs + 1);
-    for (0..num_glyphs) |g| {
+    if (cff_data == null) for (0..num_glyphs) |g| {
         offsets[g] = @intCast(new_glyf.items.len);
         if (!keep[g]) continue;
         const start = glyphOffset(loca, long_loca, g);
@@ -187,16 +201,16 @@ pub fn subset(arena: Allocator, bytes: []const u8, chars: []const u21, diag: *Di
         try new_glyf.appendSlice(arena, glyf[start..end]);
         // Short loca stores offsets divided by two.
         if (new_glyf.items.len % 2 != 0) try new_glyf.append(arena, 0);
-    }
+    };
     offsets[num_glyphs] = @intCast(new_glyf.items.len);
     var new_loca: std.ArrayList(u8) = .empty;
-    for (offsets) |o| {
+    if (cff_data == null) for (offsets) |o| {
         if (long_loca) {
             try new_loca.appendSlice(arena, &std.mem.toBytes(std.mem.nativeToBig(u32, o)));
         } else {
             try new_loca.appendSlice(arena, &std.mem.toBytes(std.mem.nativeToBig(u16, @intCast(o / 2))));
         }
-    }
+    };
 
     const new_cmap = try writeCmap(arena, &map);
     // post format 3: metrics only, no glyph names.
@@ -212,7 +226,7 @@ pub fn subset(arena: Allocator, bytes: []const u8, chars: []const u21, diag: *Di
         const tag = &t.tag;
         // A digital signature no longer matches the changed font.
         if (std.mem.eql(u8, tag, "DSIG")) continue;
-        const data: []const u8 = if (std.mem.eql(u8, tag, "glyf")) new_glyf.items else if (std.mem.eql(u8, tag, "loca")) new_loca.items else if (std.mem.eql(u8, tag, "cmap")) new_cmap else if (std.mem.eql(u8, tag, "post") and new_post != null) new_post.? else if (std.mem.eql(u8, tag, "head")) try arena.dupe(u8, t.data) else t.data;
+        const data: []const u8 = if (std.mem.eql(u8, tag, "glyf")) new_glyf.items else if (std.mem.eql(u8, tag, "loca")) new_loca.items else if (std.mem.eql(u8, tag, "CFF ")) new_cff.? else if (std.mem.eql(u8, tag, "cmap")) new_cmap else if (std.mem.eql(u8, tag, "post") and new_post != null) new_post.? else if (std.mem.eql(u8, tag, "head")) try arena.dupe(u8, t.data) else t.data;
         try out_tables.append(arena, .{ .tag = t.tag, .data = data });
     }
     std.mem.sort(Table, out_tables.items, {}, struct {
@@ -744,6 +758,47 @@ test "subsetting keeps used glyphs, their parts and reachable ligatures" {
     try testing.expectEqual(@as(usize, 0), try glyphBytes(a, woff_sub, 2));
 }
 
+/// An OpenType font with CFF outlines for tests, around `cff.testCff`:
+/// 'A', 'B' and a seac glyph mapped from 'C'.
+pub fn testCffFont(arena: Allocator) ![]u8 {
+    var head: [54]u8 = @splat(0);
+    std.mem.writeInt(u32, head[0..4], 0x00010000, .big);
+    std.mem.writeInt(u32, head[12..16], 0x5F0F3CF5, .big);
+    // maxp version 0.5, as CFF fonts have it: only the glyph count.
+    const maxp: [6]u8 = .{ 0, 0, 0x50, 0, 0, 4 };
+    var map: std.AutoArrayHashMapUnmanaged(u21, u16) = .empty;
+    try map.put(arena, 'A', 1);
+    try map.put(arena, 'B', 2);
+    try map.put(arena, 'C', 3);
+    var tables = [_]Table{
+        .{ .tag = "CFF ".*, .data = try cff.testCff(arena, false) },
+        .{ .tag = "cmap".*, .data = try writeCmap(arena, &map) },
+        .{ .tag = "head".*, .data = &head },
+        .{ .tag = "maxp".*, .data = &maxp },
+    };
+    return writeSfnt(arena, 0x4F54544F, &tables);
+}
+
+test "CFF outlines are subset too" {
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    const font = try testCffFont(a);
+    var diag: Diagnostic = .{};
+    const out = try subset(a, font, &.{'A'}, &diag);
+    try testing.expect(out.len < font.len);
+    const f = try readSfnt(a, out, &diag);
+    // 'B' (glyph 2) now draws nothing; the table is otherwise intact.
+    const before = try readSfnt(a, font, &diag);
+    try testing.expect(f.get("CFF ").?.len < before.get("CFF ").?.len);
+    var keep = [_]bool{ true, true, false, false };
+    var cd: cff.Diagnostic = .{};
+    try testing.expectEqualSlices(u8, f.get("CFF ").?, try cff.subset(a, before.get("CFF ").?, &keep, &cd));
+    // WOFF too.
+    const woff = try subset(a, try writeWoff(a, font, 0x4F54544F), &.{'A'}, &diag);
+    try testing.expectEqual(Format.woff, format(woff).?);
+}
+
 test "unsupported fonts are reported" {
     var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena_state.deinit();
@@ -751,6 +806,8 @@ test "unsupported fonts are reported" {
     var diag: Diagnostic = .{};
     try testing.expectError(error.UnsupportedFont, subset(a, "wOF2xxxx", &.{}, &diag));
     try testing.expectError(error.InvalidFont, subset(a, "nope", &.{}, &diag));
+    var tables = [_]Table{.{ .tag = "CFF2".*, .data = "" }};
+    try testing.expectError(error.UnsupportedFont, subset(a, try writeSfnt(a, 0x4F54544F, &tables), &.{}, &diag));
 }
 
 test "collectText reads page text and references, not markup" {
