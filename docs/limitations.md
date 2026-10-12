@@ -162,8 +162,12 @@ job:
   from the pipeline, so some errors (a missing layout, a duplicate output
   path) name a file without a line.
 - Debouncing waits for 10 ms without new events after a change (at most
-  100 ms) before rebuilding. A tool that writes one file slowly over more
-  than 10 ms can cause more than one rebuild.
+  100 ms) before rebuilding. When the only changes are files the site has
+  not read yet, such as an editor's temporary file before it is renamed
+  over the original, it waits up to 250 ms in all for more, so a new file
+  shows up that much later. A tool that writes one existing file slowly
+  over more than 10 ms, or renames a temporary file over 250 ms after
+  writing it, can cause more than one rebuild.
 - There is no HTTPS, compression, or caching; every response is sent with
   `cache-control: no-store`.
 - Open pages reconnect to the event stream 100 ms after losing it, so a

@@ -351,13 +351,24 @@ fn watchLoop(s: *Server, watcher: *Watcher) Io.Cancelable!void {
     defer arena_state.deinit();
     while (!s.isStopping()) {
         _ = arena_state.reset(.retain_capacity);
-        const changes = watcher.waitDebounced(arena_state.allocator(), watch_poll_ms, .{}) catch |err| {
+        const changes = watcher.waitDebounced(arena_state.allocator(), watch_poll_ms, .{
+            .is_new = .{ .ctx = s, .func = isNewFile },
+        }) catch |err| {
             s.logLine("warning: file watcher failed: {s}", .{@errorName(err)});
             return;
         };
         if (changes.len == 0) continue;
         if (s.incremental) s.rebuildChanged(changes) else s.rebuild();
     }
+}
+
+/// Whether `path` is a file the current site did not read, which may be
+/// half of an editor's atomic save.
+fn isNewFile(ctx: *anyopaque, path: []const u8) bool {
+    const s: *Server = @ptrCast(@alignCast(ctx));
+    const snap = s.acquire() orelse return false;
+    defer s.release(snap);
+    return snap.site.isNewFile(s.src, path);
 }
 
 fn acceptLoop(s: *Server) Io.Cancelable!void {
@@ -969,8 +980,10 @@ test "one atomic save causes exactly one rebuild" {
     try testing.expect(try events.readUntil(0, "retry: 100", 5000));
 
     // Write a temporary file, then rename it over the original, as many
-    // editors do.
+    // editors do; the pause stands for a busy machine, where the rename
+    // comes well after the write.
     try tmp.dir.writeFile(io, .{ .sub_path = "index.md.tmp", .data = "---\nlayout: base\n---\nsaved\n" });
+    try io.sleep(.fromMilliseconds(40), .awake);
     try tmp.dir.rename("index.md.tmp", tmp.dir, "index.md", io);
     try testing.expect(try events.readUntil(0, "event: reload\ndata: 2\n", 5000));
     // Give any straggling events time to cause a second rebuild.

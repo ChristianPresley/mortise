@@ -58,6 +58,25 @@ pub const Watcher = struct {
     pub const Debounce = struct {
         quiet_ms: u32 = 10,
         max_ms: u32 = 100,
+        /// Answers whether a changed path is a file the caller does not
+        /// know yet. A burst that only touched such files may be the first
+        /// half of an atomic save (write a temporary file, then rename it
+        /// over the original), whose rename can come later than `quiet_ms`
+        /// on a busy machine; the wait then goes on up to `new_file_ms` for
+        /// more events, so the save still causes one rebuild. Null treats
+        /// every path as known.
+        is_new: ?IsNew = null,
+        new_file_ms: u32 = 250,
+    };
+
+    pub const IsNew = struct {
+        ctx: *anyopaque,
+        func: *const fn (ctx: *anyopaque, path: []const u8) bool,
+
+        fn all(n: IsNew, paths: []const []const u8) bool {
+            for (paths) |p| if (!n.func(n.ctx, p)) return false;
+            return true;
+        }
     };
 
     /// Starts watching `root` (absolute or relative to the working
@@ -118,16 +137,32 @@ pub const Watcher = struct {
         var changes: Changes = .{ .arena = arena };
         try w.waitInto(&changes, timeout_ms);
         if (changes.list.items.len == 0) return changes.list.items;
+        const first = Io.Clock.Timestamp.now(w.io, .awake);
+        while (true) {
+            try w.collectBurst(&changes, debounce);
+            const is_new = debounce.is_new orelse break;
+            if (!is_new.all(changes.list.items)) break;
+            // Only new files so far: wait for the rest of an atomic save.
+            const waited_ms = first.durationTo(Io.Clock.Timestamp.now(w.io, .awake)).raw.toMilliseconds();
+            if (waited_ms >= debounce.new_file_ms) break;
+            const before = changes.events;
+            try w.waitInto(&changes, debounce.new_file_ms - @as(u32, @intCast(waited_ms)));
+            if (changes.events == before) break;
+        }
+        return changes.list.items;
+    }
+
+    /// Collects events until none arrives for `quiet_ms`, or `max_ms` passed.
+    fn collectBurst(w: *Watcher, changes: *Changes, debounce: Debounce) !void {
         const start = Io.Clock.Timestamp.now(w.io, .awake);
         while (true) {
             const elapsed_ms = start.durationTo(Io.Clock.Timestamp.now(w.io, .awake)).raw.toMilliseconds();
             if (elapsed_ms >= debounce.max_ms) break;
             const before = changes.events;
-            try w.waitInto(&changes, @min(debounce.quiet_ms, debounce.max_ms - @as(u32, @intCast(elapsed_ms))));
+            try w.waitInto(changes, @min(debounce.quiet_ms, debounce.max_ms - @as(u32, @intCast(elapsed_ms))));
             // Quiet: no relevant event, new path or repeat, in the window.
             if (changes.events == before) break;
         }
-        return changes.list.items;
     }
 };
 

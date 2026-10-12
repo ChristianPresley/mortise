@@ -98,6 +98,19 @@ pub const Site = struct {
     /// arena must outlive this one.
     state: State,
 
+    /// Whether `path` is a file in `src` that this site did not read: a new
+    /// page or file, or an editor's temporary file. Templates, data files
+    /// and the config count as read.
+    pub fn isNewFile(s: Site, src: SiteDir, path: []const u8) bool {
+        if (std.mem.eql(u8, path, config_path)) return false;
+        for ([_][]const u8{ "_layouts/", "_includes/", data_files.dir_prefix, assets.dir_prefix }) |prefix| {
+            if (std.mem.startsWith(u8, path, prefix)) return false;
+        }
+        for (s.outputs) |o| if (std.mem.eql(u8, o.source, path)) return false;
+        src.dir.access(src.io, path, .{}) catch return false;
+        return true;
+    }
+
     pub fn find(s: Site, path: []const u8) ?Output {
         var lo: usize = 0;
         var hi = s.outputs.len;
