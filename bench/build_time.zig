@@ -60,9 +60,12 @@ pub fn main(init: std.process.Init) !void {
     try out.print("mortise: {d} outputs, median {d:.0} ms over {d} runs ({d:.0} pages/s)\n", .{ outputs, nsToMs(m), runs, @as(f64, @floatFromInt(pages)) / (nsToMs(m) / 1000) });
     try out.flush();
 
-    // Hugo, if installed.
+    // Hugo, if installed, each run into an empty `public/`, as a fresh
+    // checkout builds. (Removing the old output is not timed for Hugo,
+    // while Mortise's write time includes replacing the previous `_site`.)
     var hugo_times: std.ArrayList(u64) = .empty;
     for (0..runs) |_| {
+        Io.Dir.cwd().deleteTree(io, hugo_dir ++ "/public") catch {};
         const start = Io.Clock.Timestamp.now(io, .awake);
         var child = std.process.spawn(io, .{ .argv = &.{ "hugo", "--quiet", "--source", hugo_dir }, .stdout = .ignore, .stderr = .ignore }) catch {
             try out.writeAll("hugo: not found on PATH; install Hugo to compare\n");
@@ -77,7 +80,7 @@ pub fn main(init: std.process.Init) !void {
     }
     if (hugo_times.items.len > 0) {
         const hm = median(hugo_times.items);
-        try out.print("hugo:    median {d:.0} ms over {d} runs ({d:.0} pages/s)\n", .{ nsToMs(hm), hugo_times.items.len, @as(f64, @floatFromInt(pages)) / (nsToMs(hm) / 1000) });
+        try out.print("hugo:    median {d:.0} ms over {d} runs into an empty public/ ({d:.0} pages/s)\n", .{ nsToMs(hm), hugo_times.items.len, @as(f64, @floatFromInt(pages)) / (nsToMs(hm) / 1000) });
     }
     try out.flush();
 }

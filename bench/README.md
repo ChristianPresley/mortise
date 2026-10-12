@@ -69,7 +69,10 @@ Each post has frontmatter with a title and two tags, a few paragraphs with
 emphasis and links, a list, a heading and a code block, under a two-layout
 chain; the site also has a paginated home page and a page per tag. The
 benchmark writes the same site for Hugo (`zig-out/bench-build/hugo`, with
-equivalent Go templates) and times `hugo` too when it is on the `PATH`.
+equivalent Go templates) and times `hugo` too when it is on the `PATH`,
+each run into an empty `public/` as a fresh checkout builds. Removing
+Hugo's old output is not timed; Mortise's write time includes replacing
+the previous `_site`.
 
 Pages load in parallel, and output files are written and the previous
 `_site` deleted by up to 16 workers. Builds are deterministic: the same
@@ -96,6 +99,25 @@ Notes:
 - Writing files dominates. On Windows each new file costs far more than on
   Linux, mostly in the file system and real-time virus scanning, and
   parallel writing helps much less there.
-- Hugo was not installed on the development machine, so there is no Hugo
-  number here yet. Run `zig build bench-build` with `hugo` on the `PATH` to
-  compare on your own machine.
+
+### Against Hugo
+
+Hugo 0.167.0 (the release binaries for Windows and Linux, checked against
+the release's SHA-256 sums), same machine, median of 5 runs, 2026-10-12.
+Mortise's times include replacing the previous `_site`; Hugo's start from
+an empty `public/`. Hugo writes 10,111 files for the 10,000-post site and
+Mortise 11,014.
+
+| Platform     | Posts  | Mortise | Hugo    | Mortise is |
+| ------------ | ------ | ------- | ------- | ---------- |
+| Linux (WSL2) | 1,000  | 169 ms  | 535 ms  | 3.2× faster |
+| Linux (WSL2) | 10,000 | 1.76 s  | 4.83 s  | 2.7× faster |
+| Windows 11   | 10,000 | 12.7 s  | 7.3 s   | 1.7× slower |
+
+On Linux, Mortise renders the 10,000 posts in about 0.25 s and writes them
+in 1.5 s. On Windows its rendering is the same, but writing takes 12.5 s
+(longer than on 2026-10-11, with other programs running). Part of that is
+deleting the previous `_site`: removing Hugo's 10,111 output files on the
+same machine took 3.4 s, and Mortise does that on every build, where Hugo's
+build here did not. Hugo writing into its existing `public/` instead took
+6.8 s.
