@@ -81,14 +81,24 @@ original there:
 ```
 
 On the development machine, with the same page text as above, the WOFF2
-files came to 169 KB for Arial (397 KB subset, 1.0 MB whole), 61 KB for
-Georgia (101 KB, 220 KB) and 55 KB for Consolas (120 KB, 453 KB), and
-Edge drew them the same as the installed fonts. The three took 24 ms
+files came to 166 KB for Arial (397 KB subset, 1.0 MB whole), 59 KB for
+Georgia (101 KB, 220 KB) and 52 KB for Consolas (120 KB, 453 KB), and
+Edge drew them the same as the installed fonts. The three took 27 ms
 with the subsetting in a release build.
 
-The encoder finds repeats with hash chains, looks one byte ahead before
-taking a match, reuses recent distances at no cost, and writes blocks it
-cannot shrink as they are. Its output is about the size of the reference
-encoder's default quality, but larger than its best (Georgia whole: 131
-KB against 118 KB), and the tables are stored as they are, without the
-glyph transform WOFF2 allows (see [limitations](limitations.md#fonts)).
+TrueType outlines get WOFF2's `glyf` transform: each glyph is split into
+streams of contour counts, point counts, flags, packed coordinate deltas,
+composite records, boxes and instructions, which compress better than
+the glyphs as written, and `loca` is left for the browser to rebuild. On
+whole fonts the transform took Georgia's WOFF2 from 134 KB to 122 KB,
+Arial's from 561 KB to 503 KB and Consolas's from 245 KB to 213 KB, and
+every printable Latin character drawn in Edge was pixel for pixel the
+same as with the TrueType file. A font with a glyph the transform cannot
+read keeps its tables as they are.
+
+The Brotli encoder finds repeats with hash chains, looks one byte ahead
+before taking a match, reuses recent distances at no cost, and writes
+blocks it cannot shrink as they are. Its output is about the size of the
+reference encoder's default quality but larger than its best (Georgia
+whole, without the transform: 131 KB against 118 KB); see
+[limitations](limitations.md#fonts).

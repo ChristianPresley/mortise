@@ -533,12 +533,11 @@ job:
   literal context tables printed in RFC 7932; Mortise's decoder reads the
   rest of the format but not those parts, so reading WOFF2 waits on
   bringing that data into the repository.
-- WOFF2 output stores every table as it is ("null transform"); the
-  `glyf`/`loca` and `hmtx` transforms that shrink TrueType fonts further
-  are not applied. The Brotli encoder uses one block type and one prefix
-  code per meta-block and no literal context modelling or static
-  dictionary, so it compresses less than the reference encoder at its
-  best settings.
+- WOFF2 output applies the `glyf`/`loca` transform but not the optional
+  `hmtx` transform, and other tables are stored as they are. The Brotli
+  encoder uses one block type and one prefix code per meta-block and no
+  literal context modelling or static dictionary, so it compresses less
+  than the reference encoder at its best settings.
 - `mortise serve` writes no WOFF2 files; list the original font after the
   `.woff2` in `@font-face` so the dev server still shows the font.
 
