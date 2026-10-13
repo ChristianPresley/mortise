@@ -33,6 +33,13 @@ const usage =
     \\            Fail on undefined template variables, or don't. The default
     \\            is strict: in _config.yml, else on for serve, off for build
     \\
+    \\Options for build:
+    \\  --in-place
+    \\            Write into _site directly, leaving unchanged files alone,
+    \\            instead of building a new copy and swapping it in. Much
+    \\            faster when little changed, above all on Windows, but an
+    \\            I/O error partway through can leave _site partly updated
+    \\
     \\Options for serve:
     \\  --port N  Port to listen on (default: 4000)
     \\  --restart-on-rebuild
@@ -149,7 +156,23 @@ fn siteDirArg(ctx: Ctx, rest: []const [:0]const u8) ?[]const u8 {
     return dir orelse ".";
 }
 
-fn cmdBuild(ctx: Ctx, rest: []const [:0]const u8) u8 {
+fn cmdBuild(ctx: Ctx, rest_all: []const [:0]const u8) u8 {
+    // --in-place is build's alone.
+    var in_place = false;
+    var kept: [16][:0]const u8 = undefined;
+    var n: usize = 0;
+    for (rest_all) |arg| {
+        if (std.mem.eql(u8, arg, "--in-place")) {
+            in_place = true;
+        } else if (n < kept.len) {
+            kept[n] = arg;
+            n += 1;
+        } else {
+            ctx.err.writeAll("mortise: too many arguments\n") catch {};
+            return 2;
+        }
+    }
+    const rest = kept[0..n];
     const args = parseArgs(ctx, rest, false) orelse return 2;
     const dir = args.dir;
     const io = ctx.io;
@@ -175,7 +198,8 @@ fn cmdBuild(ctx: Ctx, rest: []const [:0]const u8) u8 {
         return 1;
     };
 
-    pipeline.writeOutputDir(site, src, &diag) catch {
+    const write = if (in_place) &pipeline.writeOutputInPlace else &pipeline.writeOutputDir;
+    write(site, src, &diag) catch {
         ctx.err.print("error: cannot write {s}/{s}: {f}\n", .{ dir, pipeline.output_dir, diag }) catch {};
         return 1;
     };
@@ -388,6 +412,11 @@ test "run reports unknown commands and options with usage" {
     err = .fixed(&err_buf);
     try testing.expectEqual(@as(u8, 2), run(testCtx(&out, &err), &.{ "mortise", "build", "--fast" }));
     try testing.expectStringStartsWith(err.buffered(), "mortise: unknown option '--fast'");
+
+    // --in-place is build's alone.
+    err = .fixed(&err_buf);
+    try testing.expectEqual(@as(u8, 2), run(testCtx(&out, &err), &.{ "mortise", "check", "--in-place" }));
+    try testing.expectStringStartsWith(err.buffered(), "mortise: unknown option '--in-place'");
 }
 
 test "parseArgs" {

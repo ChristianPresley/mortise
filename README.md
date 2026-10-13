@@ -47,11 +47,21 @@ Most of that time goes to copying the 27 MB debug binary and starting it.
 
 ```sh
 mortise new my-site [--starter blog|docs|portfolio]  # create a starter site
-mortise build [SITE_DIR] [--drafts] [--future] [--strict]  # build SITE_DIR (default .) into SITE_DIR/_site
+mortise build [SITE_DIR] [--drafts] [--future] [--strict] [--in-place]  # build SITE_DIR (default .) into SITE_DIR/_site
 mortise check [SITE_DIR] [--drafts]              # report broken links and accessibility problems
 mortise serve [SITE_DIR] [--port N] [--drafts] [--future]  # dev server on http://localhost:4000/
 mortise version
 ```
+
+`build` writes a complete new copy of the site and swaps it in for
+`_site`, so `_site` is never half updated. `build --in-place` writes into
+`_site` itself instead, leaves files that already hold the right bytes
+alone, and deletes those the site no longer makes: rebuilding 10,000
+posts with little changed took 1.3 s instead of 12.7 s on Windows and
+0.39 s instead of 1.7 s on Linux (see [bench](bench/README.md)). An I/O
+error partway through, such as a full disk, can then leave `_site` partly
+updated until the next build; template and content errors still stop the
+build before anything is written.
 
 `check` builds the site in memory (it writes nothing) and reads every
 `href` and `src` in the HTML it produces. Each link to a page or file of

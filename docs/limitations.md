@@ -474,6 +474,12 @@ job:
   the previous `_site` intact. The swap is two renames (`_site` to
   `.mortise-old`, then staging to `_site`), so a crash between them leaves no
   `_site` until the next build; `.mortise-old` is then deleted.
+- `build --in-place` gives up that guarantee for speed: it writes into
+  `_site` directly, so an I/O error or crash while writing leaves some files
+  new and some old until the next build. It reads every existing output to
+  compare it, files edited by hand inside `_site` are overwritten or
+  deleted, and files under hidden folders such as `_site/.well-known` that
+  the site does not make are deleted too.
 - Pages load and files are written on up to 16 threads. Rendering pages
   is still done on one thread.
 - Directories starting with `.` (such as `.git`) and the top-level `_site`

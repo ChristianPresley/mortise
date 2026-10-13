@@ -60,6 +60,24 @@ pub fn main(init: std.process.Init) !void {
     try out.print("mortise: {d} outputs, median {d:.0} ms over {d} runs ({d:.0} pages/s)\n", .{ outputs, nsToMs(m), runs, @as(f64, @floatFromInt(pages)) / (nsToMs(m) / 1000) });
     try out.flush();
 
+    // `mortise build --in-place`: into an empty `_site`, then again with
+    // nothing changed, then after one post changed.
+    try src.deleteTree(mortise.pipeline.output_dir);
+    const in_place = try arena.alloc(u64, runs + 2);
+    for (in_place, 0..) |*t, k| {
+        // Post 0 is dated 2001-09-09; its title changes, as an edit would.
+        if (k == runs + 1) try src.writeFile("_posts/2001-09-09-post-0.md", "---\ntitle: Post number zero\nlayout: post\ntags: [zig, zig]\n---\nChanged.\n");
+        var build_arena: mortise.BuildArena = .init(gpa);
+        defer build_arena.deinit();
+        const start = Io.Clock.Timestamp.now(io, .awake);
+        var diag: mortise.pipeline.Diagnostic = .{};
+        const site = try mortise.pipeline.build(build_arena.begin(), src, &diag);
+        try mortise.pipeline.writeOutputInPlace(site, src, &diag);
+        t.* = @intCast(start.durationTo(Io.Clock.Timestamp.now(io, .awake)).raw.nanoseconds);
+    }
+    try out.print("mortise --in-place: empty _site {d:.0} ms, unchanged rebuild median {d:.0} ms over {d} runs, one post changed {d:.0} ms\n", .{ nsToMs(in_place[0]), nsToMs(median(in_place[1 .. runs + 1])), runs, nsToMs(in_place[runs + 1]) });
+    try out.flush();
+
     // Hugo, if installed, each run into an empty `public/`, as a fresh
     // checkout builds. (Removing the old output is not timed for Hugo,
     // while Mortise's write time includes replacing the previous `_site`.)

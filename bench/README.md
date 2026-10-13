@@ -121,3 +121,23 @@ deleting the previous `_site`: removing Hugo's 10,111 output files on the
 same machine took 3.4 s, and Mortise does that on every build, where Hugo's
 build here did not. Hugo writing into its existing `public/` instead took
 6.8 s.
+
+### `build --in-place`
+
+The benchmark also times `mortise build --in-place`, which writes into
+`_site` itself and leaves files that already hold the right bytes alone:
+first into an empty `_site`, then 5 rebuilds with nothing changed, then
+one after a post's title changed. Same machine, 2026-10-12.
+
+| Platform     | Posts  | Staged rebuild | Empty `_site` | Unchanged | One post changed |
+| ------------ | ------ | -------------- | ------------- | --------- | ---------------- |
+| Linux (WSL2) | 1,000  | 170 ms         | 150 ms        | 41 ms     | 39 ms            |
+| Linux (WSL2) | 10,000 | 1.70 s         | 1.52 s        | 389 ms    | 394 ms           |
+| Windows 11   | 10,000 | 12.7 s         | 11.2 s        | 1.32 s    | 1.33 s           |
+
+On Windows a rebuild with little changed is about ten times faster this
+way, and five times faster than Hugo's build into an empty `public/`.
+Profiling showed why: on this machine each new file costs about 0.4 ms,
+each new folder 0.25 ms and each deletion 0.9 ms, and more writer threads
+do not help, while reading an existing file and comparing it costs about
+0.08 ms.

@@ -4014,6 +4014,13 @@ fn lookupLink(ctx: *anyopaque, kind: template.Links.Kind, target: []const u8, wh
 /// `diag` names the first output, in output order, that could not be
 /// written, so the error does not depend on timing.
 pub fn writeSite(site: Site, src: SiteDir, out: SiteDir, diag: *Diagnostic) error{BuildFailed}!void {
+    return writeSiteWith(site, src, out, false, diag);
+}
+
+/// `writeSite`, leaving files that already hold the right bytes untouched
+/// when `keep_unchanged` is set: reading and comparing a file costs far
+/// less than writing it, above all on Windows.
+fn writeSiteWith(site: Site, src: SiteDir, out: SiteDir, keep_unchanged: bool, diag: *Diagnostic) error{BuildFailed}!void {
     const outputs = site.outputs;
     if (outputs.len == 0) return;
     const workers = @min(std.Thread.getCpuCount() catch 1, 16, outputs.len);
@@ -4022,12 +4029,12 @@ pub fn writeSite(site: Site, src: SiteDir, out: SiteDir, diag: *Diagnostic) erro
         failed: ?usize = null,
         err: anyerror = error.Unexpected,
 
-        fn run(w: *@This(), st: *const Site, first: usize, step: usize, s: SiteDir, o: SiteDir) void {
+        fn run(w: *@This(), st: *const Site, first: usize, step: usize, s: SiteDir, o: SiteDir, keep: bool) void {
             const all = st.outputs;
             var i = first;
             while (i < all.len) : (i += step) {
                 const item = all[i];
-                writeOne(st, item, s, o) catch |e| {
+                writeOne(st, item, s, o, keep) catch |e| {
                     w.failed = i;
                     w.err = e;
                     return;
@@ -4037,14 +4044,14 @@ pub fn writeSite(site: Site, src: SiteDir, out: SiteDir, diag: *Diagnostic) erro
     };
     var state: [16]Worker = @splat(.{});
     if (workers <= 1) {
-        Worker.run(&state[0], &site, 0, 1, src, out);
+        Worker.run(&state[0], &site, 0, 1, src, out, keep_unchanged);
     } else {
         // Outputs are spread round-robin, so every worker gets a mix of
         // directories and sizes.
         var group: std.Io.Group = .init;
         for (state[0..workers], 0..) |*w, k| {
             // Without a free thread, the worker runs here and now.
-            group.concurrent(src.io, Worker.run, .{ w, &site, k, workers, src, out }) catch Worker.run(w, &site, k, workers, src, out);
+            group.concurrent(src.io, Worker.run, .{ w, &site, k, workers, src, out, keep_unchanged }) catch Worker.run(w, &site, k, workers, src, out, keep_unchanged);
         }
         group.await(src.io) catch {
             group.cancel(src.io);
@@ -4068,15 +4075,34 @@ pub fn writeSite(site: Site, src: SiteDir, out: SiteDir, diag: *Diagnostic) erro
 /// Each worker makes the directories its files need: with a directory per
 /// page, making them one by one up front would take longer than writing
 /// the files.
-fn writeOne(site: *const Site, o: Output, src: SiteDir, out: SiteDir) !void {
+fn writeOne(site: *const Site, o: Output, src: SiteDir, out: SiteDir, keep: bool) !void {
     const minify_it = site.minify and minifiable(o.path);
     if (minify_it) {
-        try writeMinified(o, src, out);
+        try writeMinified(o, src, out, keep);
     } else switch (o.data) {
-        .bytes => |bytes| try out.writeFile(o.path, bytes),
-        .copy => try src.copyFileTo(o.source, out, o.path),
+        .bytes => |bytes| try putFile(out, o.path, bytes, keep),
+        .copy => if (keep) {
+            var arena_state: std.heap.ArenaAllocator = .init(std.heap.smp_allocator);
+            defer arena_state.deinit();
+            try putFile(out, o.path, try src.readFile(arena_state.allocator(), o.source), true);
+        } else try src.copyFileTo(o.source, out, o.path),
     }
-    if (site.gzip) try writeGzip(o, src, out, minify_it);
+    if (site.gzip) try writeGzip(o, src, out, minify_it, keep);
+}
+
+/// Writes `data` to `path`, unless `keep` is set and the file already
+/// holds exactly `data`.
+fn putFile(out: SiteDir, path: []const u8, data: []const u8, keep: bool) !void {
+    if (keep and holds(out, path, data)) return;
+    try out.writeFile(path, data);
+}
+
+/// Whether the file at `path` exists and holds exactly `data`.
+fn holds(out: SiteDir, path: []const u8, data: []const u8) bool {
+    var arena_state: std.heap.ArenaAllocator = .init(std.heap.smp_allocator);
+    defer arena_state.deinit();
+    const old = out.dir.readFileAlloc(out.io, path, arena_state.allocator(), .limited(data.len + 1)) catch return false;
+    return std.mem.eql(u8, old, data);
 }
 
 fn minifiable(path: []const u8) bool {
@@ -4089,7 +4115,7 @@ fn minified(arena: Allocator, path: []const u8, data: []const u8) ![]const u8 {
     return minify.html(arena, data);
 }
 
-fn writeMinified(o: Output, src: SiteDir, out: SiteDir) !void {
+fn writeMinified(o: Output, src: SiteDir, out: SiteDir, keep: bool) !void {
     // One scratch arena per file keeps memory flat across a large site.
     var arena_state: std.heap.ArenaAllocator = .init(std.heap.smp_allocator);
     defer arena_state.deinit();
@@ -4098,26 +4124,30 @@ fn writeMinified(o: Output, src: SiteDir, out: SiteDir) !void {
         .bytes => |bytes| bytes,
         .copy => try src.readFile(arena, o.source),
     };
-    try out.writeFile(o.path, try minified(arena, o.path, data));
+    try putFile(out, o.path, try minified(arena, o.path, data), keep);
 }
 
 /// Writes `PATH.gz` for a text output over the size threshold, compressing
 /// the minified text when `minify` says the output was minified.
-fn writeGzip(o: Output, src: SiteDir, out: SiteDir, minify_first: bool) !void {
+fn writeGzip(o: Output, src: SiteDir, out: SiteDir, minify_first: bool, keep: bool) !void {
     // Outputs are written one after another, so a scratch arena per file
     // keeps memory flat.
     var arena_state: std.heap.ArenaAllocator = .init(std.heap.smp_allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
+    const gz_path = try std.mem.concat(arena, u8, &.{ o.path, ".gz" });
     if (!gzip.wanted(o.path, gzip.min_size)) return;
     var data = switch (o.data) {
         .bytes => |bytes| bytes,
         .copy => try src.readFile(arena, o.source),
     };
     if (minify_first) data = try minified(arena, o.path, data);
-    if (!gzip.wanted(o.path, data.len)) return;
-    const gz_path = try std.mem.concat(arena, u8, &.{ o.path, ".gz" });
-    try out.writeFile(gz_path, try gzip.compress(arena, data));
+    if (!gzip.wanted(o.path, data.len)) {
+        // Written in place, an earlier build's copy may be there.
+        if (keep) out.dir.deleteFile(out.io, gz_path) catch {};
+        return;
+    }
+    try putFile(out, gz_path, try gzip.compress(arena, data), keep);
 }
 
 /// Fails when two outputs differ only in letter case. They would overwrite
@@ -4164,6 +4194,57 @@ pub fn writeOutputDir(site: Site, src: SiteDir, diag: *Diagnostic) error{BuildFa
     };
     src.dir.rename(staging_dir, src.dir, output_dir, src.io) catch |err| return ioFail(diag, output_dir, err);
     if (had_old) deleteTreeParallel(src, old_output_dir) catch |err| return ioFail(diag, old_output_dir, err);
+}
+
+/// `build --in-place`: writes the site straight into `_site`, leaving
+/// files that already hold the right bytes alone and deleting those the
+/// build no longer makes. Much faster than `writeOutputDir` when little
+/// changed, above all on Windows, where every file written or deleted is
+/// costly; but an I/O error partway through leaves `_site` partly updated
+/// until the next build.
+pub fn writeOutputInPlace(site: Site, src: SiteDir, diag: *Diagnostic) error{BuildFailed}!void {
+    var out = src.openSub(output_dir) catch |err| return ioFail(diag, output_dir, err);
+    defer out.close();
+    // Stale files go first, so that a path can turn from a file into a
+    // directory or back.
+    removeStale(site, out) catch |err| return ioFail(diag, output_dir, err);
+    try writeSiteWith(site, src, out, true, diag);
+}
+
+/// Deletes the files in `out` that `site` does not write, then the
+/// directories left empty. A `.gz` copy stays when its file does; if
+/// it is no longer wanted, writing removes it.
+fn removeStale(site: Site, out: SiteDir) !void {
+    var arena_state: std.heap.ArenaAllocator = .init(std.heap.smp_allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var keep: std.StringHashMapUnmanaged(void) = .empty;
+    for (site.outputs) |o| {
+        try keep.put(arena, o.path, {});
+        if (site.gzip) try keep.put(arena, try std.mem.concat(arena, u8, &.{ o.path, ".gz" }), {});
+    }
+    var dirs: std.ArrayList([]const u8) = .empty;
+    var walker = try out.dir.walk(arena);
+    defer walker.deinit();
+    while (try walker.next(out.io)) |entry| {
+        const path = try arena.dupe(u8, entry.path);
+        // The walker joins with the platform's separator.
+        if (@import("builtin").os.tag == .windows) std.mem.replaceScalar(u8, path, '\\', '/');
+        switch (entry.kind) {
+            .directory => try dirs.append(arena, path),
+            else => if (!keep.contains(path)) try out.dir.deleteFile(out.io, path),
+        }
+    }
+    // Deepest first; a directory that still holds files stays.
+    std.mem.sortUnstable([]const u8, dirs.items, {}, struct {
+        fn deeper(_: void, a: []const u8, b: []const u8) bool {
+            return a.len > b.len;
+        }
+    }.deeper);
+    for (dirs.items) |d| out.dir.deleteDir(out.io, d) catch |err| switch (err) {
+        error.DirNotEmpty => {},
+        else => return err,
+    };
 }
 
 /// Where `writeOutputDir` moves the previous `_site` while it is deleted.
@@ -4826,6 +4907,41 @@ test "writeOutputDir replaces _site only after a complete write" {
     try testing.expectEqualStrings("<p>new</p>\n", try src.readFile(a, "_site/index.html"));
     try testing.expectError(error.FileNotFound, src.readFile(a, "_site/a/b/c/old.html"));
     try testing.expectError(error.FileNotFound, src.dir.statFile(testing.io, old_output_dir, .{}));
+}
+
+test "writeOutputInPlace writes only what changed and removes what went" {
+    var t: TestSite = try .init(&.{
+        .{ "index.md", "home\n" },
+        .{ "about.md", "about\n" },
+        .{ "a.html", "file" },
+        .{ "_site/stale.html", "old" },
+        .{ "_site/old/dir/x.html", "old" },
+    });
+    defer t.deinit();
+    const a = t.arena.allocator();
+    const src = SiteDir.borrow(testing.io, t.tmp.dir);
+    var diag: Diagnostic = .{};
+    try writeOutputInPlace(try t.build(&diag), src, &diag);
+    try testing.expectEqualStrings("<p>home</p>\n", try src.readFile(a, "_site/index.html"));
+    try testing.expectEqualStrings("file", try src.readFile(a, "_site/a.html"));
+    // Files the site does not make are gone, and so are the folders they
+    // leave empty.
+    try testing.expectError(error.FileNotFound, src.readFile(a, "_site/stale.html"));
+    try testing.expectError(error.FileNotFound, src.dir.statFile(testing.io, "_site/old", .{}));
+
+    // A second build leaves unchanged files untouched and rewrites the rest;
+    // a file can become a folder.
+    const before = try src.dir.statFile(testing.io, "_site/index.html", .{});
+    try src.writeFile("about.md", "changed\n");
+    try src.deleteTree("a.html");
+    try src.writeFile("a.html/index.html", "now a folder");
+    try writeOutputInPlace(try t.build(&diag), src, &diag);
+    const after = try src.dir.statFile(testing.io, "_site/index.html", .{});
+    try testing.expectEqual(before.mtime.nanoseconds, after.mtime.nanoseconds);
+    try testing.expectEqualStrings("<p>changed</p>\n", try src.readFile(a, "_site/about/index.html"));
+    try testing.expectEqualStrings("now a folder", try src.readFile(a, "_site/a.html/index.html"));
+    // No staging folder is made.
+    try testing.expectError(error.FileNotFound, src.dir.statFile(testing.io, staging_dir, .{}));
 }
 
 test "feed and sitemap are generated when the site has a url" {
