@@ -92,6 +92,56 @@ pub fn linearToSrgb(v: f32) f32 {
     return if (c <= 0.0031308) c * 12.92 else 1.055 * std.math.pow(f32, c, 1.0 / 2.4) - 0.055;
 }
 
+/// `linearToSrgb` rounded to 8 bits, without its `pow`: encoding a
+/// 1200x630 image calls this 2.3 million times.
+pub fn linearToSrgb8(v: f32) u8 {
+    // Counts the thresholds at or below `v` by binary search.
+    var i: usize = 0;
+    inline for (.{ 128, 64, 32, 16, 8, 4, 2, 1 }) |step| {
+        if (i + step <= srgb8_thresholds.len and v >= srgb8_thresholds[i + step - 1]) i += step;
+    }
+    return @intCast(i);
+}
+
+fn quantizeSrgb(v: f32) u8 {
+    return @intFromFloat(@round(std.math.clamp(linearToSrgb(v), 0, 1) * 255));
+}
+
+/// Element k - 1 is the smallest linear value that `quantizeSrgb` maps to
+/// k or more. Bisecting on the bit patterns of positive floats, which sort
+/// like integers, makes the table agree with `quantizeSrgb` exactly.
+const srgb8_thresholds: [255]f32 = blk: {
+    @setEvalBranchQuota(20_000_000);
+    var t: [255]f32 = undefined;
+    for (&t, 1..) |*e, k| {
+        var lo: u32 = 0;
+        var hi: u32 = @bitCast(@as(f32, 1));
+        while (hi - lo > 1) {
+            const mid = lo + (hi - lo) / 2;
+            if (quantizeSrgb(@bitCast(mid)) >= k) hi = mid else lo = mid;
+        }
+        e.* = @bitCast(hi);
+    }
+    break :blk t;
+};
+
+test "linearToSrgb8 matches linearToSrgb rounded" {
+    var prng: std.Random.DefaultPrng = .init(1);
+    const random = prng.random();
+    for (0..200_000) |_| {
+        const v = random.float(f32) * 1.2 - 0.1;
+        try std.testing.expectEqual(quantizeSrgb(v), linearToSrgb8(v));
+    }
+    // Every threshold and its neighbours, where a slip would show.
+    for (srgb8_thresholds) |th| {
+        const bits: u32 = @bitCast(th);
+        for ([_]u32{ bits - 1, bits, bits + 1 }) |b| try std.testing.expectEqual(quantizeSrgb(@bitCast(b)), linearToSrgb8(@bitCast(b)));
+    }
+    try std.testing.expectEqual(@as(u8, 0), linearToSrgb8(0));
+    try std.testing.expectEqual(@as(u8, 255), linearToSrgb8(1));
+    try std.testing.expectEqual(@as(u8, 255), linearToSrgb8(7.5));
+}
+
 const expectApprox = std.testing.expectApproxEqAbs;
 
 test "hex round-trips through linear light" {

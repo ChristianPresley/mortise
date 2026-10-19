@@ -169,7 +169,7 @@ pub fn toRgba8(c: Canvas, gpa: Allocator, tone: ToneMap) Allocator.Error![]u8 {
                 for (&rgb) |*v| v.* *= k;
             }
         }
-        for (rgb, 0..) |v, ch| out[i * 4 + ch] = quantize(color.linearToSrgb(v));
+        for (rgb, 0..) |v, ch| out[i * 4 + ch] = color.linearToSrgb8(v);
         out[i * 4 + 3] = quantize(a);
     }
     return out;

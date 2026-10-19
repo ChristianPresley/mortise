@@ -107,16 +107,7 @@ fn filterRows(gpa: Allocator, width: u32, height: u32, rgba: []const u8) Allocat
         const dst = out[y * (stride + 1) ..][0 .. stride + 1];
         var best_score: u64 = std.math.maxInt(u64);
         inline for (comptime std.enums.values(Filter)) |f| {
-            var score: u64 = 0;
-            for (0..stride) |i| {
-                const a: u8 = if (i >= 4) row[i - 4] else 0;
-                const b = prev[i];
-                const c: u8 = if (i >= 4) prev[i - 4] else 0;
-                const v = row[i] -% predict(f, a, b, c);
-                candidate[i] = v;
-                // Treat bytes as signed so small negative residues score low.
-                score += @abs(@as(i8, @bitCast(v)));
-            }
+            const score = filterRow(f, row, prev, candidate);
             if (score < best_score) {
                 best_score = score;
                 dst[0] = @intFromEnum(f);
@@ -125,6 +116,60 @@ fn filterRows(gpa: Allocator, width: u32, height: u32, rgba: []const u8) Allocat
         }
     }
     return out;
+}
+
+/// Writes `row` filtered with `f` into `out` and returns its score: the sum
+/// of the residues read as signed bytes, so small negative ones score low.
+/// The bulk goes 16 bytes at a time; filtering is most of an encode's time.
+fn filterRow(comptime f: Filter, row: []const u8, prev: []const u8, out: []u8) u64 {
+    const n = 16;
+    const V = @Vector(n, u8);
+    var score: u64 = 0;
+    // The first pixel has no left neighbour.
+    for (0..@min(4, row.len)) |i| {
+        const v = row[i] -% predict(f, 0, prev[i], 0);
+        out[i] = v;
+        score += @abs(@as(i8, @bitCast(v)));
+    }
+    var i: usize = 4;
+    while (i + n <= row.len) : (i += n) {
+        const a: V = row[i - 4 ..][0..n].*;
+        const b: V = prev[i..][0..n].*;
+        const c: V = prev[i - 4 ..][0..n].*;
+        const x: V = row[i..][0..n].*;
+        const v = x -% predictVector(f, a, b, c);
+        out[i..][0..n].* = v;
+        const mag: @Vector(n, u16) = @abs(@as(@Vector(n, i8), @bitCast(v)));
+        score += @reduce(.Add, mag);
+    }
+    while (i < row.len) : (i += 1) {
+        const v = row[i] -% predict(f, row[i - 4], prev[i], prev[i - 4]);
+        out[i] = v;
+        score += @abs(@as(i8, @bitCast(v)));
+    }
+    return score;
+}
+
+/// `predict` for 16 bytes at once.
+fn predictVector(comptime f: Filter, a: @Vector(16, u8), b: @Vector(16, u8), c: @Vector(16, u8)) @Vector(16, u8) {
+    const W = @Vector(16, i16);
+    return switch (f) {
+        .none => @splat(0),
+        .sub => a,
+        .up => b,
+        .average => @intCast((@as(@Vector(16, u16), a) + b) >> @splat(1)),
+        .paeth => {
+            const ai: W = a;
+            const bi: W = b;
+            const ci: W = c;
+            const p = ai + bi - ci;
+            const pa = @abs(p - ai);
+            const pb = @abs(p - bi);
+            const pc = @abs(p - ci);
+            // As in `paeth`: a wins ties, then b.
+            return @select(u8, pa <= @min(pb, pc), a, @select(u8, pb <= pc, b, c));
+        },
+    };
 }
 
 fn predict(f: Filter, a: u8, b: u8, c: u8) u8 {
@@ -460,6 +505,34 @@ test "paeth predictor matches the specification" {
     try testing.expectEqual(@as(u8, 20), paeth(10, 20, 9));
     try testing.expectEqual(@as(u8, 20), paeth(10, 30, 20));
     try testing.expectEqual(@as(u8, 10), paeth(10, 12, 30));
+}
+
+test "vector filtering matches byte-at-a-time filtering" {
+    var prng: std.Random.DefaultPrng = .init(7);
+    const random = prng.random();
+    var row: [4 * 37]u8 = undefined;
+    var prev: [4 * 37]u8 = undefined;
+    var got: [4 * 37]u8 = undefined;
+    for (0..50) |_| {
+        random.bytes(&row);
+        random.bytes(&prev);
+        // Widths around the vector size, including its multiples and tails.
+        for ([_]usize{ 1, 3, 4, 5, 8, 37 }) |w| {
+            const stride = w * 4;
+            inline for (comptime std.enums.values(Filter)) |f| {
+                var want_score: u64 = 0;
+                const score = filterRow(f, row[0..stride], prev[0..stride], got[0..stride]);
+                for (0..stride) |i| {
+                    const a: u8 = if (i >= 4) row[i - 4] else 0;
+                    const c: u8 = if (i >= 4) prev[i - 4] else 0;
+                    const v = row[i] -% predict(f, a, prev[i], c);
+                    try testing.expectEqual(v, got[i]);
+                    want_score += @abs(@as(i8, @bitCast(v)));
+                }
+                try testing.expectEqual(want_score, score);
+            }
+        }
+    }
 }
 
 /// A PNG with the given header fields, extra chunks before IDAT, and raw

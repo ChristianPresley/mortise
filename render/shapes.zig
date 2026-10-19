@@ -243,17 +243,55 @@ pub fn polyline(c: Canvas, points: []const Point, width: f32, closed: bool, pain
     if (points.len < 2) return;
     const Ctx = struct { pts: []const Point, hw: f32, closed: bool };
     const hw = width / 2;
-    const bb = boxOf(points);
-    shade(c, bounds(c, bb[0].x - hw, bb[0].y - hw, bb[1].x + hw, bb[1].y + hw), paint, Ctx{ .pts = points, .hw = hw, .closed = closed }, struct {
+    const n = if (closed) points.len else points.len - 1;
+    const ctx: Ctx = .{ .pts = points, .hw = hw, .closed = closed };
+    const sdf = struct {
         fn f(k: Ctx, p: Point) f32 {
             var d: f32 = std.math.inf(f32);
-            const n = if (k.closed) k.pts.len else k.pts.len - 1;
-            for (0..n) |i| {
+            const count = if (k.closed) k.pts.len else k.pts.len - 1;
+            for (0..count) |i| {
                 d = @min(d, segmentSdf(p, k.pts[i], k.pts[(i + 1) % k.pts.len], k.hw, .round));
             }
             return d;
         }
-    }.f);
+    }.f;
+    const bb = boxOf(points);
+    const all = bounds(c, bb[0].x - hw, bb[0].y - hw, bb[1].x + hw, bb[1].y + hw);
+    // A long outline's box is mostly empty, so each row only visits the
+    // pixels within reach of a segment. Pixels outside every segment's own
+    // box have no coverage, so the result is the same as shading `all`.
+    var segs: [32]Bounds = undefined;
+    if (n > segs.len) return shade(c, all, paint, ctx, sdf);
+    for (segs[0..n], 0..) |*s, i| {
+        const a = points[i];
+        const b = points[(i + 1) % points.len];
+        s.* = bounds(c, @min(a.x, b.x) - hw, @min(a.y, b.y) - hw, @max(a.x, b.x) + hw, @max(a.y, b.y) + hw);
+    }
+    var y = all.y0;
+    while (y < all.y1) : (y += 1) {
+        // The row's spans, sorted by start; few enough to insertion-sort.
+        var spans: [32][2]i32 = undefined;
+        var len: usize = 0;
+        for (segs[0..n]) |s| {
+            if (y < s.y0 or y >= s.y1 or s.x0 >= s.x1) continue;
+            var j = len;
+            while (j > 0 and spans[j - 1][0] > s.x0) : (j -= 1) spans[j] = spans[j - 1];
+            spans[j] = .{ s.x0, s.x1 };
+            len += 1;
+        }
+        // Merged, so no pixel is blended twice; left to right, as `shade` does.
+        var next: i32 = all.x0;
+        for (spans[0..len]) |sp| {
+            var x = @max(sp[0], next);
+            while (x < sp[1]) : (x += 1) {
+                const p: Point = .{ .x = @as(f32, @floatFromInt(x)) + 0.5, .y = @as(f32, @floatFromInt(y)) + 0.5 };
+                const cov = std.math.clamp(0.5 - sdf(ctx, p), 0, 1);
+                if (cov <= 0) continue;
+                c.blend(x, y, paint.fill.at(p), cov * paint.opacity, paint.blend);
+            }
+            next = @max(next, sp[1]);
+        }
+    }
 }
 
 /// Fills a closed polygon using the nonzero winding rule, so
@@ -261,7 +299,55 @@ pub fn polyline(c: Canvas, points: []const Point, width: f32, closed: bool, pain
 pub fn polygon(c: Canvas, points: []const Point, paint: Paint) void {
     if (points.len < 3) return;
     const bb = boxOf(points);
-    shade(c, bounds(c, bb[0].x, bb[0].y, bb[1].x, bb[1].y), paint, points, polygonSdf);
+    const all = bounds(c, bb[0].x, bb[0].y, bb[1].x, bb[1].y);
+    // Only pixels within reach of an edge are partly covered. Between those
+    // spans no edge crosses the row, so a whole run is inside or outside,
+    // and one winding test settles it: the result is the same as shading
+    // `all` pixel by pixel.
+    var edges: [32]Bounds = undefined;
+    if (points.len > edges.len) return shade(c, all, paint, points, polygonSdf);
+    for (edges[0..points.len], 0..) |*e, i| {
+        const a = points[i];
+        const b = points[(i + 1) % points.len];
+        e.* = bounds(c, @min(a.x, b.x), @min(a.y, b.y), @max(a.x, b.x), @max(a.y, b.y));
+    }
+    var y = all.y0;
+    while (y < all.y1) : (y += 1) {
+        var spans: [32][2]i32 = undefined;
+        var len: usize = 0;
+        for (edges[0..points.len]) |e| {
+            if (y < e.y0 or y >= e.y1 or e.x0 >= e.x1) continue;
+            var j = len;
+            while (j > 0 and spans[j - 1][0] > e.x0) : (j -= 1) spans[j] = spans[j - 1];
+            spans[j] = .{ e.x0, e.x1 };
+            len += 1;
+        }
+        var x = all.x0;
+        var k: usize = 0;
+        while (x < all.x1) {
+            // Skip spans already passed.
+            while (k < len and spans[k][1] <= x) k += 1;
+            const near = k < len and spans[k][0] <= x;
+            const run_end = if (near) @min(spans[k][1], all.x1) else if (k < len) @min(spans[k][0], all.x1) else all.x1;
+            if (near) {
+                while (x < run_end) : (x += 1) {
+                    const p: Point = .{ .x = @as(f32, @floatFromInt(x)) + 0.5, .y = @as(f32, @floatFromInt(y)) + 0.5 };
+                    const cov = std.math.clamp(0.5 - polygonSdf(points, p), 0, 1);
+                    if (cov <= 0) continue;
+                    c.blend(x, y, paint.fill.at(p), cov * paint.opacity, paint.blend);
+                }
+            } else {
+                const first: Point = .{ .x = @as(f32, @floatFromInt(x)) + 0.5, .y = @as(f32, @floatFromInt(y)) + 0.5 };
+                if (polygonSdf(points, first) < 0) {
+                    while (x < run_end) : (x += 1) {
+                        const p: Point = .{ .x = @as(f32, @floatFromInt(x)) + 0.5, .y = first.y };
+                        c.blend(x, y, paint.fill.at(p), paint.opacity, paint.blend);
+                    }
+                }
+                x = run_end;
+            }
+        }
+    }
 }
 
 fn polygonSdf(pts: []const Point, p: Point) f32 {
@@ -369,6 +455,64 @@ test "line caps" {
     try testing.expectEqual(@as(f32, 0), alphaAt(c, 3, 2));
     line(c, .{ .x = 5, .y = 2.5 }, .{ .x = 15, .y = 2.5 }, 3, .round, .solid(.white));
     try testing.expect(alphaAt(c, 4, 2) > 0.9);
+}
+
+test "polyline draws the same pixels as shading its whole box" {
+    const Ctx = struct { pts: []const Point, hw: f32, closed: bool };
+    const ref = struct {
+        fn f(k: Ctx, p: Point) f32 {
+            var d: f32 = std.math.inf(f32);
+            const count = if (k.closed) k.pts.len else k.pts.len - 1;
+            for (0..count) |i| d = @min(d, segmentSdf(p, k.pts[i], k.pts[(i + 1) % k.pts.len], k.hw, .round));
+            return d;
+        }
+    }.f;
+    // A chamfered frame with overlapping joins, a zigzag, and one that runs
+    // off the canvas.
+    const shapes_to_draw = [_]struct { pts: []const Point, closed: bool }{
+        .{ .pts = &.{ .{ .x = 10, .y = 4 }, .{ .x = 56, .y = 4 }, .{ .x = 56, .y = 30 }, .{ .x = 50, .y = 36 }, .{ .x = 4, .y = 36 }, .{ .x = 4, .y = 10 } }, .closed = true },
+        .{ .pts = &.{ .{ .x = 2, .y = 2 }, .{ .x = 20, .y = 30 }, .{ .x = 22, .y = 3 }, .{ .x = 40, .y = 38 } }, .closed = false },
+        .{ .pts = &.{ .{ .x = -10, .y = 20 }, .{ .x = 70, .y = 21 }, .{ .x = 30, .y = 50 } }, .closed = false },
+    };
+    for (shapes_to_draw) |s| for ([_]f32{ 1, 3.5, 9 }) |width| {
+        var got = try Canvas.init(testing.allocator, 60, 40);
+        defer got.deinit(testing.allocator);
+        var want = try Canvas.init(testing.allocator, 60, 40);
+        defer want.deinit(testing.allocator);
+        // A translucent paint, so a pixel blended twice would show.
+        const paint: Paint = .{ .fill = .{ .solid = .white }, .opacity = 0.5 };
+        polyline(got, s.pts, width, s.closed, paint);
+        const hw = width / 2;
+        const bb = boxOf(s.pts);
+        shade(want, bounds(want, bb[0].x - hw, bb[0].y - hw, bb[1].x + hw, bb[1].y + hw), paint, Ctx{ .pts = s.pts, .hw = hw, .closed = s.closed }, ref);
+        try testing.expectEqualSlices(Canvas.Px, want.pixels, got.pixels);
+    };
+}
+
+test "polygon fills the same pixels as shading its whole box" {
+    var star: [5]Point = undefined;
+    for (&star, 0..) |*p, i| {
+        const a = -std.math.pi / 2.0 + @as(f32, @floatFromInt(i * 2)) * std.math.tau / 5.0;
+        p.* = Point.polar(.{ .x = 30, .y = 20 }, 19, a);
+    }
+    const polys = [_][]const Point{
+        &star,
+        &.{ .{ .x = 10, .y = 4 }, .{ .x = 56, .y = 4 }, .{ .x = 56, .y = 30 }, .{ .x = 50, .y = 36 }, .{ .x = 4, .y = 36 }, .{ .x = 4, .y = 10 } },
+        &.{ .{ .x = -8, .y = 3.3 }, .{ .x = 70, .y = 18.7 }, .{ .x = 12.2, .y = 47 } },
+        &.{ .{ .x = 5, .y = 5 }, .{ .x = 5.4, .y = 5.2 }, .{ .x = 5.1, .y = 5.9 } },
+    };
+    const stops = [_]Stop{ .{ .t = 0, .color = .black }, .{ .t = 1, .color = .white } };
+    const paint: Paint = .{ .fill = .{ .linear = .{ .from = .{ .x = 0, .y = 0 }, .to = .{ .x = 60, .y = 40 }, .stops = &stops } }, .opacity = 0.5 };
+    for (polys) |pts| {
+        var got = try Canvas.init(testing.allocator, 60, 40);
+        defer got.deinit(testing.allocator);
+        var want = try Canvas.init(testing.allocator, 60, 40);
+        defer want.deinit(testing.allocator);
+        polygon(got, pts, paint);
+        const bb = boxOf(pts);
+        shade(want, bounds(want, bb[0].x, bb[0].y, bb[1].x, bb[1].y), paint, pts, polygonSdf);
+        try testing.expectEqualSlices(Canvas.Px, want.pixels, got.pixels);
+    }
 }
 
 test "polygon uses nonzero winding" {
