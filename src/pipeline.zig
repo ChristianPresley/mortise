@@ -498,6 +498,8 @@ pub fn buildWith(arena: Allocator, src: SiteDir, options: Options, diag: *Diagno
     // Pages load in parallel once every file is sorted; everything else
     // is quick and happens here in order.
     var jobs: std.ArrayList(LoadJob) = .empty;
+    var render_jobs: std.ArrayList(assets.Job) = .empty;
+    var render_paths: std.ArrayList([]const u8) = .empty;
     for (listing.files) |path| {
         if (std.mem.eql(u8, path, config_path)) continue;
         if (std.mem.startsWith(u8, path, "_posts/")) {
@@ -510,7 +512,8 @@ pub fn buildWith(arena: Allocator, src: SiteDir, options: Options, diag: *Diagno
             continue;
         }
         if (assets.isSpec(path)) {
-            try addRendered(&b, &statics, path, assets.outputStem(path), try b.read(path));
+            try render_jobs.append(arena, .{ .name = assets.outputStem(path), .source = try b.read(path) });
+            try render_paths.append(arena, path);
             continue;
         }
         if (collections.find(b.collections, path)) |c| {
@@ -533,6 +536,8 @@ pub fn buildWith(arena: Allocator, src: SiteDir, options: Options, diag: *Diagno
             try statics.append(arena, .{ .path = path, .source = path, .data = .copy });
         }
     }
+    // Render specs are independent, so they draw concurrently.
+    try renderSpecs(&b, &statics, render_jobs.items, render_paths.items);
     loadPages(&b, jobs.items);
     // The first failure in listing order is the one reported, whichever
     // worker met it first.
@@ -1317,17 +1322,22 @@ fn nestedLine(data: []const u8, parent: []const u8, key: []const u8) usize {
 /// Renders a theme's images into `/theme/`, except those the site
 /// replaces with its own file.
 fn addThemeAssets(b: *Builder, outputs: *std.ArrayList(Output), theme: ThemeLayer, line: usize) Error!void {
+    var jobs: std.ArrayList(assets.Job) = .empty;
+    var names: std.ArrayList([]const u8) = .empty;
     for (theme.assets) |a| {
         const name = try std.fmt.allocPrint(b.arena, "{s}/{s}", .{ themes.assets_dir, a.name });
         const png = try std.fmt.allocPrint(b.arena, "{s}.png", .{name});
         if (hasOutput(outputs.items, png)) continue;
-        var d: assets.Diagnostic = .{};
-        const out = assets.renderCached(b.options.render_cache, b.arena, b.src.io, name, a.spec, &d) catch |err| switch (err) {
-            error.OutOfMemory => return error.OutOfMemory,
-            error.InvalidSpec => return b.fail(config_path, line, "theme '{s}', asset '{s}', line {d}: {s}", .{ theme.name, a.name, d.line, d.message }),
-        };
-        try appendRendered(b, outputs, config_path, name, out);
+        try jobs.append(b.arena, .{ .name = name, .source = a.spec });
+        try names.append(b.arena, a.name);
     }
+    assets.renderMany(b.options.render_cache, b.arena, b.src.io, jobs.items) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.InvalidSpec => for (jobs.items, names.items) |j, name| {
+            if (j.diag.message.len > 0) return b.fail(config_path, line, "theme '{s}', asset '{s}', line {d}: {s}", .{ theme.name, name, j.diag.line, j.diag.message });
+        } else return b.fail(config_path, line, "theme '{s}': cannot render an asset", .{theme.name}),
+    };
+    for (jobs.items) |j| try appendRendered(b, outputs, config_path, j.name, j.result);
 }
 
 /// Site-wide settings for `{{ seo }}` and social cards.
@@ -1500,42 +1510,51 @@ fn iconConfig(b: *Builder, config_fields: frontmatter.Map) Error!?icons.Config {
 /// files the site has itself.
 fn addIcons(b: *Builder, outputs: *std.ArrayList(Output), c: icons.Config) Error!void {
     const arena = b.arena;
-    if (!hasOutput(outputs.items, icons.ico_path)) {
+    // Every size draws concurrently: the .ico's images first, then the PNGs.
+    const want_ico = !hasOutput(outputs.items, icons.ico_path);
+    var jobs: std.ArrayList(assets.Job) = .empty;
+    if (want_ico) for (icons.ico_sizes) |size| {
+        try jobs.append(arena, .{ .name = try std.fmt.allocPrint(arena, "favicon-{d}", .{size}), .source = try icons.spec(arena, c, size) });
+    };
+    const first_png = jobs.items.len;
+    for (icons.pngs) |p| {
+        if (hasOutput(outputs.items, p.path)) continue;
+        try jobs.append(arena, .{ .name = p.path, .source = try icons.spec(arena, c, p.size) });
+    }
+    assets.renderMany(b.options.render_cache, arena, b.src.io, jobs.items) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.InvalidSpec => {
+            const msg = for (jobs.items) |j| {
+                if (j.diag.message.len > 0) break j.diag.message;
+            } else "invalid spec";
+            return b.fail(config_path, fieldLine(try b.read(config_path), "icons"), "cannot draw the site icon: {s}", .{msg});
+        },
+    };
+    if (want_ico) {
         var ico_images: [icons.ico_sizes.len]@import("render").icon.IcoImage = undefined;
-        for (icons.ico_sizes, &ico_images) |size, *im| {
-            const name = try std.fmt.allocPrint(arena, "favicon-{d}", .{size});
-            im.* = .{ .size = size, .png = (try renderIcon(b, name, try icons.spec(arena, c, size))).png };
-        }
+        for (icons.ico_sizes, &ico_images, jobs.items[0..first_png]) |size, *im, j| im.* = .{ .size = size, .png = j.result.png };
         const ico = try @import("render").icon.ico(arena, &ico_images);
         try outputs.append(arena, .{ .path = icons.ico_path, .source = config_path, .data = .{ .bytes = ico } });
     }
-    for (icons.pngs) |p| {
-        if (hasOutput(outputs.items, p.path)) continue;
-        const out = try renderIcon(b, p.path, try icons.spec(arena, c, p.size));
-        try outputs.append(arena, .{ .path = p.path, .source = config_path, .data = .{ .bytes = out.png } });
+    for (jobs.items[first_png..]) |j| {
+        try outputs.append(arena, .{ .path = j.name, .source = config_path, .data = .{ .bytes = j.result.png } });
     }
     if (!hasOutput(outputs.items, icons.manifest_path)) {
         try outputs.append(arena, .{ .path = icons.manifest_path, .source = config_path, .data = .{ .bytes = try icons.manifest(arena, c, b.baseurl) } });
     }
 }
 
-fn renderIcon(b: *Builder, name: []const u8, spec: []const u8) Error!assets.Rendered {
-    var d: assets.Diagnostic = .{};
-    return assets.renderCached(b.options.render_cache, b.arena, b.src.io, name, spec, &d) catch |err| switch (err) {
-        error.OutOfMemory => error.OutOfMemory,
-        error.InvalidSpec => b.fail(config_path, fieldLine(try b.read(config_path), "icons"), "cannot draw the site icon: {s}", .{d.message}),
-    };
-}
-
-/// Renders the spec `spec` read from `source` into `NAME.png`, plus
-/// `NAME.css` for kinds that need it.
-fn addRendered(b: *Builder, outputs: *std.ArrayList(Output), source: []const u8, name: []const u8, spec: []const u8) Error!void {
-    var d: assets.Diagnostic = .{};
-    const out = assets.renderCached(b.options.render_cache, b.arena, b.src.io, name, spec, &d) catch |err| switch (err) {
+/// Renders each job, read from the file at the same index of `sources`,
+/// into `NAME.png`, plus `NAME.css` for kinds that need it. The first bad
+/// spec in listing order is the one reported.
+fn renderSpecs(b: *Builder, outputs: *std.ArrayList(Output), jobs: []assets.Job, sources: []const []const u8) Error!void {
+    assets.renderMany(b.options.render_cache, b.arena, b.src.io, jobs) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
-        error.InvalidSpec => return b.fail(source, d.line, "{s}", .{d.message}),
+        error.InvalidSpec => for (jobs, sources) |j, source| {
+            if (j.diag.message.len > 0) return b.fail(source, j.diag.line, "{s}", .{j.diag.message});
+        } else return b.fail("", 0, "cannot render a spec", .{}),
     };
-    try appendRendered(b, outputs, source, name, out);
+    for (jobs, sources) |j, source| try appendRendered(b, outputs, source, j.name, j.result);
 }
 
 fn appendRendered(b: *Builder, outputs: *std.ArrayList(Output), source: []const u8, name: []const u8, out: assets.Rendered) Error!void {
