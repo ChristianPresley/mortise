@@ -266,6 +266,8 @@ pub const Page = struct {
     reads_collections: bool = false,
     /// Whether the page's templates output `seo`, so it gets a card.
     uses_seo: bool = false,
+    /// Whether the page loads `markdown.copy_script` for its copy buttons.
+    uses_copy_script: bool = false,
     /// The page's search sections, kept from the render that produced
     /// `output` (see search.zig).
     search_sections: []const search.Section = &.{},
@@ -305,6 +307,8 @@ const Builder = struct {
     future: bool = false,
     /// Whether a template used by the current page reads `seo`.
     reads_seo: bool = false,
+    /// Whether the current page loads the copy-button script.
+    uses_copy_script: bool = false,
     seo_config: SeoConfig = .{},
     /// The `seo` head tags of the page being rendered.
     current_seo: []const u8 = "",
@@ -1140,6 +1144,18 @@ fn addComponentsCss(b: *Builder, outputs: *std.ArrayList(Output), config_fields:
     try outputs.append(b.arena, .{ .path = components_css_path, .source = config_path, .data = .{ .bytes = markdown.components_css } });
 }
 
+/// Writes the copy-button script when a page loads it, unless the site has
+/// its own file at that path.
+fn addCopyScript(b: *Builder, outputs: *std.ArrayList(Output), pages: []const Page) Error!void {
+    // Generated pages, such as tag pages, render after the pages and leave
+    // their answer in the builder.
+    const used = b.uses_copy_script or for (pages) |p| {
+        if (p.uses_copy_script) break true;
+    } else false;
+    if (!used or hasOutput(outputs.items, markdown.copy_script_path)) return;
+    try outputs.append(b.arena, .{ .path = markdown.copy_script_path, .source = config_path, .data = .{ .bytes = markdown.copy_script } });
+}
+
 /// Writes `/theme.css`: the design tokens, then the stylesheet of the
 /// theme named by `theme:` in the config, unless the site has its own
 /// file at that path.
@@ -1686,6 +1702,7 @@ fn finish(b: *Builder, config_fields: frontmatter.Map, all_pages: []Page, static
             try b.deps.appendSlice(arena, p.body_sources);
             b.reads_collections = p.body_reads_collections;
             b.reads_seo = false;
+            b.uses_copy_script = false;
             b.page_assets = .empty;
             try b.page_assets.appendSlice(arena, p.body_assets);
             b.page_variants = .empty;
@@ -1695,6 +1712,7 @@ fn finish(b: *Builder, config_fields: frontmatter.Map, all_pages: []Page, static
             p.sources = b.deps.items;
             p.reads_collections = b.reads_collections;
             p.uses_seo = b.reads_seo;
+            p.uses_copy_script = b.uses_copy_script;
             p.search_sections = if (has_search) try searchSections(arena, p) else &.{};
             p.assets_used = b.page_assets.items;
             p.image_variants = b.page_variants.items;
@@ -1719,6 +1737,7 @@ fn finish(b: *Builder, config_fields: frontmatter.Map, all_pages: []Page, static
     try addTaxonomyPages(b, &outputs, taxonomy_index, term_pages, taxonomy_pages);
     try addFingerprinted(b, &outputs, pages, b.page_assets.items);
     try addComponentsCss(b, &outputs, config_fields, pages);
+    try addCopyScript(b, &outputs, pages);
     try addThemeCss(b, &outputs);
     try addAliases(b, &outputs, config_fields, pages);
     if (icon_config) |c| try addIcons(b, &outputs, c);
@@ -3669,7 +3688,9 @@ fn renderPage(b: *Builder, p: *const Page) Error![]const u8 {
         layout_name = layout.parent;
     }
     if (b.markdown_options.copy_buttons and std.mem.indexOf(u8, content, "class=\"mt-copy\"") != null) {
-        content = try insertBeforeBodyEnd(b.arena, content, markdown.copy_script);
+        const tag = try std.fmt.allocPrint(arena, "<script src=\"{s}/{s}\" defer></script>\n", .{ b.baseurl, markdown.copy_script_path });
+        content = try insertBeforeBodyEnd(b.arena, content, tag);
+        b.uses_copy_script = true;
     }
     if (!std.mem.endsWith(u8, p.out_path, ".html") and !std.mem.endsWith(u8, p.out_path, ".htm")) return content;
     return images.rewrite(arena, content, p.url, b.baseurl, b.images, .{ .ctx = b, .infoFn = imageInfo }, &b.page_variants);
@@ -5062,10 +5083,12 @@ test "heading anchors and copy buttons, on by default" {
     const a = try t.output("a/index.html");
     try testing.expect(std.mem.indexOf(u8, a, "<h2 id=\"install\">Install <a class=\"mt-anchor\" href=\"#install\"") != null);
     try testing.expect(std.mem.indexOf(u8, a, "<pre><button type=\"button\" class=\"mt-copy\" hidden>Copy</button><code class=\"language-sh\">") != null);
-    // The copy script goes before </body>, once, and only where needed.
-    try testing.expect(std.mem.endsWith(u8, a, "</script>\n</body></html>"));
-    try testing.expectEqual(@as(usize, 1), std.mem.count(u8, a, "<script>"));
-    try testing.expect(std.mem.indexOf(u8, try t.output("b/index.html"), "<script>") == null);
+    // The copy script loads before </body>, once, and only where needed,
+    // from one file rather than inline.
+    try testing.expect(std.mem.endsWith(u8, a, "<script src=\"/mortise-copy.js\" defer></script>\n</body></html>"));
+    try testing.expectEqual(@as(usize, 1), std.mem.count(u8, a, "<script"));
+    try testing.expect(std.mem.indexOf(u8, try t.output("b/index.html"), "<script") == null);
+    try testing.expectEqualStrings(markdown.copy_script, try t.output("mortise-copy.js"));
 
     var t2: TestSite = try .init(&.{
         .{ "_config.yml", "heading_anchors: false\ncopy_code: false\n" },
