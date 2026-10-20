@@ -48,7 +48,7 @@ Most of that time goes to copying the 27 MB debug binary and starting it.
 ```sh
 mortise new my-site [--starter blog|docs|portfolio]  # create a starter site
 mortise build [SITE_DIR] [--drafts] [--future] [--strict] [--in-place]  # build SITE_DIR (default .) into SITE_DIR/_site
-mortise check [SITE_DIR] [--drafts]              # report broken links and accessibility problems
+mortise check [SITE_DIR] [--drafts] [--external]  # report broken links, unused files and accessibility problems
 mortise serve [SITE_DIR] [--port N] [--drafts] [--future]  # dev server on http://localhost:4000/
 mortise version
 ```
@@ -68,8 +68,32 @@ build before anything is written.
 the site must name an output that exists, and each `#fragment` must match
 an `id` on the target page. Problems are printed as
 `OUTPUT:LINE: broken link "URL": REASON (from SOURCE)` and the command
-exits with status 1, so it can gate CI. Links with a scheme (`https:`,
-`mailto:`) are not fetched.
+exits with status 1, so it can gate CI. Links to the site's own `url`
+count as internal.
+
+It also reports unused files: files copied unchanged from the site's
+sources that no page or stylesheet refers to (through `href`, `src`,
+`srcset`, `poster`, `<meta content>`, CSS `url()` or `@import`). Files at
+the top of the site, such as `robots.txt`, `CNAME` or `favicon.ico`, are
+never reported, since hosts and browsers fetch them by name.
+
+Other `http:` and `https:` links are fetched only with `--external`. Each
+distinct URL is requested once, eight at a time, reading only the
+response's headers; a status of 400 or more after up to five redirects,
+a network error, or no answer within 15 seconds is reported as
+`OUTPUT:LINE: broken external link "URL": REASON`.
+
+To leave links or files alone, list patterns under `check: ignore:` in
+`_config.yml`. `*` matches any run of characters; file patterns may start
+with `/` or not:
+
+```yaml
+check:
+  ignore:
+    - https://twitter.com/*      # answers bots with errors
+    - http://localhost:*
+    - /downloads/*               # linked from elsewhere
+```
 
 The same pass lints every page for accessibility problems found in the
 markup: a missing `lang` or `<title>`, images without `alt`, links and
@@ -347,7 +371,7 @@ See the [Markdown subset](docs/markdown.md),
 | `src/fonts.zig`       | TrueType and WOFF font subsetting                 |
 | `src/watch.zig`       | Native file watchers                              |
 | `src/server.zig`      | Dev server and Server-Sent Events live reload     |
-| `src/check.zig`       | `mortise check` link and anchor checker           |
+| `src/check.zig`       | `mortise check` link, anchor and unused-file checker |
 | `src/git.zig`         | Git history reader for `git_dates`                |
 | `src/a11y.zig`        | Accessibility lint run by `mortise check`         |
 | `src/main.zig`        | Command-line entry point                          |

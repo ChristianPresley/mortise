@@ -386,10 +386,20 @@ job:
 
 ## Link checking
 
-- `mortise check` checks internal links only. External URLs are skipped,
-  not fetched.
-- Only `href` and `src` attributes are read; `srcset`, CSS `url()` and
-  links built by JavaScript are not checked.
+- External links are fetched only with `--external`, need network
+  access, and are judged by their status alone: a page that answers 200
+  with "not found" text passes, and a site that refuses automated
+  requests (with 403 or 429) fails until it is ignored. Results can
+  change from run to run. HTTPS uses the standard library's TLS and the
+  system's root certificates; proxies are not used.
+- Only `href` and `src` are checked as links. `srcset`, `poster`,
+  `<meta content>`, CSS `url()` and `@import` only count toward whether
+  a file is used, and links built by JavaScript are not seen.
+- A file is unused when no HTML page or stylesheet refers to it. Files
+  referred to only from scripts, JSON, feeds or other text files are
+  reported; ignore them with `check: ignore:`. Generated files (rendered
+  images, `theme.css`, the search index) are never reported, nor are
+  files at the top of the site.
 - An HTML scanner, not a full parser, finds links: it skips comments and
   the bodies of `<script>` and `<style>`, and decodes only the character
   references Mortise writes (`&amp;`, `&quot;`, `&#39;`, `&lt;`, `&gt;`).
