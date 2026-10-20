@@ -17,7 +17,8 @@
 //!
 //! Rendering takes from milliseconds to seconds, so the dev server keeps a
 //! `Cache` keyed by each spec's contents: editing a page never re-renders,
-//! and editing a spec re-renders only that spec.
+//! and editing a spec re-renders only that spec. `mortise build` keeps the
+//! same cache on disk, in `.mortise-cache/render/` inside the site.
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
@@ -552,10 +553,28 @@ pub fn parseColor(text: []const u8) ?Color {
 /// Rendered assets kept across builds, keyed by spec contents, so a dev
 /// server renders each version of a spec once, plus resized site images.
 /// Owns its memory.
+///
+/// With `openDisk`, rendered assets are also kept in files, so that one
+/// `mortise build` finds what the last one drew.
 pub const Cache = struct {
     gpa: Allocator,
     entries: std.AutoHashMapUnmanaged(u64, Rendered) = .empty,
     images: images.Cache,
+    disk: ?Disk = null,
+
+    const Disk = struct {
+        /// The site directory, borrowed.
+        site: std.Io.Dir,
+        /// `disk_dir_path`, opened once it exists: a site that draws
+        /// nothing gets no cache folder.
+        dir: ?std.Io.Dir,
+        io: std.Io,
+        /// Mixed into every file's key, so that a different renderer, which
+        /// may draw the same spec differently, never reads this one's files.
+        salt: u64,
+        /// Keys read or written this build; `pruneDisk` keeps only these.
+        used: std.AutoHashMapUnmanaged(u64, void) = .empty,
+    };
 
     pub fn init(gpa: Allocator) Cache {
         return .{ .gpa = gpa, .images = .init(gpa) };
@@ -569,27 +588,127 @@ pub const Cache = struct {
         }
         c.entries.deinit(c.gpa);
         c.images.deinit();
+        if (c.disk) |*d| {
+            d.used.deinit(c.gpa);
+            if (d.dir) |dir| dir.close(d.io);
+        }
         c.* = undefined;
+    }
+
+    /// Keeps rendered assets in `disk_dir_path` under `site` too, which is
+    /// created when the first one is stored. `site` must stay open while
+    /// the cache is used. `salt` should change whenever the renderer might
+    /// draw differently, such as a hash of the running program.
+    pub fn openDisk(c: *Cache, io: std.Io, site: std.Io.Dir, salt: u64) !void {
+        const dir = site.openDir(io, disk_dir_path, .{ .iterate = true }) catch |err| switch (err) {
+            error.FileNotFound => null,
+            else => return err,
+        };
+        c.disk = .{ .site = site, .dir = dir, .io = io, .salt = salt };
+    }
+
+    /// Deletes the files on disk that this build neither read nor wrote,
+    /// so the cache holds only what the site now draws. Call it after a
+    /// successful build only: a failed one may not have reached every spec.
+    pub fn pruneDisk(c: *Cache) !void {
+        const d = &(c.disk orelse return);
+        const dir = d.dir orelse return;
+        var it = dir.iterate();
+        while (try it.next(d.io)) |entry| {
+            const key = std.fmt.parseInt(u64, entry.name, 16) catch null;
+            if (entry.kind == .file and key != null and d.used.contains(key.?)) continue;
+            dir.deleteTree(d.io, entry.name) catch {};
+        }
     }
 
     /// The rendered asset for `source` under `name`, from the cache or
     /// freshly rendered. The result lives as long as the cache.
     pub fn get(c: *Cache, arena: Allocator, io: std.Io, name: []const u8, source: []const u8, diag: *Diagnostic) Error!Rendered {
-        var h: std.hash.Wyhash = .init(0);
-        h.update(name);
-        h.update(&.{0});
-        h.update(source);
-        const key = h.final();
-        if (c.entries.get(key)) |hit| return hit;
+        const key = cacheKey(name, source);
+        if (try c.lookup(key)) |hit| return hit;
         const fresh = try render(c.gpa, arena, io, name, source, diag);
+        try c.keep(key, fresh);
+        return fresh;
+    }
+
+    /// The entry for `key` from memory, else from disk (then remembered).
+    fn lookup(c: *Cache, key: u64) Allocator.Error!?Rendered {
+        if (c.entries.get(key)) |hit| return hit;
+        const d = &(c.disk orelse return null);
+        const file_key = d.salt ^ key;
+        try d.used.put(c.gpa, file_key, {});
+        var name_buf: [16]u8 = undefined;
+        const dir = d.dir orelse return null;
+        const bytes = dir.readFileAlloc(d.io, fileName(&name_buf, file_key), c.gpa, .limited(max_disk_entry)) catch return null;
+        defer c.gpa.free(bytes);
+        const parsed = decodeEntry(bytes) orelse return null;
+        const png = try c.gpa.dupe(u8, parsed.png);
+        errdefer c.gpa.free(png);
+        const css = if (parsed.css) |s| try c.gpa.dupe(u8, s) else null;
+        errdefer if (css) |s| c.gpa.free(s);
+        const hit: Rendered = .{ .png = png, .css = css };
+        try c.entries.put(c.gpa, key, hit);
+        return hit;
+    }
+
+    /// Takes ownership of `fresh` (allocated with the cache's allocator)
+    /// and writes it to disk when the cache has one. A failed write only
+    /// means the next build renders it again.
+    fn keep(c: *Cache, key: u64, fresh: Rendered) Allocator.Error!void {
         c.entries.put(c.gpa, key, fresh) catch |e| {
             c.gpa.free(fresh.png);
             if (fresh.css) |css| c.gpa.free(css);
             return e;
         };
-        return fresh;
+        const d = &(c.disk orelse return);
+        const file_key = d.salt ^ key;
+        try d.used.put(c.gpa, file_key, {});
+        const bytes = try encodeEntry(c.gpa, fresh);
+        defer c.gpa.free(bytes);
+        if (d.dir == null) d.dir = d.site.createDirPathOpen(d.io, disk_dir_path, .{ .open_options = .{ .iterate = true } }) catch return;
+        var name_buf: [16]u8 = undefined;
+        d.dir.?.writeFile(d.io, .{ .sub_path = fileName(&name_buf, file_key), .data = bytes }) catch {};
     }
 };
+
+/// Where `mortise build` keeps rendered assets, relative to the site. Like
+/// every directory starting with `.`, the build never reads it as content.
+pub const disk_dir_path = ".mortise-cache/render";
+
+/// Larger files in the cache directory are not ours; read them as a miss.
+const max_disk_entry = 256 << 20;
+
+fn fileName(buf: *[16]u8, key: u64) []const u8 {
+    return std.fmt.bufPrint(buf, "{x:0>16}", .{key}) catch unreachable;
+}
+
+/// A cache file: `MRC1`, the PNG's length and the stylesheet's length
+/// (all ones for none) as little-endian u32s, then the PNG and stylesheet.
+const entry_magic = "MRC1";
+const no_css = std.math.maxInt(u32);
+
+fn encodeEntry(gpa: Allocator, e: Rendered) Allocator.Error![]u8 {
+    const css_len: u32 = if (e.css) |s| @intCast(s.len) else no_css;
+    const css = e.css orelse "";
+    const out = try gpa.alloc(u8, 12 + e.png.len + css.len);
+    @memcpy(out[0..4], entry_magic);
+    std.mem.writeInt(u32, out[4..8], @intCast(e.png.len), .little);
+    std.mem.writeInt(u32, out[8..12], css_len, .little);
+    @memcpy(out[12..][0..e.png.len], e.png);
+    @memcpy(out[12 + e.png.len ..], css);
+    return out;
+}
+
+/// The entry in `bytes`, borrowing from it, or null when it is not one.
+fn decodeEntry(bytes: []const u8) ?Rendered {
+    if (bytes.len < 12 or !std.mem.eql(u8, bytes[0..4], entry_magic)) return null;
+    const png_len = std.mem.readInt(u32, bytes[4..8], .little);
+    const css_len = std.mem.readInt(u32, bytes[8..12], .little);
+    const rest = bytes[12..];
+    const want = @as(u64, png_len) + (if (css_len == no_css) 0 else css_len);
+    if (rest.len != want) return null;
+    return .{ .png = rest[0..png_len], .css = if (css_len == no_css) null else rest[png_len..] };
+}
 
 /// Renders with the cache when there is one, else into `arena`.
 pub fn renderCached(cache: ?*Cache, arena: Allocator, io: std.Io, name: []const u8, source: []const u8, diag: *Diagnostic) Error!Rendered {
@@ -613,7 +732,7 @@ pub fn renderMany(cache: ?*Cache, arena: Allocator, io: std.Io, jobs: []Job) Err
     var todo: std.ArrayList(Slot) = .empty;
     for (jobs) |*j| {
         const key = cacheKey(j.name, j.source);
-        if (cache) |c| if (c.entries.get(key)) |hit| {
+        if (cache) |c| if (try c.lookup(key)) |hit| {
             j.result = hit;
             continue;
         };
@@ -650,7 +769,7 @@ pub fn renderMany(cache: ?*Cache, arena: Allocator, io: std.Io, jobs: []Job) Err
         }
         const keep_gpa = if (cache) |c| c.gpa else arena;
         const kept: Rendered = .{ .png = try keep_gpa.dupe(u8, fresh.png), .css = if (fresh.css) |css| try keep_gpa.dupe(u8, css) else null };
-        if (cache) |c| try c.entries.put(c.gpa, slot.key, kept);
+        if (cache) |c| try c.keep(slot.key, kept);
         slot.job.result = kept;
     }
     if (failed) |e| return e;
@@ -740,4 +859,75 @@ test "the cache renders each spec once" {
     const b = try cache.get(arena.allocator(), testing.io, "a", "kind: reticle\nsize: 24\n", &diag);
     try testing.expect(b.png.ptr != a1.png.ptr);
     try testing.expectEqual(@as(u32, 2), cache.entries.count());
+}
+
+fn countFiles(dir: std.Io.Dir) !usize {
+    var n: usize = 0;
+    var it = dir.iterate();
+    while (try it.next(testing.io)) |_| n += 1;
+    return n;
+}
+
+test "the disk cache is reused by the next build, per program, and pruned" {
+    var tmp = testing.tmpDir(.{ .iterate = true });
+    defer tmp.cleanup();
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    var diag: Diagnostic = .{};
+    const spec = "kind: radar\nsize: 24\nframes: 2\n";
+
+    var first: Cache = .init(testing.allocator);
+    try first.openDisk(testing.io, tmp.dir, 1);
+    // Nothing drawn yet, so no folder.
+    try testing.expectError(error.FileNotFound, tmp.dir.access(testing.io, disk_dir_path, .{}));
+    const drawn = try first.get(arena.allocator(), testing.io, "r", spec, &diag);
+    try testing.expect(drawn.css != null);
+    const dir = first.disk.?.dir.?;
+    try testing.expectEqual(@as(usize, 1), try countFiles(dir));
+
+    // The next build reads it back instead of drawing, and pruning keeps it.
+    var second: Cache = .init(testing.allocator);
+    try second.openDisk(testing.io, tmp.dir, 1);
+    var jobs = [_]Job{.{ .name = "r", .source = spec }};
+    try renderMany(&second, arena.allocator(), testing.io, &jobs);
+    try testing.expectEqualSlices(u8, drawn.png, jobs[0].result.png);
+    try testing.expectEqualStrings(drawn.css.?, jobs[0].result.css.?);
+    try second.pruneDisk();
+    try testing.expectEqual(@as(usize, 1), try countFiles(dir));
+    second.deinit();
+
+    // A different program draws afresh; pruning drops the old file and
+    // anything else in the directory.
+    try dir.writeFile(testing.io, .{ .sub_path = "stray.txt", .data = "x" });
+    var third: Cache = .init(testing.allocator);
+    try third.openDisk(testing.io, tmp.dir, 2);
+    _ = try third.get(arena.allocator(), testing.io, "r", spec, &diag);
+    try testing.expectEqual(@as(usize, 3), try countFiles(dir));
+    try third.pruneDisk();
+    try testing.expectEqual(@as(usize, 1), try countFiles(dir));
+    third.deinit();
+
+    // A damaged file is a miss: the spec is drawn again and the file fixed.
+    var name_buf: [16]u8 = undefined;
+    const name = fileName(&name_buf, 2 ^ cacheKey("r", spec));
+    try dir.writeFile(testing.io, .{ .sub_path = name, .data = "MRC1 broken" });
+    var fourth: Cache = .init(testing.allocator);
+    defer fourth.deinit();
+    try fourth.openDisk(testing.io, tmp.dir, 2);
+    const again = try fourth.get(arena.allocator(), testing.io, "r", spec, &diag);
+    try testing.expectEqualSlices(u8, drawn.png, again.png);
+    const fixed = try dir.readFileAlloc(testing.io, name, arena.allocator(), .unlimited);
+    try testing.expectEqualSlices(u8, drawn.png, decodeEntry(fixed).?.png);
+    first.deinit();
+}
+
+test "cache entries round-trip with and without a stylesheet" {
+    for ([_]?[]const u8{ null, "", ".a{}" }) |css| {
+        const bytes = try encodeEntry(testing.allocator, .{ .png = "PNGDATA", .css = css });
+        defer testing.allocator.free(bytes);
+        const e = decodeEntry(bytes).?;
+        try testing.expectEqualStrings("PNGDATA", e.png);
+        if (css) |s| try testing.expectEqualStrings(s, e.css.?) else try testing.expect(e.css == null);
+        try testing.expect(decodeEntry(bytes[0 .. bytes.len - 1]) == null);
+    }
 }

@@ -208,6 +208,13 @@ planet animation). Animation frames render on every CPU core. `mortise
 serve` keeps every rendered image and only renders a spec again when that
 spec changes, so editing pages, layouts or styles never waits for it.
 
+`mortise build` keeps them on disk, in `.mortise-cache/render/` inside the
+site, and draws only specs that changed since the last build with the same
+`mortise` binary. The showcase builds in about 0.12 s with a warm cache
+instead of 0.7 s. Each build removes the cache files it no longer needs;
+deleting the folder forces everything to be drawn again. Keep it out of
+version control.
+
 ## Themes
 
 Built-in themes can ship rendered images too: each `themes.Asset` in

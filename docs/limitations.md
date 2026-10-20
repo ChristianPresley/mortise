@@ -237,9 +237,17 @@ job:
 
 ## Rendered graphics
 
-- `mortise build` renders every `_render/` spec and theme asset from scratch
-  each time; a large planet animation can take a few seconds. Only
-  `mortise serve` keeps rendered images between builds.
+- `mortise build` keeps rendered images, theme assets, site icons and
+  social cards in `.mortise-cache/render/` inside the site and reuses them
+  while their spec is unchanged. The cache is tied to the exact `mortise`
+  binary: any other build or version of Mortise, including a rebuild of
+  the same source, draws everything again on its first run. Each build
+  deletes the cache files it did not use, so the folder holds one copy of
+  what the site draws now. Delete the folder to force a fresh render; add
+  it to `.gitignore` (new sites from `mortise new` already do).
+- `mortise build` with a cold cache, such as on a CI runner, renders
+  everything from scratch; a large planet animation can take a few
+  seconds.
 - The dev server keeps every version of a spec it has rendered until it
   exits, so editing a large spec many times grows its memory.
 - Editing a spec rebuilds the whole site (cheaply, since unchanged images
@@ -251,9 +259,10 @@ job:
 
 ## SEO and social cards
 
-- Social cards are drawn from scratch on every `build`, about 0.1 s each
-  in a release build (several at once on a multi-core machine) and several
-  times slower in a debug build. `serve` keeps them between rebuilds.
+- Social cards take about 0.1 s each to draw in a release build (several
+  at once on a multi-core machine) and several times longer in a debug
+  build. `build` reuses them from `.mortise-cache/` while a page's title
+  and the site's name stay the same, and `serve` keeps them in memory.
 - Card titles use the built-in stroke font: characters outside ASCII and
   common accented Latin letters are drawn as boxes, so titles in other
   scripts get unreadable cards. Set `image:` on such pages, or

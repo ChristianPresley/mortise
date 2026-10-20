@@ -187,9 +187,17 @@ fn cmdBuild(ctx: Ctx, rest_all: []const [:0]const u8) u8 {
     const arena = build_arena.begin();
 
     const start = Io.Clock.Timestamp.now(io, .awake);
+    // Rendered images and social cards are kept on disk between builds.
+    // The cache is an optimization: if it cannot be opened, build without.
+    var render_cache: mortise.assets.Cache = .init(ctx.gpa);
+    defer render_cache.deinit();
+    const disk_cache = if (programHash(io, ctx.gpa)) |salt| blk: {
+        render_cache.openDisk(io, src.dir, salt) catch break :blk false;
+        break :blk true;
+    } else |_| false;
     var diag: pipeline.Diagnostic = .{};
     var today_buf: [10]u8 = undefined;
-    const options: pipeline.Options = .{ .drafts = args.drafts, .strict = args.strict, .future = args.future, .today = mortise.scaffold.today(io, &today_buf), .fingerprint = true, .subset_fonts = true };
+    const options: pipeline.Options = .{ .drafts = args.drafts, .strict = args.strict, .future = args.future, .today = mortise.scaffold.today(io, &today_buf), .fingerprint = true, .subset_fonts = true, .render_cache = &render_cache };
     const site = pipeline.buildWith(arena, src, options, &diag) catch |e| {
         switch (e) {
             error.BuildFailed => ctx.err.print("error: {f}\n", .{diag}) catch {},
@@ -203,6 +211,7 @@ fn cmdBuild(ctx: Ctx, rest_all: []const [:0]const u8) u8 {
         ctx.err.print("error: cannot write {s}/{s}: {f}\n", .{ dir, pipeline.output_dir, diag }) catch {};
         return 1;
     };
+    if (disk_cache) render_cache.pruneDisk() catch {};
 
     const elapsed = start.durationTo(Io.Clock.Timestamp.now(io, .awake)).raw;
     for (site.warnings) |w| ctx.err.print("warning: {f}\n", .{w}) catch {};
@@ -211,6 +220,24 @@ fn cmdBuild(ctx: Ctx, rest_all: []const [:0]const u8) u8 {
     }) catch return 1;
     if (site.skipped.total() > 0) ctx.out.print("Skipped {f}\n", .{site.skipped}) catch return 1;
     return 0;
+}
+
+/// A hash of the running program's file. Any change to Mortise, and so to
+/// how it draws, changes it, which keeps a rebuilt or upgraded `mortise`
+/// from reusing images an older one rendered.
+fn programHash(io: Io, gpa: Allocator) !u64 {
+    var file = try std.process.openExecutable(io, .{});
+    defer file.close(io);
+    const buf = try gpa.alloc(u8, 1 << 20);
+    defer gpa.free(buf);
+    var reader = file.reader(io, &.{});
+    var h: std.hash.Wyhash = .init(0);
+    while (true) {
+        const n = try reader.interface.readSliceShort(buf);
+        if (n == 0) break;
+        h.update(buf[0..n]);
+    }
+    return h.final();
 }
 
 fn cmdCheck(ctx: Ctx, rest: []const [:0]const u8) u8 {
