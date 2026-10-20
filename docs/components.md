@@ -159,10 +159,15 @@ hovered or the link has keyboard focus, so readers can copy a link to the
 section.
 
 Every fenced code block gets a Copy button
-(`<button class="mt-copy" hidden>` inside its `<pre>`). The build adds a
-small inline script before `</body>` on pages that have code blocks; it
-shows the buttons and copies the code, without line numbers or diff
-markers, to the clipboard. Where the browser refuses clipboard access, the
+(`<button class="mt-copy" hidden>` inside its `<pre>`). Pages that have
+code blocks load a small script, `/mortise-copy.js`, with
+`<script src defer>` before `</body>`; the build writes it once, unless the
+site has its own file there. It shows the buttons and copies the code,
+without line numbers or diff markers, to the clipboard. Being a file
+rather than inline, it works under a Content Security Policy of
+`script-src 'self'`, and browsers cache it. It also keeps the first build
+of a big site fast on Windows, whose virus scanner takes about twice as
+long over each new page with inline script. Where the browser refuses clipboard access, the
 button selects the code instead so the reader can press Ctrl+C. Without
 JavaScript the buttons stay hidden.
 

@@ -137,6 +137,31 @@ one after a post's title changed. Same machine, 2026-10-12.
 
 On Windows a rebuild with little changed is about ten times faster this
 way, and five times faster than Hugo's build into an empty `public/`.
+
+### First builds on Windows and the virus scanner
+
+On 2026-10-20 the same machine took 21 to 23 s for the 10,000-post first
+build, nearly all of it writing. Writing 10,000 files into the same date
+folders from a separate test program took only 2 to 3 s when every file
+held the same bytes, but 9.6 s when each was different, and 17 s when each
+also ended with an inline `<script>`, as every post with a code block did
+for its copy buttons. Windows Defender scans each new file, remembers
+content it has seen, and takes about twice as long over HTML with inline
+script. The writer threads, folder creation and output paths made no
+measurable difference: 4 to 64 threads, folders made up front or as
+needed, all landed within noise of each other.
+
+The copy-button script is now one file, `/mortise-copy.js`, loaded with
+`defer`. Same machine, the CLI's first build into an empty `_site`,
+alternating old and new binaries:
+
+| Platform   | Posts  | Inline script | `mortise-copy.js` |
+| ---------- | ------ | ------------- | ----------------- |
+| Windows 11 | 10,000 | 21.1 s, 21.5 s | 13.3 s, 12.0 s    |
+
+What is left is about 1 ms of scanning per new file, which more threads do
+not spread out; the remaining lever is excluding the site folder from
+real-time scanning, which is the machine owner's choice, not the build's.
 Profiling showed why: on this machine each new file costs about 0.4 ms,
 each new folder 0.25 ms and each deletion 0.9 ms, and more writer threads
 do not help, while reading an existing file and comparing it costs about

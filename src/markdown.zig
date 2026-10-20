@@ -109,16 +109,24 @@ pub const Options = struct {
 /// code when its button is pressed. Without the Clipboard API (or
 /// without JavaScript) the buttons stay hidden. When the browser refuses
 /// to write the clipboard, the code is selected for the reader to copy.
+///
+/// It is one file that pages load with `defer`, not inline in each page:
+/// virus scanners such as Windows Defender inspect every new HTML file,
+/// and one with inline script takes them about twice as long, which on a
+/// big site's first build adds seconds.
 pub const copy_script =
-    \\<script>(function(){if(!navigator.clipboard)return;
+    \\(function(){if(!navigator.clipboard)return;
     \\function say(b,t){b.textContent=t;setTimeout(function(){b.textContent="Copy";},1500);}
     \\document.querySelectorAll("button.mt-copy").forEach(function(b){b.hidden=false;
     \\b.addEventListener("click",function(){var c=b.parentNode.querySelector("code");
     \\navigator.clipboard.writeText(c.innerText).then(function(){say(b,"Copied");},function(){
     \\var r=document.createRange();r.selectNodeContents(c);var s=getSelection();s.removeAllRanges();s.addRange(r);
-    \\say(b,"Selected");});});});})();</script>
+    \\say(b,"Selected");});});});})();
     \\
 ;
+
+/// Where the build writes `copy_script`, from the site root.
+pub const copy_script_path = "mortise-copy.js";
 
 /// Renders `src` and also returns its headings, for tables of contents.
 pub fn toDocument(arena: Allocator, src: []const u8) Allocator.Error!Document {
