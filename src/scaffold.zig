@@ -64,6 +64,7 @@ const common = [_]File{
     .{ ".gitignore",
         \\_site/
         \\.mortise-staging/
+        \\.mortise-cache/
         \\
     },
     .{ ".github/workflows/pages.yml", pages_workflow },
