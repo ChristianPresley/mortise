@@ -122,6 +122,12 @@ pub const Site = struct {
     gzip: bool = false,
     /// `minify: true`: writing the site minifies HTML and CSS (minify.zig).
     minify: bool = false,
+    /// `check: ignore:` in the config: patterns, with `*` matching any run
+    /// of characters, for links and files `mortise check` leaves alone.
+    check_ignore: []const []const u8 = &.{},
+    /// The site's absolute URL from `url` in the config, without a trailing
+    /// slash, or null.
+    site_url: ?[]const u8 = null,
     /// What `rebuild` needs to update this site. An incrementally rebuilt
     /// site shares memory with the site it came from, so that site's
     /// arena must outlive this one.
@@ -1776,7 +1782,27 @@ fn finish(b: *Builder, config_fields: frontmatter.Map, all_pages: []Page, static
         .warnings = b.warnings.items,
         .gzip = if (config_fields.get("gzip")) |v| (if (v == .boolean) v.boolean else return b.fail(config_path, fieldLine(try b.read(config_path), "gzip"), "'gzip' must be true or false", .{})) else false,
         .minify = try configFlag(b, config_fields, "minify", false),
+        .check_ignore = try checkIgnore(b, config_fields),
+        .site_url = b.site_url,
     };
+}
+
+/// `check: ignore:` in the config, read on every build so a typo shows up
+/// before `mortise check` runs.
+fn checkIgnore(b: *Builder, config_fields: frontmatter.Map) Error![]const []const u8 {
+    const v = config_fields.get("check") orelse return &.{};
+    const line = fieldLine(try b.read(config_path), "check");
+    if (v != .map) return b.fail(config_path, line, "'check' must hold settings such as 'ignore: [https://example.com/*]'", .{});
+    var out: std.ArrayList([]const u8) = .empty;
+    for (v.map.entries) |e| {
+        if (!std.mem.eql(u8, e.key, "ignore")) return b.fail(config_path, line, "unknown check setting '{s}'; use ignore", .{e.key});
+        const items: []const frontmatter.Value = if (e.value == .list) e.value.list else &.{e.value};
+        for (items) |item| {
+            if (item != .string or item.string.len == 0) return b.fail(config_path, line, "'check.ignore' must list URLs or paths", .{});
+            try out.append(b.arena, item.string);
+        }
+    }
+    return out.items;
 }
 
 /// `images:` in the config: `false`, or a map of settings.
@@ -5071,6 +5097,22 @@ test "aliases write redirect pages and a _redirects file" {
         .{ "a.md", "---\naliases: [/b/]\n---\n" },
         .{ "b.md", "B\n" },
     }, "b.md", 0, "also writes to");
+}
+
+test "check: ignore: is read from the config" {
+    var t: TestSite = try .init(&.{
+        .{ "_config.yml", "check:\n  ignore: [\"https://x.dev/*\", /downloads/*]\n" },
+        .{ "a.md", "A\n" },
+    });
+    defer t.deinit();
+    var diag: Diagnostic = .{};
+    const site = try t.build(&diag);
+    try testing.expectEqual(@as(usize, 2), site.check_ignore.len);
+    try testing.expectEqualStrings("https://x.dev/*", site.check_ignore[0]);
+    try testing.expectEqualStrings("/downloads/*", site.check_ignore[1]);
+
+    try expectBuildError(&.{ .{ "_config.yml", "check:\n  skip: [a]\n" }, .{ "a.md", "A\n" } }, "_config.yml", 1, "unknown check setting 'skip'");
+    try expectBuildError(&.{ .{ "_config.yml", "check: true\n" }, .{ "a.md", "A\n" } }, "_config.yml", 1, "'check' must hold settings");
 }
 
 test "heading anchors and copy buttons, on by default" {

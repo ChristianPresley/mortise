@@ -21,7 +21,8 @@ const usage =
     \\  new       Create a new site in SITE_DIR (required; must be empty or missing)
     \\            from a starter: --starter blog (default), docs or portfolio
     \\  build     Build SITE_DIR (default: the current directory) into SITE_DIR/_site
-    \\  check     Build SITE_DIR in memory and report broken links and anchors and accessibility problems
+    \\  check     Build SITE_DIR in memory and report broken links and anchors, unused files
+    \\            and accessibility problems
     \\  serve     Serve SITE_DIR on localhost and reload the browser on every change
     \\  version   Print the version
     \\  help      Print this message
@@ -39,6 +40,11 @@ const usage =
     \\            instead of building a new copy and swapping it in. Much
     \\            faster when little changed, above all on Windows, but an
     \\            I/O error partway through can leave _site partly updated
+    \\
+    \\Options for check:
+    \\  --external
+    \\            Also fetch every http: and https: link and report those that
+    \\            fail; skip some with check: ignore: in _config.yml
     \\
     \\Options for serve:
     \\  --port N  Port to listen on (default: 4000)
@@ -240,8 +246,23 @@ fn programHash(io: Io, gpa: Allocator) !u64 {
     return h.final();
 }
 
-fn cmdCheck(ctx: Ctx, rest: []const [:0]const u8) u8 {
-    const args = parseArgs(ctx, rest, false) orelse return 2;
+fn cmdCheck(ctx: Ctx, rest_all: []const [:0]const u8) u8 {
+    // --external is check's alone.
+    var external = false;
+    var kept: [16][:0]const u8 = undefined;
+    var n: usize = 0;
+    for (rest_all) |arg| {
+        if (std.mem.eql(u8, arg, "--external")) {
+            external = true;
+        } else if (n < kept.len) {
+            kept[n] = arg;
+            n += 1;
+        } else {
+            ctx.err.writeAll("mortise: too many arguments\n") catch {};
+            return 2;
+        }
+    }
+    const args = parseArgs(ctx, kept[0..n], false) orelse return 2;
     const dir = args.dir;
     var src = SiteDir.open(ctx.io, dir) catch |e| {
         ctx.err.print("mortise: cannot open site directory '{s}': {s}\n", .{ dir, @errorName(e) }) catch {};
@@ -267,14 +288,25 @@ fn cmdCheck(ctx: Ctx, rest: []const [:0]const u8) u8 {
     };
     for (report.problems) |p| ctx.err.print("{f}\n", .{p}) catch {};
     for (report.a11y) |p| ctx.err.print("{f}\n", .{p}) catch {};
-    const summary = "Checked {d} links in {d} pages: {d} broken, {d} accessibility problems\n";
-    const counts = .{ report.links, report.pages, report.problems.len, report.a11y.len };
-    if (report.problems.len > 0 or report.a11y.len > 0) {
-        ctx.err.print(summary, counts) catch {};
-        return 1;
+    const broken_external: []const mortise.check.Problem = if (external)
+        mortise.check.checkExternal(arena, ctx.gpa, ctx.io, report.external, .{}) catch {
+            ctx.err.writeAll("error: out of memory\n") catch {};
+            return 1;
+        }
+    else
+        &.{};
+    for (broken_external) |p| ctx.err.print("{f}\n", .{p}) catch {};
+
+    const broken = report.problems.len - report.unused;
+    const failed = report.problems.len > 0 or report.a11y.len > 0 or broken_external.len > 0;
+    const w = if (failed) ctx.err else ctx.out;
+    w.print("Checked {d} links in {d} pages: {d} broken, {d} unused files, {d} accessibility problems\n", .{ report.links, report.pages, broken, report.unused, report.a11y.len }) catch return 1;
+    if (external) {
+        w.print("Checked {d} external links: {d} broken\n", .{ report.external.len, broken_external.len }) catch return 1;
+    } else if (report.external.len > 0) {
+        w.print("Skipped {d} external links; pass --external to fetch them\n", .{report.external.len}) catch return 1;
     }
-    ctx.out.print(summary, counts) catch return 1;
-    return 0;
+    return if (failed) 1 else 0;
 }
 
 const Args = struct {
